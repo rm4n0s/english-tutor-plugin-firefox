@@ -220,7 +220,10 @@ export class AlternativesFlow {
         new InputEvent("input", { bubbles: true, inputType: "insertText", data: alternative }),
       );
     }
+    // The caret goes after the new text, wherever the browser left it.
+    const caret = asked.start + alternative.length;
     this.close();
     editor.focus();
+    editor.setSelectionRange(caret, caret);
   }
 }
