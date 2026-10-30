@@ -207,6 +207,12 @@ export class PageModeContent {
     const ask = ++this.asks;
     // An answer that cannot be had is `off`: nothing is read.
     let config: SiteConfig = { state: "off" };
+    // The script now runs in every frame, including those that belong to no site (a sandboxed
+    // frame, a `data:` page): they are left alone without troubling the background script.
+    if (this.siteHost === "") {
+      this.apply(config);
+      return;
+    }
     try {
       config = await this.deps.runtime.configFor(this.siteHost);
     } catch (err) {

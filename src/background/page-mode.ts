@@ -1,7 +1,6 @@
 import { promptServer } from "../core/llm";
 import type { Logger } from "../core/log";
 import {
-  PAGE_MODE_OFF,
   SETTINGS_CHANGED,
   type SiteConfig,
   type SiteRequest,
@@ -64,11 +63,13 @@ export interface SiteEntry {
 }
 
 /**
- * The background script's side of page mode (SPEC sections 4.11 and 7): it keeps the registered
- * content script in step with the `page_mode` setting and the `<all_urls>` permission, tells the
- * open pages, answers the content script's question what page mode does on its host, takes the
- * choices of the prompt, and turns page mode off and on for one site. It keeps nothing in memory:
- * everything is read when needed.
+ * The background script's side of page mode (SPEC sections 4.11 and 7). The content script itself
+ * is declared in the manifest (LanguageTool's model: it runs in every `http(s)` page and frame),
+ * so there is nothing to register. This class runs it in the pages that were open when the
+ * extension was installed or updated, tells the open pages when the permission changes, answers
+ * the content script's question what page mode does on its host, takes the choices of the
+ * prompt, and turns page mode off and on for one site. It keeps nothing in memory: everything is
+ * read when needed.
  */
 export class PageModeBackend {
   private readonly deps: PageModeBackendDeps;
@@ -78,34 +79,30 @@ export class PageModeBackend {
   }
 
   /**
-   * Makes the registration match the setting and the permission. If the setting is on but the
-   * permission was withdrawn (in `about:addons`), page mode is switched off. With `notify` the open
-   * pages are told (`page-mode-off`, or `settings-changed` when it is on).
+   * Runs the content script in the `http(s)` tabs that are open now (the installation, an update,
+   * or access that the user gave back): a script declared in the manifest reaches only pages that
+   * load afterwards, and the old copy after an update is dead. Does nothing while the access to
+   * websites is withdrawn. Returns how many tabs it reached.
    */
-  async sync(options: { notify: boolean }): Promise<void> {
-    const { permission, scripts, tabs, channel, log } = this.deps;
-    const store = await this.deps.settings();
-    const wanted = await store.getSetting("page_mode");
-    const granted = await permission.contains();
-    if (wanted && !granted) {
-      await store.setSetting("page_mode", false);
-      channel.post("settings-changed");
-      log.info("page mode was switched off: the permission for all websites is gone");
-    }
-    const enabled = wanted && granted;
-    const registration = await scripts.registration();
-    if (enabled && registration !== "current") {
-      await scripts.register();
-      // The registration reaches only pages that load from now on: the pages that are open (the
-      // user may have allowed page mode on the LinkedIn tab they were using) get the script now.
-      const { injected, skipped } = await scripts.injectIntoOpenTabs();
-      log.debug("page mode was started in the open tabs", { injected, skipped });
-    } else if (!enabled && registration !== "none") {
-      await scripts.unregister();
-    }
-    // The open pages are told before the permission can go (the options page removes it after
-    // this call), and also when nothing had to change: a page may have missed an earlier message.
-    if (options.notify) await tabs.broadcast(enabled ? SETTINGS_CHANGED : PAGE_MODE_OFF);
+  async injectIntoOpenTabs(): Promise<number> {
+    const { permission, scripts, log } = this.deps;
+    if (!(await permission.contains())) return 0;
+    const { injected, skipped } = await scripts.injectIntoOpenTabs();
+    log.debug("page mode was started in the open tabs", { injected, skipped });
+    return injected;
+  }
+
+  /**
+   * A permission was withdrawn or given back. The open pages ask again: a page whose site the
+   * extension can no longer reach is answered `off` (see `config`), and the options page learns
+   * through its own listener. When access came back, the pages that were loaded meanwhile (and
+   * have no script) are started too.
+   */
+  async permissionChanged(): Promise<void> {
+    const { channel, tabs } = this.deps;
+    channel.post("settings-changed");
+    await this.injectIntoOpenTabs();
+    await tabs.broadcast(SETTINGS_CHANGED);
   }
 
   /**
@@ -126,9 +123,14 @@ export class PageModeBackend {
   /**
    * The answer to the content script's `page-mode-config`: the site's state and, for `ask` and
    * `later` (the sites that get the dimmed badge), the server of the LLM in use (the selected one,
-   * or the first by name) for the prompt's note: its host and port, never a key.
+   * or the first by name) for the prompt's note: its host and port, never a key. `pageUrl` is the
+   * address (or origin) of the page that asked: when the user withdrew the extension's access to
+   * that site, the answer is `off`, so a script that is still running there does nothing.
    */
-  async config(host: string): Promise<SiteConfig> {
+  async config(host: string, pageUrl?: string): Promise<SiteConfig> {
+    if (pageUrl !== undefined && !(await this.deps.permission.containsSite(pageUrl))) {
+      return { state: "off" };
+    }
     const state = await this.siteState(host);
     if (state !== "ask" && state !== "later") return { state };
     const store = await this.deps.settings();
@@ -166,7 +168,9 @@ export class PageModeBackend {
   /** The toolbar menu's entry for the active tab: Turn on / Turn off on <host>. */
   async siteEntry(url: string | undefined): Promise<SiteEntry> {
     const host = hostOfUrl(url);
-    if (host === undefined) return { visible: false, title: "" };
+    if (host === undefined || url === undefined) return { visible: false, title: "" };
+    // A site the user withdrew access to has no content script, so there is nothing to turn on.
+    if (!(await this.deps.permission.containsSite(url))) return { visible: false, title: "" };
     const store = await this.deps.settings();
     if (!(await store.getSetting("page_mode"))) return { visible: false, title: "" };
     const on = (await this.siteState(host)) === "on";

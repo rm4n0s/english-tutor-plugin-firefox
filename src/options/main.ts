@@ -3,7 +3,7 @@ import { Logger } from "../core/log";
 import { validateConfig } from "../core/llm";
 import { openDatabase, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
-import { BrowserPageModeBackendLink, BrowserPageModePermission } from "../platform/page-mode";
+import { BrowserPageModePermission, BrowserPageTabs } from "../platform/page-mode";
 import { BrowserHostPermissions } from "../platform/permissions";
 import { mountOptions } from "./page";
 
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
       channel: new BroadcastChangeChannel(),
       permissions: new BrowserHostPermissions(browser),
       pageMode: new BrowserPageModePermission(browser),
-      background: new BrowserPageModeBackendLink(browser),
+      tabs: new BrowserPageTabs(browser),
       // The page's own fetch, called as a method of window.
       fetch: (input, init) => window.fetch(input, init),
     },

@@ -20,6 +20,7 @@ export interface FrameServices {
   runner: CheckRunner;
   settings: {
     readonly delaySeconds: number;
+    readonly autoCheck: boolean;
     getModel(): AnalysisModel | undefined;
     load(): Promise<void>;
   };

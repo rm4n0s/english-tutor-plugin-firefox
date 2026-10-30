@@ -7,8 +7,6 @@ import { FRAME_ID_PATTERN } from "./protocol";
  * `runtime` messages, so these never come from a web page's own code.
  */
 
-/** The options page asks the background script to make the registration match the settings. */
-export const PAGE_MODE_APPLY = "page-mode-apply";
 /**
  * The content script asks what page mode does on its host. The answer is a `SiteConfig`: the
  * site's state, and for `ask` the server of the LLM in use, for the prompt's note.

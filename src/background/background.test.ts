@@ -261,7 +261,7 @@ describe("menus", () => {
     s.menus.failWith = new Error("menus broke");
     s.lifecycle.install();
     await settle();
-    expect(messages(s.logged)).toEqual(["could not make the menus"]);
+    expect(messages(s.logged)).toContain("could not make the menus");
   });
 
   it("New tutor tab opens a tab even when one exists, and Preferences opens the options page", async () => {
@@ -489,145 +489,85 @@ describe("page mode", () => {
 
   const settings = async (s: ReturnType<typeof setup>) => (await s.stored).store;
 
-  describe("keeping the registration in step with the setting and the permission", () => {
-    describe.each([
-      {
-        event: "the extension is installed",
-        fire: (s: ReturnType<typeof setup>) => {
-          s.lifecycle.install();
-        },
-      },
-      {
-        event: "the browser starts",
-        fire: (s: ReturnType<typeof setup>) => {
-          s.lifecycle.startBrowser();
-        },
-      },
-    ])("when $event", ({ fire }) => {
-      it.each([
-        {
-          name: "page mode on with the permission registers the script and starts it in the open tabs",
-          on: true,
-          granted: true,
-          registered: false,
-          stale: false,
-          expected: ["register", "inject"],
-        },
-        {
-          name: "an already registered script is left alone",
-          on: true,
-          granted: true,
-          registered: true,
-          stale: false,
-          expected: [],
-        },
-        {
-          name: "a script registered by an older version (no matchOriginAsFallback) is registered again, and started in the open tabs (the old copies are dead)",
-          on: true,
-          granted: true,
-          registered: true,
-          stale: true,
-          expected: ["register", "inject"],
-        },
-        {
-          name: "page mode off unregisters a script that is there",
-          on: false,
-          granted: true,
-          registered: true,
-          stale: false,
-          expected: ["unregister"],
-        },
-        {
-          name: "page mode off unregisters an older script too",
-          on: false,
-          granted: true,
-          registered: true,
-          stale: true,
-          expected: ["unregister"],
-        },
-        {
-          name: "page mode off with no script does nothing",
-          on: false,
-          granted: false,
-          registered: false,
-          stale: false,
-          expected: [],
-        },
-      ])("$name", async ({ on, granted, registered, stale, expected }) => {
+  describe("starting the content script in the tabs that are open", () => {
+    it.each([
+      { reason: "install", granted: true, expected: ["inject"] },
+      { reason: "update", granted: true, expected: ["inject"] },
+      { reason: "browser_update", granted: true, expected: [] },
+      { reason: "install", granted: false, expected: [] },
+      { reason: "update", granted: false, expected: [] },
+    ])(
+      "installed with reason $reason, access granted: $granted",
+      async ({ reason, granted, expected }) => {
         const s = setup();
-        await (await settings(s)).setSetting("page_mode", on);
         s.permission.granted = granted;
-        s.scripts.registered = registered;
-        s.scripts.stale = stale;
-        fire(s);
+        s.lifecycle.install(reason);
         await settle();
         await settle();
         expect(s.scripts.calls).toEqual(expected);
-        // Nobody is told at start-up: no page has the script yet.
+        // Nothing is registered (the manifest declares the script) and nobody is told: a page
+        // that gets the script now asks the background script by itself.
         expect(s.pageTabs.sent).toEqual([]);
-      });
+      },
+    );
 
-      it("switches page mode off when the permission was withdrawn while the browser was closed", async () => {
-        const s = setup();
-        await (await settings(s)).setSetting("page_mode", true);
-        s.permission.granted = false;
-        s.scripts.registered = true;
-        fire(s);
-        await settle();
-        await settle();
-        expect(await (await settings(s)).getSetting("page_mode")).toBe(false);
-        expect(s.scripts.registered).toBe(false);
-      });
+    it("does not touch the tabs when the browser starts (the manifest's script loads with them)", async () => {
+      const s = setup();
+      s.lifecycle.startBrowser();
+      await settle();
+      expect(s.scripts.calls).toEqual([]);
     });
 
-    it("on permissions.onRemoved switches page mode off and tells the open pages", async () => {
+    it("works the same with the global switch off: the script is there and does nothing", async () => {
       const s = setup();
-      await turnedOn(s);
-      s.scripts.registered = true;
-      s.permission.withdraw();
-      await settle();
-      await settle();
-      expect(await (await settings(s)).getSetting("page_mode")).toBe(false);
-      expect(s.scripts.calls).toEqual(["unregister"]);
-      expect(s.pageTabs.sent).toEqual(["page-mode-off"]);
-    });
-
-    it("logs a failed registration instead of leaving a rejected promise", async () => {
-      const s = setup();
-      await turnedOn(s);
-      s.scripts.failWith = new Error("no scripting");
+      await (await settings(s)).setSetting("page_mode", false);
       s.lifecycle.install();
       await settle();
       await settle();
-      expect(messages(s.logged)).toContain("could not bring page mode in step with its setting");
+      expect(s.scripts.calls).toEqual(["inject"]);
+    });
+
+    it("logs a failure instead of leaving a rejected promise", async () => {
+      const s = setup();
+      s.scripts.injectIntoOpenTabs = () => Promise.reject(new Error("no scripting"));
+      s.lifecycle.install();
+      await settle();
+      await settle();
+      expect(messages(s.logged)).toContain("could not start page mode in the tabs that are open");
     });
   });
 
-  describe("the options page's request to apply the setting", () => {
-    it("registers the script and tells the pages to ask again when page mode is on", async () => {
+  describe("access to websites withdrawn or given back", () => {
+    it("tells the open pages to ask again, and does not change the setting", async () => {
       const s = setup();
       await turnedOn(s);
-      const reply = await s.messageBus.send({ type: "page-mode-apply" });
-      expect(reply).toEqual({ answered: true, answer: { ok: true } });
-      expect(s.scripts.calls).toEqual(["register", "inject"]);
+      s.permission.withdraw();
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode")).toBe(true);
+      expect(s.scripts.calls).toEqual([]);
       expect(s.pageTabs.sent).toEqual(["settings-changed"]);
     });
 
-    it("unregisters the script and sends page-mode-off when it is off", async () => {
-      const s = setup();
-      s.scripts.registered = true;
-      s.permission.granted = true;
-      await s.messageBus.send({ type: "page-mode-apply" });
-      expect(s.scripts.calls).toEqual(["unregister"]);
-      expect(s.pageTabs.sent).toEqual(["page-mode-off"]);
-    });
-
-    it("is answered only for the extension's own senders", async () => {
+    it("starts the open tabs and tells the pages when access comes back", async () => {
       const s = setup();
       await turnedOn(s);
-      const reply = await s.messageBus.send({ type: "page-mode-apply" }, { ownExtension: false });
-      expect(reply.answered).toBe(false);
+      s.permission.granted = false;
+      await s.permission.request();
+      await settle();
+      await settle();
+      expect(s.scripts.calls).toEqual(["inject"]);
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+    });
+
+    it("does not start the tabs when only a part of the access came back", async () => {
+      const s = setup();
+      s.permission.granted = false;
+      s.permission.fireAdded();
+      await settle();
+      await settle();
       expect(s.scripts.calls).toEqual([]);
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
     });
   });
 
@@ -733,6 +673,87 @@ describe("page mode", () => {
       expect(
         (await s.messageBus.send({ type: "page-mode-config", host: "other.org" })).answer,
       ).toEqual({ state: "ask", llm: null });
+    });
+
+    describe("when the user withdrew the access to a site", () => {
+      const TAB = { id: 1, windowId: 2, index: 0 };
+
+      it.each([
+        {
+          name: "a page of that site",
+          url: "https://www.example.com/a",
+          origin: "https://www.example.com",
+          withdrawn: ["www.example.com"],
+          expected: { state: "off" },
+        },
+        {
+          name: "a page of another site",
+          url: "https://www.example.com/a",
+          origin: "https://www.example.com",
+          withdrawn: ["other.org"],
+          expected: { state: "on" },
+        },
+        {
+          name: "a frame with no address of its own, by its origin",
+          url: "about:srcdoc",
+          origin: "https://www.example.com",
+          withdrawn: ["www.example.com"],
+          expected: { state: "off" },
+        },
+        {
+          name: "a frame with no address of its own whose site is still reachable",
+          url: "about:srcdoc",
+          origin: "https://www.example.com",
+          withdrawn: [],
+          expected: { state: "on" },
+        },
+      ])("answers $expected.state for $name", async ({ url, origin, withdrawn, expected }) => {
+        const s = setup();
+        const store = await settings(s);
+        await store.setSetting("page_mode_sites", { "www.example.com": "on" });
+        s.permission.withdrawnSites = new Set(withdrawn);
+        const reply = await s.messageBus.send(
+          { type: "page-mode-config", host: "www.example.com" },
+          { tab: TAB, url, origin },
+        );
+        expect(reply.answer).toEqual(expected);
+      });
+
+      it.each([
+        {
+          name: "an extension page",
+          url: "moz-extension://abc/options.html",
+          origin: "moz-extension://abc",
+        },
+        { name: "a frame with an opaque origin", url: "about:srcdoc", origin: "null" },
+        { name: "a sender that does not say", url: undefined, origin: undefined },
+      ])(
+        "does not look at the access for $name (there is no site to check)",
+        async ({ url, origin }) => {
+          const s = setup();
+          const store = await settings(s);
+          await store.setSetting("page_mode_sites", { "www.example.com": "on" });
+          s.permission.granted = false;
+          const reply = await s.messageBus.send(
+            { type: "page-mode-config", host: "www.example.com" },
+            { tab: TAB, url, origin },
+          );
+          expect(reply.answer).toEqual({ state: "on" });
+          expect(s.permission.calls.some((c) => c.startsWith("containsSite"))).toBe(false);
+        },
+      );
+
+      it("answers off for every site once all the access is gone", async () => {
+        const s = setup();
+        const store = await settings(s);
+        await store.setSetting("page_mode_sites", { "www.example.com": "on" });
+        s.permission.granted = false;
+        const reply = await s.messageBus.send(
+          { type: "page-mode-config", host: "www.example.com" },
+          { tab: TAB, url: "https://www.example.com/a", origin: "https://www.example.com" },
+        );
+        expect(reply.answer).toEqual({ state: "off" });
+      });
     });
 
     it("a choice on the site wins over Not now", async () => {
@@ -980,6 +1001,7 @@ describe("page mode", () => {
     ])("takes nothing for $name", async ({ setup: on, url, tab, host, choice }) => {
       const s = setup();
       if (on) await offered(s);
+      else await (await settings(s)).setSetting("page_mode", false);
       const reply = await send(s, choice, { host, url, tab });
       expect(reply).toEqual({ answered: true, answer: { ok: false } });
       expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
@@ -1331,6 +1353,17 @@ describe("page mode", () => {
       expect(s.menus.changes.at(-1)).toBe("refresh");
     });
 
+    it("is hidden for a site the user withdrew the access to (no content script runs there)", async () => {
+      const s = setup();
+      s.lifecycle.install();
+      await settle();
+      s.permission.withdrawnSites = new Set(["www.example.com"]);
+      s.menus.show({ contexts: ["action"], tabUrl: SITE });
+      await settle();
+      await settle();
+      expect(entry(s)?.visible).toBe(false);
+    });
+
     it("is left alone when another menu is shown", async () => {
       const s = setup();
       s.menus.show({ contexts: ["selection"], tabUrl: SITE });
@@ -1403,6 +1436,7 @@ describe("page mode", () => {
 
     it("does nothing while page mode is not offered", async () => {
       const s = setup();
+      await (await settings(s)).setSetting("page_mode", false);
       choose(s, SITE);
       await settle();
       await settle();
@@ -1421,7 +1455,7 @@ describe("page mode", () => {
       s.lifecycle.install(reason);
       await settle();
       expect(s.options.welcomes).toBe(welcomes);
-      // Whatever the reason, the menus and the registration are brought up to date.
+      // Whatever the reason, the menus are brought up to date.
       expect(s.menus.installs).toBe(1);
     });
 
@@ -1456,6 +1490,7 @@ describe("page mode", () => {
     second.permission.withdraw();
     await settle();
     await settle();
-    expect(await (await settings(second)).getSetting("page_mode")).toBe(false);
+    // Withdrawing the access does not change the switch: it is the user's, and it is kept.
+    expect(await (await settings(second)).getSetting("page_mode")).toBe(true);
   });
 });

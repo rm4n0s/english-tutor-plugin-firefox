@@ -811,7 +811,9 @@ describe("General section", () => {
     await mount();
     expect(checked("auto-check")).toBe(false);
     expect(value("auto-check-delay")).toBe("3");
-    expect(disabled("auto-check-delay")).toBe(true);
+    // Page mode is on by default and uses the delay.
+    expect(checked("page-mode")).toBe(true);
+    expect(disabled("auto-check-delay")).toBe(false);
     expect(value("font-editor-family")).toBe("");
     expect([
       value("font-editor-size"),
@@ -835,7 +837,11 @@ describe("General section", () => {
   });
 
   it("enables the delay with auto-check, saves at once and announces it", async () => {
-    const h = await mount();
+    // With page mode off, only auto-check uses the delay.
+    const h = await mount(undefined, async ({ store }) => {
+      await store.setSetting("page_mode", false);
+    });
+    expect(disabled("auto-check-delay")).toBe(true);
     tick("auto-check", true);
     expect(disabled("auto-check-delay")).toBe(false);
     type("auto-check-delay", "10");

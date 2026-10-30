@@ -2,7 +2,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { AppError } from "../core/errors";
 import { config, mountForTest, type OptionsHarness } from "./testing/harness";
-import { PERMISSION_DENIED_MESSAGE } from "./page-mode-section";
+import type { FakePageModePermission } from "../platform/testing/fake-page-mode";
+import {
+  ACCESS_WITHDRAWN,
+  AUTO_CHECK_LABEL,
+  OFFER_LABEL,
+  PERMISSION_DENIED_MESSAGE,
+} from "./page-mode-section";
 
 let mounted: OptionsHarness | undefined;
 
@@ -54,18 +60,19 @@ async function settle(check: () => void): Promise<void> {
 }
 
 describe("the page-mode box", () => {
-  it("is off by default, with its note and no hosts", async () => {
+  it("is on by default, with its label, its note and no sites", async () => {
     await mount();
-    expect(box().checked).toBe(false);
-    expect(byId("page-mode").closest("label")?.textContent).toContain(
-      "Offer to check text boxes on websites",
-    );
+    expect(box().checked).toBe(true);
+    expect(OFFER_LABEL).toBe("Show the English Tutor icon in text boxes on websites");
+    expect(byId("page-mode").closest("label")?.textContent).toContain(OFFER_LABEL);
     expect(note()).toBe(
       "English Tutor asks on each site before it reads anything there. What you type on a site you turn on is sent to the server of the selected LLM to be checked. Add an LLM first.",
     );
     expect(byId("page-mode-sites-empty").hidden).toBe(false);
     expect(byId("page-mode-sites").hidden).toBe(true);
     expect(byId("page-mode-error").hidden).toBe(true);
+    // Access came with the installation: no notice, and nothing was asked.
+    expect(byId("page-mode-access").hidden).toBe(true);
   });
 
   it.each([
@@ -111,128 +118,148 @@ describe("the page-mode box", () => {
 
   it("shows the stored setting", async () => {
     await mount(async ({ store }) => {
-      await store.setSetting("page_mode", true);
+      await store.setSetting("page_mode", false);
     });
-    expect(box().checked).toBe(true);
+    expect(box().checked).toBe(false);
   });
 });
 
-describe("turning page mode on", () => {
-  it("asks for <all_urls> in the turn of the click, then stores the setting, announces it and asks the background script to register", async () => {
+describe("the switch", () => {
+  it("unticked: stores the setting, announces it, tells the open pages to remove everything, and asks for no permission", async () => {
     const h = await mount();
-    h.background.onApply = async () => {
-      // The background script reads the setting the page has stored by now.
-      expect(await h.deps.store.getSetting("page_mode")).toBe(true);
-    };
     clickBox();
-    // Nothing was awaited between the click and the request.
-    expect(h.pageMode.calls).toEqual(["request"]);
+    // Nothing is requested, registered or removed: the access stays as it is.
+    expect(h.pageMode.calls).not.toContain("request");
     await settle(() => {
-      expect(h.background.applied).toBe(1);
+      expect(h.tabs.sent).toEqual(["page-mode-off"]);
+    });
+    expect(await h.deps.store.getSetting("page_mode")).toBe(false);
+    expect(h.otherPage.received).toContain("settings-changed");
+    expect(box().checked).toBe(false);
+    expect(h.pageMode.granted).toBe(true);
+    // The delay is used by page mode only while it is on.
+    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("ticked again: stores it and tells the open pages to ask again", async () => {
+    const h = await mount(async ({ store }) => {
+      await store.setSetting("page_mode", false);
+    });
+    clickBox();
+    await settle(() => {
+      expect(h.tabs.sent).toEqual(["settings-changed"]);
     });
     expect(await h.deps.store.getSetting("page_mode")).toBe(true);
-    expect(h.otherPage.received).toContain("settings-changed");
-    expect(h.pageMode.granted).toBe(true);
     expect(box().checked).toBe(true);
-    expect(byId("page-mode-error").hidden).toBe(true);
+    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(false);
   });
 
-  it("stays off when the user refuses, and the form says so (PageModePermissionDenied)", async () => {
+  it("shows a failure in the page's banner and puts the box back from the store", async () => {
     const h = await mount();
-    h.pageMode.answer = "refuse";
-    clickBox();
-    await settle(() => {
-      expect(byId("page-mode-error").hidden).toBe(false);
-    });
-    expect(box().checked).toBe(false);
-    expect(byId("page-mode-error").textContent).toBe(PERMISSION_DENIED_MESSAGE);
-    const err = h.page.pageMode.error;
-    expect(err).toBeInstanceOf(AppError);
-    expect(err?.hasRoute("PageModeSection.turnOn->PageModePermissionDenied")).toBe(true);
-    // Nothing was stored, announced or registered.
-    expect(await h.deps.store.getSetting("page_mode")).toBe(false);
-    expect(h.background.applied).toBe(0);
-    expect(h.otherPage.received).toEqual([]);
-  });
-
-  it("asks again when the user ticks the box again, and the message goes when it works", async () => {
-    const h = await mount();
-    h.pageMode.answer = "refuse";
-    clickBox();
-    await settle(() => {
-      expect(h.page.pageMode.error).toBeDefined();
-    });
-    h.pageMode.answer = "grant";
-    clickBox();
-    await settle(() => {
-      expect(h.background.applied).toBe(1);
-    });
-    expect(h.page.pageMode.error).toBeUndefined();
-    expect(byId("page-mode-error").hidden).toBe(true);
-    expect(h.pageMode.calls).toEqual(["request", "request"]);
-  });
-
-  it("is a PageModePermissionDenied too when the browser cannot ask", async () => {
-    const h = await mount();
-    h.pageMode.request = () =>
-      Promise.reject(new Error("permissions.request may only be called from a user input handler"));
-    clickBox();
-    await settle(() => {
-      expect(h.page.pageMode.error).toBeDefined();
-    });
-    expect(h.page.pageMode.error?.hasRoute("PageModePermissionDenied")).toBe(true);
-    expect(box().checked).toBe(false);
-  });
-
-  it("shows a failure of the background script in the page's banner and puts the box back from the store", async () => {
-    const h = await mount();
-    h.background.failWith = new Error("could not register");
+    h.tabs.broadcast = () => Promise.reject(new Error("no tabs"));
     clickBox();
     await settle(() => {
       expect(byId("options-error").hidden).toBe(false);
     });
     expect(byId("options-error").textContent).toBe("Something went wrong.");
-    // The setting was stored before the background script was asked, so the box follows it.
-    expect(box().checked).toBe(true);
+    // The setting was stored before the pages were told, so the box follows it.
+    expect(box().checked).toBe(false);
   });
 });
 
-describe("turning page mode off", () => {
-  async function turnedOn() {
-    return mount(async ({ store }) => {
-      await store.setSetting("page_mode", true);
-    });
-  }
+describe("when Firefox no longer grants access to all websites", () => {
+  const withdrawn = async ({ pageMode }: OptionsHarness["deps"]) => {
+    (pageMode as FakePageModePermission).granted = false;
+    await Promise.resolve();
+  };
+  const accessButton = () => byId("page-mode-access-button");
 
-  it("stores it, tells the background script, and only then gives the permission back", async () => {
-    const h = await turnedOn();
-    h.pageMode.granted = true;
-    const order: string[] = [];
-    h.background.onApply = () => {
-      order.push(`apply (permission ${h.pageMode.granted ? "kept" : "gone"})`);
-      return Promise.resolve();
-    };
-    clickBox();
-    expect(h.pageMode.calls).toEqual([]);
-    await settle(() => {
-      expect(h.pageMode.calls).toEqual(["remove"]);
-    });
-    expect(order).toEqual(["apply (permission kept)"]);
-    expect(await h.deps.store.getSetting("page_mode")).toBe(false);
-    expect(h.otherPage.received).toContain("settings-changed");
-    expect(h.pageMode.granted).toBe(false);
-    expect(box().checked).toBe(false);
+  it("explains it and offers a button that asks again", async () => {
+    const h = await mount(withdrawn);
+    expect(byId("page-mode-access").hidden).toBe(false);
+    expect(byId("page-mode-access").textContent).toContain(ACCESS_WITHDRAWN);
+    expect(accessButton().textContent).toBe("Allow access to all websites");
+    // Nothing was asked yet: Firefox accepts the request only from a click.
+    expect(h.pageMode.calls).not.toContain("request");
+    // The switch is untouched: it is the user's.
+    expect(box().checked).toBe(true);
   });
 
-  it("does not remove the permission when the background script fails, and shows the failure", async () => {
-    const h = await turnedOn();
-    h.pageMode.granted = true;
-    h.background.failWith = new Error("no");
-    clickBox();
+  it("asks in the turn of the click, then hides the notice and tells the open pages", async () => {
+    const h = await mount(withdrawn);
+    accessButton().click();
+    // Nothing was awaited between the click and the request.
+    expect(h.pageMode.calls.filter((c) => c === "request")).toEqual(["request"]);
     await settle(() => {
-      expect(byId("options-error").hidden).toBe(false);
+      expect(byId("page-mode-access").hidden).toBe(true);
     });
-    expect(h.pageMode.calls).toEqual([]);
+    expect(h.pageMode.granted).toBe(true);
+    expect(h.tabs.sent).toEqual(["settings-changed"]);
+    expect(byId("page-mode-error").hidden).toBe(true);
+  });
+
+  it("says so when the user refuses (PageModePermissionDenied) and keeps the button", async () => {
+    const h = await mount(withdrawn);
+    h.pageMode.answer = "refuse";
+    accessButton().click();
+    await settle(() => {
+      expect(byId("page-mode-error").hidden).toBe(false);
+    });
+    expect(byId("page-mode-error").textContent).toBe(PERMISSION_DENIED_MESSAGE);
+    const err = h.page.pageMode.error;
+    expect(err).toBeInstanceOf(AppError);
+    expect(err?.hasRoute("PageModeSection.requestAccess->PageModePermissionDenied")).toBe(true);
+    expect(byId("page-mode-access").hidden).toBe(false);
+    expect(h.tabs.sent).toEqual([]);
+    // Asking again works, and the message goes.
+    h.pageMode.answer = "grant";
+    accessButton().click();
+    await settle(() => {
+      expect(byId("page-mode-access").hidden).toBe(true);
+    });
+    expect(h.page.pageMode.error).toBeUndefined();
+    expect(byId("page-mode-error").hidden).toBe(true);
+  });
+
+  it("is a PageModePermissionDenied too when the browser cannot ask", async () => {
+    const h = await mount(withdrawn);
+    h.pageMode.request = () =>
+      Promise.reject(new Error("permissions.request may only be called from a user input handler"));
+    accessButton().click();
+    await settle(() => {
+      expect(h.page.pageMode.error).toBeDefined();
+    });
+    expect(h.page.pageMode.error?.hasRoute("PageModePermissionDenied")).toBe(true);
+    expect(byId("page-mode-access").hidden).toBe(false);
+  });
+
+  it.each([
+    { name: "withdrawn while the page is open", start: true, change: "withdraw", hidden: false },
+    { name: "given back while the page is open", start: false, change: "add", hidden: true },
+  ])("follows access $name, without a reload", async ({ start, change, hidden }) => {
+    const h = await mount(async ({ pageMode }) => {
+      (pageMode as FakePageModePermission).granted = start;
+      await Promise.resolve();
+    });
+    expect(byId("page-mode-access").hidden).toBe(start);
+    if (change === "withdraw") h.pageMode.withdraw();
+    else {
+      h.pageMode.granted = true;
+      h.pageMode.fireAdded();
+    }
+    await settle(() => {
+      expect(byId("page-mode-access").hidden).toBe(hidden);
+    });
+  });
+
+  it("looks again when the user comes back to the tab (access given back in about:addons)", async () => {
+    const h = await mount(withdrawn);
+    expect(byId("page-mode-access").hidden).toBe(false);
+    h.pageMode.granted = true;
+    window.dispatchEvent(new Event("focus"));
+    await settle(() => {
+      expect(byId("page-mode-access").hidden).toBe(true);
+    });
   });
 });
 
@@ -267,7 +294,7 @@ describe("the sites with a choice", () => {
     });
     expect(await h.deps.store.getSetting("page_mode_sites")).toEqual({ "news.example.org": "off" });
     expect(h.otherPage.received).toContain("settings-changed");
-    expect(h.background.applied).toBe(1);
+    expect(h.tabs.sent).toEqual(["settings-changed"]);
   });
 
   it("shows the empty line when the last one is removed", async () => {
@@ -294,10 +321,9 @@ describe("the sites with a choice", () => {
 
   it("keeps the choices when page mode is turned off", async () => {
     const h = await mount(seed);
-    h.pageMode.granted = true;
     clickBox();
     await settle(() => {
-      expect(h.pageMode.calls).toEqual(["remove"]);
+      expect(h.tabs.sent).toEqual(["page-mode-off"]);
     });
     expect(await h.deps.store.getSetting("page_mode_sites")).toEqual({
       "news.example.org": "off",
@@ -325,7 +351,7 @@ describe("the Welcome block", () => {
     expect(welcome()).toBeNull();
   });
 
-  it("is shown above the sections when asked for, with its sentence, Add an LLM, the offer, Allow and Not now", async () => {
+  it("is shown above the sections when asked for: the sentence, Add an LLM, and how page mode works (nothing to allow)", async () => {
     mounted = await mountForTest(document, undefined, undefined, { welcome: true });
     expect(welcome()).not.toBeNull();
     // Right after the title, before the LLMs section.
@@ -333,14 +359,15 @@ describe("the Welcome block", () => {
     expect(welcome()?.nextElementSibling?.id).toBe("llms");
     expect(byId("welcome-heading").textContent).toBe("Welcome to English Tutor");
     expect(byId("welcome-intro").textContent).toContain("grammar, vocabulary and syntax errors");
-    expect(byId("welcome-offer").textContent).toBe(
-      "Offer to check what you write on websites. English Tutor asks on each site first, and reads nothing on a site until you say yes.",
+    expect(byId("welcome-page-mode").textContent).toContain(
+      "click the grey English Tutor icon in a text box to turn checking on for that site",
     );
     expect([...byId("welcome").querySelectorAll("button")].map((b) => b.textContent)).toEqual([
       "Add an LLM",
-      "Allow",
-      "Not now",
     ]);
+    // Opening it asks for nothing and changes nothing.
+    expect(mounted.pageMode.calls).not.toContain("request");
+    expect(mounted.tabs.sent).toEqual([]);
   });
 
   it("Add an LLM opens the Add form of the LLMs section", async () => {
@@ -350,81 +377,123 @@ describe("the Welcome block", () => {
     expect(document.getElementById("llm-form")).not.toBeNull();
     expect(welcome()).not.toBeNull();
   });
-
-  it("Not now closes the block and changes nothing", async () => {
-    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
-    click("welcome-later");
-    expect(welcome()).toBeNull();
-    expect(mounted.pageMode.calls).toEqual([]);
-    expect(await mounted.deps.store.getSetting("page_mode")).toBe(false);
-    expect(box().checked).toBe(false);
-    expect(mounted.background.applied).toBe(0);
-  });
-
-  it("Allow asks for <all_urls> in the turn of the click, stores page_mode, has the background script register, ticks the box and says so", async () => {
-    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
-    const h = mounted;
-    click("welcome-allow");
-    // Nothing was awaited between the click and the request.
-    expect(h.pageMode.calls).toEqual(["request"]);
-    await settle(() => {
-      expect(h.background.applied).toBe(1);
-    });
-    expect(await h.deps.store.getSetting("page_mode")).toBe(true);
-    expect(h.otherPage.received).toContain("settings-changed");
-    expect(box().checked).toBe(true);
-    await settle(() => {
-      expect(byId("welcome-allowed").hidden).toBe(false);
-    });
-    expect(byId("welcome-offer").hidden).toBe(true);
-    expect(byId("welcome-error").hidden).toBe(true);
-    // The delay field follows, as it does for the box.
-    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(false);
-  });
-
-  it("Allow that the user refuses says so in the block (PageModePermissionDenied) and keeps the offer", async () => {
-    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
-    const h = mounted;
-    h.pageMode.answer = "refuse";
-    click("welcome-allow");
-    await settle(() => {
-      expect(byId("welcome-error").hidden).toBe(false);
-    });
-    expect(byId("welcome-error").textContent).toBe(PERMISSION_DENIED_MESSAGE);
-    expect(
-      h.page.pageMode.error?.hasRoute("PageModeSection.turnOn->PageModePermissionDenied"),
-    ).toBe(true);
-    expect(box().checked).toBe(false);
-    expect(await h.deps.store.getSetting("page_mode")).toBe(false);
-    expect(h.background.applied).toBe(0);
-    expect(byId("welcome-allowed").hidden).toBe(true);
-    // Allow again, and the error goes.
-    h.pageMode.answer = "grant";
-    click("welcome-allow");
-    await settle(() => {
-      expect(byId("welcome-allowed").hidden).toBe(false);
-    });
-    expect(byId("welcome-error").hidden).toBe(true);
-  });
 });
 
 describe("the auto-check delay", () => {
   it("is enabled while page mode is on, even with auto-check off, because page mode uses it", async () => {
-    await mount(async ({ store }) => {
-      await store.setSetting("page_mode", true);
-    });
+    await mount();
     expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(false);
   });
 
-  it("is disabled when both are off, and follows the box", async () => {
-    const h = await mount();
-    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(true);
-    clickBox();
-    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(false);
-    await settle(() => {
-      expect(h.background.applied).toBe(1);
+  it("is disabled when both are off", async () => {
+    await mount(async ({ store }) => {
+      await store.setSetting("page_mode", false);
     });
-    clickBox();
     expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
+describe("the box for automatic checks in text boxes on websites", () => {
+  const auto = () => byId("page-mode-auto-check") as HTMLInputElement;
+  const delay = () => byId("auto-check-delay") as HTMLInputElement;
+
+  it("has its label, sits directly under the switch, and is ticked by default", async () => {
+    await mount();
+    expect(AUTO_CHECK_LABEL).toBe("Check automatically while typing in text boxes on websites");
+    expect(auto().closest("label")?.textContent).toContain(AUTO_CHECK_LABEL);
+    expect(auto().checked).toBe(true);
+    expect(auto().disabled).toBe(false);
+    const row = auto().closest(".form-row");
+    expect(row?.previousElementSibling).toBe(box().closest(".form-row"));
+  });
+
+  it.each([
+    { name: "unticked", stored: false },
+    { name: "ticked", stored: true },
+  ])("shows what is stored: $name", async ({ stored }) => {
+    await mount(async ({ store }) => {
+      await store.setSetting("page_mode_auto_check", stored);
+    });
+    expect(auto().checked).toBe(stored);
+  });
+
+  it("unticking stores it, announces it, and tells nobody to remove anything", async () => {
+    const h = await mount();
+    auto().click();
+    await settle(() => {
+      expect(h.otherPage.received).toContain("settings-changed");
+    });
+    expect(await h.deps.store.getSetting("page_mode_auto_check")).toBe(false);
+    expect(await h.deps.store.getSetting("page_mode")).toBe(true);
+    expect(h.tabs.sent).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "page mode on, box ticked, editor's Auto-check off",
+      page: true,
+      autoPage: true,
+      editor: false,
+      enabled: true,
+    },
+    {
+      name: "page mode on, box unticked, editor's Auto-check off",
+      page: true,
+      autoPage: false,
+      editor: false,
+      enabled: false,
+    },
+    {
+      name: "page mode on, box unticked, editor's Auto-check on",
+      page: true,
+      autoPage: false,
+      editor: true,
+      enabled: true,
+    },
+    {
+      name: "the switch off, box ticked (disabled), editor's Auto-check off",
+      page: false,
+      autoPage: true,
+      editor: false,
+      enabled: false,
+    },
+    {
+      name: "the switch off, editor's Auto-check on",
+      page: false,
+      autoPage: true,
+      editor: true,
+      enabled: true,
+    },
+  ])(
+    "the delay field with $name is enabled: $enabled",
+    async ({ page, autoPage, editor, enabled }) => {
+      await mount(async ({ store }) => {
+        await store.setSetting("page_mode", page);
+        await store.setSetting("page_mode_auto_check", autoPage);
+        await store.setSetting("auto_check", editor);
+      });
+      expect(delay().disabled).toBe(!enabled);
+    },
+  );
+
+  it("follows the box and the switch as they are clicked", async () => {
+    const h = await mount();
+    expect(delay().disabled).toBe(false);
+    auto().click();
+    expect(delay().disabled).toBe(true);
+    auto().click();
+    expect(delay().disabled).toBe(false);
+    box().click();
+    // The box is disabled with the switch, and the delay with it.
+    await settle(() => {
+      expect(auto().disabled).toBe(true);
+    });
+    expect(delay().disabled).toBe(true);
+    expect(h.tabs.sent).toEqual(["page-mode-off"]);
+    box().click();
+    await settle(() => {
+      expect(auto().disabled).toBe(false);
+    });
+    expect(delay().disabled).toBe(false);
   });
 });

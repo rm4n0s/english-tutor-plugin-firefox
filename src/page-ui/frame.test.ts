@@ -30,7 +30,7 @@ function setup(
     clock: new FakeClock(1_000),
     scheduler,
     runner,
-    settings: { delaySeconds: 3, getModel: () => MODEL, load },
+    settings: { delaySeconds: 3, autoCheck: true, getModel: () => MODEL, load },
     recorder: new FakeRecorder(),
     ...(options.popover === undefined ? {} : { popover: options.popover }),
     ...(options.dialog === undefined ? {} : { dialog: options.dialog }),
@@ -291,7 +291,12 @@ describe("PageFrame: while the store opens", () => {
       clock: new FakeClock(0),
       scheduler: new FakeScheduler(),
       runner,
-      settings: { delaySeconds: 3, getModel: () => MODEL, load: () => Promise.resolve() },
+      settings: {
+        delaySeconds: 3,
+        autoCheck: true,
+        getModel: () => MODEL,
+        load: () => Promise.resolve(),
+      },
       recorder: new FakeRecorder(),
     });
     await t.frame.idle();

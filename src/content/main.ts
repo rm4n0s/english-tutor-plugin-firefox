@@ -6,14 +6,16 @@ import { WindowPageConnector } from "../platform/page-port";
 import { PageModeContent } from "./page-mode";
 import { claimPageSlot } from "./slot";
 
-// The page-mode content script (SPEC section 4.11). The background script registers it only while
-// page mode is offered. It starts by asking what page mode does on this host: on a site that is on
-// it checks the text boxes the user focuses, on a site with no choice it waits to ask, and on any
-// other it does nothing. It never answers a `runtime` message (tutor pings are for the tutor pages).
+// The page-mode content script (SPEC section 4.11). The manifest declares it for every http(s) page
+// and frame (LanguageTool's model), and the background script also runs it in the tabs that were
+// open at the installation. It starts by asking what page mode does on this host: on a site that
+// is on it checks the text boxes the user focuses, on a site with no choice it shows the dimmed
+// icon, and on any other (or when the switch is off, or access to the site is gone) it does
+// nothing. It never answers a `runtime` message (tutor pings are for the tutor pages).
 const log = new Logger(console);
 
-// Once per page frame: the background script also runs this file in the tabs that were open when
-// page mode was allowed, and a page can end up with both copies.
+// Once per page frame: the background script also runs this file in the tabs that were open at the
+// installation or the update, and a page can end up with both copies.
 if (claimPageSlot(globalThis)) {
   const content = new PageModeContent({
     win: window,

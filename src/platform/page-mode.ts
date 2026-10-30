@@ -2,7 +2,6 @@ import { AppError } from "../core/errors";
 import {
   PAGE_FRAME_CLAIM,
   PAGE_FRAME_REGISTER,
-  PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_OPEN_OPTIONS,
   PAGE_MODE_OPEN_TUTOR,
@@ -16,26 +15,36 @@ import {
 
 /** The match pattern page mode asks for: every web page (SPEC sections 3.2 and 4.11). */
 export const ALL_URLS = "<all_urls>";
-/** The id of the registered content script. */
-export const PAGE_MODE_SCRIPT_ID = "page-mode";
-/** The bundle the script registers (`src/content/main.ts`). */
+/**
+ * The pages page mode runs on. Access to them is what `contains` asks about: Firefox records
+ * these two optional patterns as granted next to `<all_urls>` at installation (checked in Firefox
+ * 159), and `<all_urls>` also lists `file:` and other schemes that the content script never
+ * reaches.
+ */
+export const WEB_PAGES = ["http://*/*", "https://*/*"];
+/** The bundle of the content script (`src/content/main.ts`), declared in the manifest. */
 export const PAGE_MODE_SCRIPT_FILE = "page.js";
 
 /**
- * The `<all_urls>` host permission of page mode. The only place that calls `browser.permissions`
- * for it (the LLM origins are `HostPermissions`).
+ * The `<all_urls>` host permission of page mode. Firefox grants it when the extension is installed
+ * (`host_permissions` in the manifest), and the user can withdraw it again, for a site or entirely
+ * (the extensions panel, `about:addons`). The only place that calls `browser.permissions` for it
+ * (the LLM origins are `HostPermissions`).
  */
 export interface PageModePermission {
+  /** Whether access to all web pages (`http` and `https`) is granted now. */
   contains(): Promise<boolean>;
+  /** Whether the extension may use the site of this page address: false when the user withdrew it. */
+  containsSite(pageUrl: string): Promise<boolean>;
   /**
-   * Asks for the permission; true when it is (now) granted. Firefox accepts the call only during
-   * a user gesture, so a click handler calls it synchronously, before any `await`.
+   * Asks for the permission again; true when it is (now) granted. Firefox accepts the call only
+   * during a user gesture, so a click handler calls it synchronously, before any `await`.
    */
   request(): Promise<boolean>;
-  /** Gives the permission back; true when it was removed. */
-  remove(): Promise<boolean>;
-  /** The user (or the extension) removed a permission. Registered at the top level. */
+  /** The user (or the browser) withdrew a permission. Registered at the top level. */
   onRemoved(handler: () => void): void;
+  /** A permission was granted (the user allowed it again). Registered at the top level. */
+  onAdded(handler: () => void): void;
 }
 
 export class BrowserPageModePermission implements PageModePermission {
@@ -46,7 +55,18 @@ export class BrowserPageModePermission implements PageModePermission {
   }
 
   contains(): Promise<boolean> {
-    return this.api.permissions.contains({ origins: [ALL_URLS] });
+    return this.api.permissions.contains({ origins: WEB_PAGES });
+  }
+
+  async containsSite(pageUrl: string): Promise<boolean> {
+    try {
+      const { protocol, hostname } = new URL(pageUrl);
+      // A match pattern has no port (`hostname` keeps the brackets of an IPv6 address).
+      return await this.api.permissions.contains({ origins: [`${protocol}//${hostname}/*`] });
+    } catch {
+      // An address or a pattern the browser does not accept (an opaque origin): no access to it.
+      return false;
+    }
   }
 
   // Not `async`: the call to the browser must happen in the same turn as the click.
@@ -54,19 +74,18 @@ export class BrowserPageModePermission implements PageModePermission {
     return this.api.permissions.request({ origins: [ALL_URLS] });
   }
 
-  remove(): Promise<boolean> {
-    return this.api.permissions.remove({ origins: [ALL_URLS] });
-  }
-
   onRemoved(handler: () => void): void {
     this.api.permissions.onRemoved.addListener(() => {
       handler();
     });
   }
-}
 
-/** What is registered: nothing, a script of an older version (no `matchOriginAsFallback`), or the current one. */
-export type Registration = "none" | "stale" | "current";
+  onAdded(handler: () => void): void {
+    this.api.permissions.onAdded.addListener(() => {
+      handler();
+    });
+  }
+}
 
 /** The tabs a script was run in, and the tabs it could not be run in (pages the extension cannot reach). */
 export interface Injection {
@@ -74,17 +93,17 @@ export interface Injection {
   skipped: number;
 }
 
-/** The registered content script of page mode (SPEC section 4.11). Only `browser.scripting`. */
+/**
+ * The content script of page mode (SPEC section 4.11). The manifest declares it, so Firefox runs
+ * it in every page that loads; this only runs it in the pages that are already open. Only
+ * `browser.scripting`.
+ */
 export interface ContentScripts {
-  registration(): Promise<Registration>;
-  /** Registers the script, replacing an older registration. */
-  register(): Promise<void>;
-  unregister(): Promise<void>;
   /**
-   * Runs the script once in every `http(s)` tab that is open now, in all its frames: a registered
-   * script reaches only pages that load after it, and the old copy of a script from before an
-   * update is dead. The script starts once per frame (`claimPageSlot`), so a page that has both
-   * runs one.
+   * Runs the script once in every `http(s)` tab that is open now, in all its frames: a content
+   * script declared in the manifest reaches only pages that load after the installation or the
+   * update, and the old copy of a script from before an update is dead. The script starts once per
+   * frame (`claimPageSlot`), so a page that has both runs one.
    */
   injectIntoOpenTabs(): Promise<Injection>;
 }
@@ -94,38 +113,6 @@ export class BrowserContentScripts implements ContentScripts {
 
   constructor(api: typeof browser) {
     this.api = api;
-  }
-
-  async registration(): Promise<Registration> {
-    const found = await this.api.scripting.getRegisteredContentScripts({
-      ids: [PAGE_MODE_SCRIPT_ID],
-    });
-    const script = found[0];
-    if (script === undefined) return "none";
-    return script.matchOriginAsFallback === true ? "current" : "stale";
-  }
-
-  async register(): Promise<void> {
-    if ((await this.registration()) !== "none") await this.unregister();
-    const script: browser.scripting.RegisteredContentScript = {
-      id: PAGE_MODE_SCRIPT_ID,
-      matches: [ALL_URLS],
-      js: [PAGE_MODE_SCRIPT_FILE],
-      runAt: "document_idle",
-      allFrames: true,
-    };
-    try {
-      // The script also runs in `about:blank`, `about:srcdoc` and `blob:` frames whose origin
-      // matches (checked in Firefox 159): where TinyMCE and CKEditor 4 put their editors.
-      await this.api.scripting.registerContentScripts([{ ...script, matchOriginAsFallback: true }]);
-    } catch {
-      // A Firefox that does not know the property still gets the script, without those frames.
-      await this.api.scripting.registerContentScripts([script]);
-    }
-  }
-
-  async unregister(): Promise<void> {
-    await this.api.scripting.unregisterContentScripts({ ids: [PAGE_MODE_SCRIPT_ID] });
   }
 
   async injectIntoOpenTabs(): Promise<Injection> {
@@ -140,7 +127,8 @@ export class BrowserContentScripts implements ContentScripts {
           });
           return true;
         } catch {
-          // A tab the extension cannot script (a discarded tab, a page of the browser): skipped.
+          // A tab the extension cannot script (a discarded tab, a page of the browser, a site the
+          // user withdrew access to): skipped.
           return false;
         }
       }),
@@ -177,24 +165,6 @@ export class BrowserPageTabs implements PageTabs {
         }
       }),
     );
-  }
-}
-
-/** What the options page asks of the background script. */
-export interface PageModeBackendLink {
-  /** Registers or unregisters the content script to match the setting and the permission. */
-  apply(): Promise<void>;
-}
-
-export class BrowserPageModeBackendLink implements PageModeBackendLink {
-  private readonly api: typeof browser;
-
-  constructor(api: typeof browser) {
-    this.api = api;
-  }
-
-  async apply(): Promise<void> {
-    await this.api.runtime.sendMessage({ type: PAGE_MODE_APPLY });
   }
 }
 

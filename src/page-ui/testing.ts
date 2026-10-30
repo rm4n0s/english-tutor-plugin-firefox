@@ -74,6 +74,7 @@ export function sessionDeps(overrides: Partial<BoxSessionDeps> = {}) {
   const runner = new FakeRunner();
   const settings = {
     delaySeconds: 3,
+    autoCheck: true,
     model: MODEL as AnalysisModel | undefined,
     getModel() {
       return this.model;

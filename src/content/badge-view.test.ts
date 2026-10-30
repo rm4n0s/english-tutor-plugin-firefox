@@ -91,3 +91,28 @@ describe("badgeViewOf: the states of the badge (SPEC section 4.11)", () => {
     });
   });
 });
+
+describe("badgeViewOf: an unchecked box while automatic checks are off", () => {
+  it.each([
+    {
+      name: "idle with the frame's message: the message is the tooltip",
+      box: box("idle", [], "Not checked yet. Click the badge, then Check."),
+      label: "Not checked yet. Click the badge, then Check.",
+    },
+    { name: "idle with no message", box: box("idle"), label: "English Tutor" },
+    {
+      name: "checked: the message of an earlier idle state is not used",
+      box: box("checked", [], "Not checked yet. Click the badge, then Check."),
+      label: "No errors found",
+    },
+  ])("$name", ({ box: b, label }) => {
+    const view = badgeViewOf(b);
+    expect(view.label).toBe(label);
+  });
+
+  it("is still the icon", () => {
+    expect(badgeViewOf(box("idle", [], "Not checked yet. Click the badge, then Check.")).kind).toBe(
+      "icon",
+    );
+  });
+});

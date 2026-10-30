@@ -6,11 +6,10 @@ import {
   BrowserFrameActions,
   BrowserFrameClaim,
   BrowserContentScripts,
-  BrowserPageModeBackendLink,
   BrowserPageModePermission,
   BrowserPageModeRuntime,
   BrowserPageTabs,
-  PAGE_MODE_SCRIPT_ID,
+  PAGE_MODE_SCRIPT_FILE,
   type MessageSender,
 } from "./page-mode";
 
@@ -30,37 +29,38 @@ function event() {
 }
 
 describe("BrowserPageModePermission", () => {
-  function fakeApi(answer: boolean) {
+  function fakeApi(answer: boolean, { rejectContains = false } = {}) {
     const calls: { method: string; origins: string[] }[] = [];
     const removed = event();
+    const added = event();
     const record = (method: string) => (permissions: { origins?: string[] }) => {
       calls.push({ method, origins: permissions.origins ?? [] });
-      return Promise.resolve(answer);
+      return method === "contains" && rejectContains
+        ? Promise.reject(new Error("Invalid host permission"))
+        : Promise.resolve(answer);
     };
     const api = {
       permissions: {
         contains: record("contains"),
         request: record("request"),
-        remove: record("remove"),
         onRemoved: removed.api,
+        onAdded: added.api,
       },
     } as unknown as typeof browser;
-    return { api, calls, removed };
+    return { api, calls, removed, added };
   }
 
   it.each([
-    { method: "contains", answer: true },
-    { method: "contains", answer: false },
-    { method: "request", answer: true },
-    { method: "request", answer: false },
-    { method: "remove", answer: true },
-    { method: "remove", answer: false },
+    { method: "contains", answer: true, origins: ["http://*/*", "https://*/*"] },
+    { method: "contains", answer: false, origins: ["http://*/*", "https://*/*"] },
+    { method: "request", answer: true, origins: [ALL_URLS] },
+    { method: "request", answer: false, origins: [ALL_URLS] },
   ] as const)(
-    "$method asks for <all_urls> only and returns $answer",
-    async ({ method, answer }) => {
+    "$method asks for $origins only and returns $answer",
+    async ({ method, answer, origins }) => {
       const { api, calls } = fakeApi(answer);
       expect(await new BrowserPageModePermission(api)[method]()).toBe(answer);
-      expect(calls).toEqual([{ method, origins: [ALL_URLS] }]);
+      expect(calls).toEqual([{ method, origins }]);
       expect(ALL_URLS).toBe("<all_urls>");
     },
   );
@@ -73,52 +73,64 @@ describe("BrowserPageModePermission", () => {
     return promise;
   });
 
-  it("calls the handler when a permission is removed", () => {
-    const { api, removed } = fakeApi(true);
+  it.each([
+    {
+      name: "a page",
+      url: "https://www.example.com/a/b?x=1#y",
+      pattern: "https://www.example.com/*",
+    },
+    {
+      name: "a page with a port",
+      url: "http://127.0.0.1:47811/pages/x.html",
+      pattern: "http://127.0.0.1/*",
+    },
+    { name: "a bare origin", url: "https://example.org", pattern: "https://example.org/*" },
+    { name: "an IPv6 address", url: "http://[::1]:8080/", pattern: "http://[::1]/*" },
+  ])(
+    "containsSite asks about the site of $name, as a match pattern without port",
+    async ({ url, pattern }) => {
+      const { api, calls } = fakeApi(true);
+      expect(await new BrowserPageModePermission(api).containsSite(url)).toBe(true);
+      expect(calls).toEqual([{ method: "contains", origins: [pattern] }]);
+    },
+  );
+
+  it.each([
+    { name: "not an address", url: "not a url" },
+    { name: "an opaque origin", url: "null" },
+  ])("containsSite is false for $name, without asking the browser", async ({ url }) => {
+    const { api, calls } = fakeApi(true);
+    expect(await new BrowserPageModePermission(api).containsSite(url)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("containsSite is false when the browser refuses the pattern", async () => {
+    const { api } = fakeApi(true, { rejectContains: true });
+    expect(await new BrowserPageModePermission(api).containsSite("file:///a.html")).toBe(false);
+  });
+
+  it.each(["onRemoved", "onAdded"] as const)("calls the handler of %s", (method) => {
+    const { api, removed, added } = fakeApi(true);
     let count = 0;
-    new BrowserPageModePermission(api).onRemoved(() => {
+    new BrowserPageModePermission(api)[method](() => {
       count++;
     });
-    removed.fire({ origins: [ALL_URLS] });
+    (method === "onRemoved" ? removed : added).fire({ origins: [ALL_URLS] });
     expect(count).toBe(1);
   });
 });
 
 describe("BrowserContentScripts", () => {
   interface Fake {
-    registered?: { id: string; matchOriginAsFallback?: boolean }[];
-    /** Registering with `matchOriginAsFallback` is refused (a Firefox that does not know it). */
-    refuseFallback?: boolean;
     tabs?: { id?: number }[];
     /** The tab ids `executeScript` fails for. */
     unreachable?: number[];
   }
 
-  function fakeApi({
-    registered = [],
-    refuseFallback = false,
-    tabs = [],
-    unreachable = [],
-  }: Fake = {}) {
+  function fakeApi({ tabs = [], unreachable = [] }: Fake = {}) {
     const calls: { method: string; arg: unknown }[] = [];
     const api = {
       scripting: {
-        getRegisteredContentScripts: (filter: unknown) => {
-          calls.push({ method: "get", arg: filter });
-          return Promise.resolve(registered);
-        },
-        registerContentScripts: (scripts: unknown) => {
-          calls.push({ method: "register", arg: scripts });
-          const first = (scripts as { matchOriginAsFallback?: boolean }[])[0];
-          if (refuseFallback && first?.matchOriginAsFallback === true) {
-            return Promise.reject(new Error('Unexpected property "matchOriginAsFallback"'));
-          }
-          return Promise.resolve();
-        },
-        unregisterContentScripts: (filter: unknown) => {
-          calls.push({ method: "unregister", arg: filter });
-          return Promise.resolve();
-        },
         executeScript: (injection: { target: { tabId: number } }) => {
           calls.push({ method: "execute", arg: injection });
           return unreachable.includes(injection.target.tabId)
@@ -136,65 +148,14 @@ describe("BrowserContentScripts", () => {
     return { api, calls };
   }
 
-  const SCRIPT = {
-    id: "page-mode",
-    matches: ["<all_urls>"],
-    js: ["page.js"],
-    runAt: "document_idle",
-    allFrames: true,
-  };
-
-  it("registers page.js for every web page and every frame, at document_idle, also in about:blank, about:srcdoc and blob: frames of the same origin", async () => {
-    const { api, calls } = fakeApi();
-    await new BrowserContentScripts(api).register();
-    expect(calls.filter((c) => c.method === "register")).toEqual([
-      { method: "register", arg: [{ ...SCRIPT, matchOriginAsFallback: true }] },
-    ]);
-    expect(PAGE_MODE_SCRIPT_ID).toBe("page-mode");
-  });
-
-  it("registers without matchOriginAsFallback when the browser does not know the property", async () => {
-    const { api, calls } = fakeApi({ refuseFallback: true });
-    await new BrowserContentScripts(api).register();
-    expect(calls.filter((c) => c.method === "register")).toEqual([
-      { method: "register", arg: [{ ...SCRIPT, matchOriginAsFallback: true }] },
-      { method: "register", arg: [SCRIPT] },
-    ]);
-  });
-
-  it("replaces an older registration instead of failing on the id", async () => {
-    const { api, calls } = fakeApi({ registered: [{ id: "page-mode" }] });
-    await new BrowserContentScripts(api).register();
-    expect(calls.map((c) => c.method)).toEqual(["get", "unregister", "register"]);
-  });
-
-  it("unregisters its script by id", async () => {
-    const { api, calls } = fakeApi();
-    await new BrowserContentScripts(api).unregister();
-    expect(calls).toEqual([{ method: "unregister", arg: { ids: ["page-mode"] } }]);
-  });
-
-  it.each([
-    { name: "nothing registered", registered: [], expected: "none" },
-    {
-      name: "a script of an older version (no matchOriginAsFallback)",
-      registered: [{ id: "page-mode" }],
-      expected: "stale",
-    },
-    {
-      name: "a script with matchOriginAsFallback false",
-      registered: [{ id: "page-mode", matchOriginAsFallback: false }],
-      expected: "stale",
-    },
-    {
-      name: "the current script",
-      registered: [{ id: "page-mode", matchOriginAsFallback: true }],
-      expected: "current",
-    },
-  ])("registration is $expected for $name", async ({ registered, expected }) => {
-    const { api, calls } = fakeApi({ registered });
-    expect(await new BrowserContentScripts(api).registration()).toBe(expected);
-    expect(calls[0]?.arg).toEqual({ ids: ["page-mode"] });
+  it("has nothing to register: the manifest declares the script", () => {
+    const scripts = new BrowserContentScripts(fakeApi().api) as unknown as {
+      register?: unknown;
+      unregister?: unknown;
+    };
+    expect(scripts.register).toBeUndefined();
+    expect(scripts.unregister).toBeUndefined();
+    expect(PAGE_MODE_SCRIPT_FILE).toBe("page.js");
   });
 
   describe("injectIntoOpenTabs", () => {
@@ -212,7 +173,7 @@ describe("BrowserContentScripts", () => {
       ]);
     });
 
-    it("skips a tab it cannot script and a tab with no id, and goes on", async () => {
+    it("skips a tab it cannot script (or a site the user withdrew access to) and a tab with no id, and goes on", async () => {
       const { api } = fakeApi({ tabs: [{ id: 1 }, {}, { id: 2 }, { id: 3 }], unreachable: [2] });
       expect(await new BrowserContentScripts(api).injectIntoOpenTabs()).toEqual({
         injected: 2,
@@ -253,29 +214,6 @@ describe("BrowserPageTabs", () => {
       { tab: 2, message: { type: "page-mode-off" } },
       { tab: 3, message: { type: "page-mode-off" } },
     ]);
-  });
-});
-
-describe("BrowserPageModeBackendLink", () => {
-  it("asks the background script to apply the setting", async () => {
-    const sent: unknown[] = [];
-    const api = {
-      runtime: {
-        sendMessage: (message: unknown) => {
-          sent.push(message);
-          return Promise.resolve({ ok: true });
-        },
-      },
-    } as unknown as typeof browser;
-    await new BrowserPageModeBackendLink(api).apply();
-    expect(sent).toEqual([{ type: "page-mode-apply" }]);
-  });
-
-  it("fails when the background script fails", async () => {
-    const api = {
-      runtime: { sendMessage: () => Promise.reject(new Error("no store")) },
-    } as unknown as typeof browser;
-    await expect(new BrowserPageModeBackendLink(api).apply()).rejects.toThrow("no store");
   });
 });
 

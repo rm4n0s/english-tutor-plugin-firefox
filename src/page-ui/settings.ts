@@ -14,7 +14,8 @@ export interface FrameSettingsDeps {
 
 /**
  * What the page-mode frame needs from the settings (SPEC sections 4.7 and 4.11): the pause of the
- * automatic check (`auto_check_delay_s`; the editor's own Auto-check box does not apply here) and
+ * automatic check (`auto_check_delay_s`; the editor's own Auto-check box does not apply here),
+ * whether checks start by themselves at all (`page_mode_auto_check`) and
  * the selected LLM as a model. It is read from the store when the frame starts, again each time a
  * text box gets the focus, and when another page announces a change. Unlike the tutor page it
  * never writes a setting: with no LLM selected it uses the first by name without storing that.
@@ -22,6 +23,7 @@ export interface FrameSettingsDeps {
 export class FrameSettings {
   private readonly deps: FrameSettingsDeps;
   private delay = 3;
+  private auto = true;
   private config: LLMConfig | undefined;
   private model: AnalysisModel | undefined;
   private loads = 0;
@@ -41,13 +43,15 @@ export class FrameSettings {
   async load(): Promise<void> {
     const load = ++this.loads;
     const { store } = this.deps;
-    const [delay, configs, selected] = await Promise.all([
+    const [delay, auto, configs, selected] = await Promise.all([
       store.getSetting("auto_check_delay_s"),
+      store.getSetting("page_mode_auto_check"),
       store.listConfigs(),
       store.getSetting("selected_llm_id"),
     ]);
     if (load !== this.loads) return;
     this.delay = delay;
+    this.auto = auto;
     const id = chooseSelectedId(configs, selected);
     const config = configs.find((c) => c.id === id);
     if (config !== this.config) this.model = undefined;
@@ -65,6 +69,11 @@ export class FrameSettings {
 
   get delaySeconds(): number {
     return this.delay;
+  }
+
+  /** Whether text boxes are checked by themselves (`page_mode_auto_check`); the dialog's Check always works. */
+  get autoCheck(): boolean {
+    return this.auto;
   }
 
   /** The selected LLM as a model, made on first use; undefined when there is none. */

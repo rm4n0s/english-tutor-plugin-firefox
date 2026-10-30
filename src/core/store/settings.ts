@@ -21,8 +21,10 @@ export interface Settings {
   results_font_family: string;
   results_font_size: number;
   pane_sizes: PaneSizes;
-  /** Whether page mode is offered: it asks on each site before it reads anything (SPEC section 4.11). */
+  /** Whether the icon is shown in text boxes: on by default; it asks on each site before it reads anything (SPEC section 4.11). */
   page_mode: boolean;
+  /** Whether text boxes on sites that are on are checked by themselves (on focus and after the typing pause). Default true (SPEC section 4.11). */
+  page_mode_auto_check: boolean;
   /** The sites the user made a choice on. A site with no entry is `ask`. */
   page_mode_sites: PageModeSites;
 }
@@ -137,7 +139,12 @@ export const SETTING_DEFINITIONS: { readonly [K in SettingKey]: SettingDefinitio
     },
   },
   page_mode: {
-    default: false,
+    default: true,
+    decode: (raw) => (typeof raw === "boolean" ? raw : undefined),
+    encode: (value) => value,
+  },
+  page_mode_auto_check: {
+    default: true,
     decode: (raw) => (typeof raw === "boolean" ? raw : undefined),
     encode: (value) => value,
   },

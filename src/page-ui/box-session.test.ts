@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "../core/errors";
 import { placed, resultOf } from "../core/issues/testing/helpers";
-import { BoxSession, NO_LLM_MESSAGE, TOO_LONG_MESSAGE } from "./box-session";
+import { BoxSession, NO_LLM_MESSAGE, NOT_CHECKED_MESSAGE, TOO_LONG_MESSAGE } from "./box-session";
 import { sessionDeps, settle, states } from "./testing";
 
 const TEXT = "Yesterday I seen him. He go home.";
@@ -519,5 +519,96 @@ describe("BoxSession: the dialog's manual check", () => {
     await running;
     expect(t.sent).toHaveLength(before);
     expect(t.recorder.recorded).toEqual([]);
+  });
+});
+
+describe("BoxSession: automatic checks turned off (page_mode_auto_check)", () => {
+  function off() {
+    const t = make();
+    t.settings.autoCheck = false;
+    return t;
+  }
+
+  it.each([
+    {
+      name: "on focus, with enough words",
+      act: (t: ReturnType<typeof off>) => {
+        t.session.focus(0, TEXT);
+      },
+    },
+    {
+      name: "after the typing pause",
+      act: (t: ReturnType<typeof off>) => {
+        t.session.focus(0, TEXT);
+        t.session.edit({ revision: 1, start: TEXT.length, removed: 0, inserted: " more" });
+        t.scheduler.advance(60_000);
+      },
+    },
+    {
+      name: "after several edits and a long wait",
+      act: (t: ReturnType<typeof off>) => {
+        t.session.focus(0, TEXT);
+        for (let i = 1; i <= 3; i++) {
+          t.session.edit({ revision: i, start: 0, removed: 0, inserted: "x" });
+          t.scheduler.advance(10_000);
+        }
+      },
+    },
+  ])("sends no request $name", async ({ act }) => {
+    const t = off();
+    t.runner.answer(resultOf(ISSUES));
+    act(t);
+    await settle();
+    expect(t.runner.asked).toEqual([]);
+    const last = states(t.sent).at(-1);
+    expect(last?.status).toBe("idle");
+    expect(last?.message).toBe(NOT_CHECKED_MESSAGE);
+    expect(NOT_CHECKED_MESSAGE).toBe("Not checked yet. Click the badge, then Check.");
+  });
+
+  it("says idle with the tooltip only while the text has no result: ticked, idle has no message", async () => {
+    const t = make("one two");
+    t.session.focus(0, "one two");
+    await settle();
+    expect(states(t.sent).at(-1)?.message).toBeUndefined();
+  });
+
+  it("the dialog's Check still works, is recorded, and later edits start no check", async () => {
+    const t = off();
+    t.runner.answer(resultOf(ISSUES));
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(t.runner.asked).toEqual([]);
+    await t.session.checkManually();
+    expect(t.runner.asked).toHaveLength(1);
+    expect(t.recorder.recorded).toHaveLength(1);
+    expect(t.recorder.recorded[0]?.source).toBe("session:s");
+    const last = states(t.sent).at(-1);
+    expect(last?.status).toBe("checked");
+    expect(last?.message).toBeUndefined();
+    expect(last?.issues).toHaveLength(2);
+    // Edits move the underlines as usual, and no automatic check follows.
+    t.session.edit({ revision: 1, start: 0, removed: 0, inserted: "So " });
+    t.scheduler.advance(60_000);
+    await settle();
+    expect(t.runner.asked).toHaveLength(1);
+    expect(
+      states(t.sent)
+        .at(-1)
+        ?.issues.map((i) => i.start),
+    ).toEqual([13, 25]);
+  });
+
+  it("applies a change of the setting on the next focus, with no reload", async () => {
+    const t = off();
+    t.runner.answer(resultOf(ISSUES));
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(t.runner.asked).toEqual([]);
+    t.session.blur();
+    t.settings.autoCheck = true;
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(t.runner.asked).toHaveLength(1);
   });
 });

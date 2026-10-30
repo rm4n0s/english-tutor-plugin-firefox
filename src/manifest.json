@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "English Tutor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Write English, let an LLM underline grammar, vocabulary and syntax errors, and learn from each one.",
   "browser_specific_settings": {
     "gecko": {
@@ -58,7 +58,17 @@
     "downloads",
     "scripting"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*", "<all_urls>"],
+  "host_permissions": ["<all_urls>"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["page.js"],
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "run_at": "document_end"
+    }
+  ],
   "web_accessible_resources": [
     {
       "resources": ["page-ui.html", "page-ui.js", "page-ui.css"],

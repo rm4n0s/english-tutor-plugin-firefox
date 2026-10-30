@@ -306,3 +306,12 @@ label.inline {
 .welcome .card-body {
   min-height: 0;
 }
+
+/* The notice of the page-mode block when Firefox no longer grants access to all websites. */
+.access-notice {
+  margin: 0 0 14px;
+}
+
+.access-notice p {
+  margin-bottom: 8px;
+}

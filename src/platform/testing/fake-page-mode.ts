@@ -4,8 +4,6 @@ import type {
   ContentScripts,
   Injection,
   MessageSender,
-  Registration,
-  PageModeBackendLink,
   PageModePermission,
   PageModeRuntime,
   PageTabs,
@@ -13,33 +11,48 @@ import type {
 } from "../page-mode";
 
 export class FakePageModePermission implements PageModePermission {
-  granted = false;
+  /** Access to all websites, as Firefox grants it at installation. */
+  granted = true;
+  /** Sites (host names) the user withdrew access to while `granted` stays true. */
+  withdrawnSites = new Set<string>();
   /** What the user answers when asked. */
   answer: "grant" | "refuse" = "grant";
   readonly calls: string[] = [];
   private removed: (() => void) | undefined;
+  private added: (() => void) | undefined;
 
   contains(): Promise<boolean> {
     this.calls.push("contains");
     return Promise.resolve(this.granted);
   }
 
+  containsSite(pageUrl: string): Promise<boolean> {
+    this.calls.push(`containsSite ${pageUrl}`);
+    const host = new URL(pageUrl).hostname;
+    return Promise.resolve(this.granted && !this.withdrawnSites.has(host));
+  }
+
   // Not async, like the real one: the call is recorded in the turn of the click.
   request(): Promise<boolean> {
     this.calls.push("request");
-    if (this.answer === "grant") this.granted = true;
+    if (this.answer === "grant") {
+      this.granted = true;
+      this.added?.();
+    }
     return Promise.resolve(this.granted);
-  }
-
-  remove(): Promise<boolean> {
-    this.calls.push("remove");
-    const was = this.granted;
-    this.granted = false;
-    return Promise.resolve(was);
   }
 
   onRemoved(handler: () => void): void {
     this.removed = handler;
+  }
+
+  onAdded(handler: () => void): void {
+    this.added = handler;
+  }
+
+  /** A permission was added (the user gave a part of the access back). */
+  fireAdded(): void {
+    this.added?.();
   }
 
   /** The user withdraws the permission in about:addons. */
@@ -50,34 +63,12 @@ export class FakePageModePermission implements PageModePermission {
 }
 
 export class FakeContentScripts implements ContentScripts {
-  registered = false;
-  /** Whether the registered script is an older one (without `matchOriginAsFallback`). */
-  stale = false;
   readonly calls: string[] = [];
-  failWith: Error | undefined;
   injection: Injection = { injected: 2, skipped: 1 };
-
-  registration(): Promise<Registration> {
-    return Promise.resolve(!this.registered ? "none" : this.stale ? "stale" : "current");
-  }
-
-  register(): Promise<void> {
-    this.calls.push("register");
-    if (this.failWith !== undefined) return Promise.reject(this.failWith);
-    this.registered = true;
-    this.stale = false;
-    return Promise.resolve();
-  }
 
   injectIntoOpenTabs(): Promise<Injection> {
     this.calls.push("inject");
     return Promise.resolve(this.injection);
-  }
-
-  unregister(): Promise<void> {
-    this.calls.push("unregister");
-    this.registered = false;
-    return Promise.resolve();
   }
 }
 
@@ -87,19 +78,6 @@ export class FakePageTabs implements PageTabs {
   broadcast(message: PageBroadcast): Promise<void> {
     this.sent.push(message);
     return Promise.resolve();
-  }
-}
-
-export class FakeBackendLink implements PageModeBackendLink {
-  applied = 0;
-  failWith: Error | undefined;
-  /** Called on each `apply`, so a test can stand for the background script. */
-  onApply: (() => Promise<void>) | undefined;
-
-  async apply(): Promise<void> {
-    this.applied++;
-    if (this.failWith !== undefined) throw this.failWith;
-    await this.onApply?.();
   }
 }
 

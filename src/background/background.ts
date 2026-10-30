@@ -3,7 +3,6 @@ import type { Logger } from "../core/log";
 import {
   PAGE_FRAME_CLAIM,
   PAGE_FRAME_REGISTER,
-  PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_IGNORE,
   PAGE_MODE_OPEN_OPTIONS,
@@ -26,7 +25,7 @@ import type { BackgroundMessages, PageModePermission } from "../platform/page-mo
 import type { ToolbarButton } from "../platform/toolbar-button";
 import type { TabPlace, TutorTabInfo, TutorTabs } from "../platform/tutor-tabs";
 import type { BackgroundMenus, WebMenuClick, WebMenuItem } from "../platform/web-menus";
-import type { PageModeBackend } from "./page-mode";
+import { hostOfUrl, type PageModeBackend } from "./page-mode";
 
 export const TUTOR_PAGE = "tutor.html";
 /** The command of the manifest that brings the tutor page to the front. */
@@ -103,6 +102,20 @@ export interface BackgroundDeps {
   log: Logger;
 }
 
+/**
+ * The address that says which site a content script's page belongs to: its `http(s)` address, or
+ * for a frame with no address of its own (`about:blank`, `about:srcdoc`, `blob:`) its origin.
+ * Undefined for anything else (an extension page asking, a frame with an opaque origin): there is
+ * no site whose access could be checked.
+ */
+function pageOf(sender: {
+  url: string | undefined;
+  origin: string | undefined;
+}): string | undefined {
+  if (hostOfUrl(sender.url) !== undefined) return sender.url;
+  return hostOfUrl(sender.origin) !== undefined ? sender.origin : undefined;
+}
+
 /** The tutor tab to bring to the front: the one focused last (the later one on a tie). */
 export function latestTutorTab(tabs: readonly TutorTabInfo[]): TutorTabInfo | undefined {
   let latest: TutorTabInfo | undefined;
@@ -150,26 +163,33 @@ export function startBackground(deps: BackgroundDeps): void {
   const install = (): void => {
     menus.install(MENU_ITEMS).catch(report("could not make the menus"));
   };
-  // Page mode: the registration follows the setting and the permission (SPEC section 4.11).
-  const syncPageMode = (notify: boolean): void => {
-    pageMode.sync({ notify }).catch(report("could not bring page mode in step with its setting"));
+  // Page mode: the content script is declared in the manifest, so Firefox runs it in every page
+  // that loads. The pages that were already open when the extension was installed or updated get
+  // it from here (SPEC section 4.11).
+  const startInOpenTabs = (): void => {
+    pageMode
+      .injectIntoOpenTabs()
+      .catch(report("could not start page mode in the tabs that are open"));
   };
   lifecycle.onInstalled((reason) => {
     install();
-    syncPageMode(false);
+    if (reason === "install" || reason === "update") startInOpenTabs();
     // A first installation (and a temporary add-on, which reports the same) shows the welcome
-    // page, which asks once for access to all websites. An update does not (SPEC section 4.11).
+    // page, which says how page mode works (SPEC section 4.11). An update does not.
     if (reason === "install") {
       options.openWelcome().catch(report("could not open the welcome page"));
     }
   });
   lifecycle.onStartup(() => {
     install();
-    syncPageMode(false);
   });
-  permission.onRemoved(() => {
-    syncPageMode(true);
-  });
+  // Access to websites was withdrawn or given back (the extensions panel, about:addons, or the
+  // button on the options page): the open pages ask again, and new access starts the open tabs.
+  const permissionChanged = (): void => {
+    pageMode.permissionChanged().catch(report("could not tell the pages that access changed"));
+  };
+  permission.onRemoved(permissionChanged);
+  permission.onAdded(permissionChanged);
 
   // The hand-off: the text goes through `storage.session`, never through the address.
   async function sendToTutor(
@@ -227,13 +247,12 @@ export function startBackground(deps: BackgroundDeps): void {
   messages.onMessage((message, sender) => {
     if (!sender.ownExtension) return undefined;
     const type = messageType(message);
-    if (type === PAGE_MODE_APPLY) {
-      return pageMode.sync({ notify: true }).then(() => ({ ok: true }));
-    }
     if (type === PAGE_MODE_CONFIG) {
       const request = parseConfigRequest(message);
       if (request === undefined) return undefined;
-      return pageMode.config(request.host);
+      // The page's address (or, for a frame with no address, its origin) says which site the
+      // extension must still have access to.
+      return pageMode.config(request.host, sender.tab === undefined ? undefined : pageOf(sender));
     }
     if (type === PAGE_MODE_SITE) {
       // The choice of the prompt, from the content script of a tab; the host must be the page's.

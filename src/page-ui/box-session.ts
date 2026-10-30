@@ -36,6 +36,8 @@ export interface ManualEnd {
 }
 
 export const NO_LLM_MESSAGE = "No LLM is configured. Add one in Preferences to start checking.";
+/** The badge's tooltip while automatic checks are off and the text was not checked (SPEC section 4.11). */
+export const NOT_CHECKED_MESSAGE = "Not checked yet. Click the badge, then Check.";
 export const TOO_LONG_MESSAGE = "This text has more than 10,000 words, so it is not checked.";
 
 export interface BoxSessionDeps {
@@ -43,7 +45,12 @@ export interface BoxSessionDeps {
   scheduler: Scheduler;
   runner: CheckRunner;
   /** The pause of the automatic check and the LLM, read each time they are needed. */
-  settings: { readonly delaySeconds: number; getModel(): AnalysisModel | undefined };
+  settings: {
+    readonly delaySeconds: number;
+    /** Whether checks start by themselves (`page_mode_auto_check`). */
+    readonly autoCheck: boolean;
+    getModel(): AnalysisModel | undefined;
+  };
   log: Logger;
   /** Sends a message to the content script. */
   send(message: FrameMessage): void;
@@ -86,8 +93,9 @@ export class BoxSession {
     });
     this.autoCheck = new AutoCheck({
       scheduler: deps.scheduler,
-      // Only the focused text box is checked, and always (the editor's Auto-check box is for the tutor page).
-      enabled: () => this.focused,
+      // Only the focused text box is checked, and by default always (the editor's Auto-check box
+      // is for the tutor page); the setting `page_mode_auto_check` can turn it off.
+      enabled: () => this.focused && deps.settings.autoCheck,
       delaySeconds: () => deps.settings.delaySeconds,
       busy: () => this.state.pending !== null,
       canCheck: () => countWords(this.tracked.text) >= MIN_WORDS,
@@ -113,7 +121,11 @@ export class BoxSession {
   statusNow(): { status: BoxStatus; message?: string } {
     if (this.state.pending !== null) return { status: "checking" };
     if (this.problem !== undefined) return this.problem;
-    return { status: this.state.checked ? "checked" : "idle" };
+    if (this.state.checked) return { status: "checked" };
+    // With automatic checks off, the badge says how to get one.
+    return this.deps.settings.autoCheck
+      ? { status: "idle" }
+      : { status: "idle", message: NOT_CHECKED_MESSAGE };
   }
 
   /**
@@ -131,8 +143,9 @@ export class BoxSession {
       this.sendState();
       return;
     }
-    if (countWords(this.tracked.text) >= MIN_WORDS) void this.run(false);
-    else this.sendState();
+    if (this.deps.settings.autoCheck && countWords(this.tracked.text) >= MIN_WORDS) {
+      void this.run(false);
+    } else this.sendState();
   }
 
   blur(): void {

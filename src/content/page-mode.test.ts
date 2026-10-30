@@ -106,7 +106,12 @@ async function setup(options: Options = {}) {
           clock: new FakeClock(1_000),
           scheduler,
           runner,
-          settings: { delaySeconds: 3, getModel: () => MODEL, load: () => Promise.resolve() },
+          settings: {
+            delaySeconds: 3,
+            autoCheck: true,
+            getModel: () => MODEL,
+            load: () => Promise.resolve(),
+          },
           recorder: new FakeRecorder(),
           ...(options.popover === undefined ? {} : { popover: options.popover }),
           ...(options.dialog === undefined ? {} : { dialog: options.dialog }),
@@ -189,6 +194,42 @@ describe("PageModeContent: asking whether it runs here", () => {
     focusIn(t.box);
     expect(t.iframe()).toBeNull();
     expect(t.runtime.opened).toEqual([]);
+  });
+
+  it("does not even ask on a frame that belongs to no site (a sandboxed frame, a data: page)", async () => {
+    const box = setBody(document, "<textarea>one two three</textarea>");
+    const runtime = new FakePageModeRuntime();
+    runtime.config = { state: "on" };
+    // A window whose origin is opaque: no host name, and the origin "null".
+    const sandboxed = new Proxy(window, {
+      get: (target, key) => {
+        if (key === "location") return { hostname: "" };
+        if (key === "origin") return "null";
+        const value: unknown = Reflect.get(target, key);
+        return typeof value === "function" ? (value.bind(target) as unknown) : value;
+      },
+    });
+    const content = new PageModeContent({
+      win: sandboxed,
+      runtime,
+      connector: new FakePortBus().connector,
+      scheduler: new FakeScheduler(),
+      clock: new FakeClock(),
+      random: new CountingRandom(),
+      log: new Logger({
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      }),
+    });
+    made.push(content);
+    await content.start();
+    focusIn(box);
+    expect(runtime.asked).toEqual([]);
+    expect(content.running).toBe(false);
+    expect(content.asking).toBe(false);
+    expect(content.boxes).toEqual([]);
   });
 
   it("does nothing when it cannot ask", async () => {

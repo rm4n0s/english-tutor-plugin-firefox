@@ -123,7 +123,7 @@ export class GeneralSection {
       ]);
       this.show(settings);
       // The LLM the privacy note names: the selected one, or the first by name, as the tutor page.
-      this.pageMode.load(
+      await this.pageMode.load(
         settings,
         configs.find((c) => c.id === settings.selected_llm_id) ?? configs[0],
       );
@@ -146,7 +146,7 @@ export class GeneralSection {
 
   /** The delay is used by auto-check, and by page mode (SPEC section 4.7). */
   private syncDelay(): void {
-    this.delay.disabled = !this.autoCheck.checked && !this.pageMode.on;
+    this.delay.disabled = !this.autoCheck.checked && !this.pageMode.autoCheckOn;
   }
 
   private errorLine(id: string): HTMLElement {

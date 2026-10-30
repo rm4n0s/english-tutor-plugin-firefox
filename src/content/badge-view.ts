@@ -70,5 +70,9 @@ export function badgeViewOf(box: BoxView, blocked?: string): BadgeView {
     };
   }
   if (box.status === "checked") return { kind: "check", label: "No errors found" };
-  return { kind: "icon", label: "English Tutor" };
+  // With automatic checks off the frame says how to check (the tooltip of an unchecked box).
+  return {
+    kind: "icon",
+    label: box.message ?? "English Tutor",
+  };
 }

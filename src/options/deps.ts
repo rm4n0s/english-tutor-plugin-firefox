@@ -2,7 +2,7 @@ import type { Clock } from "../core/clock";
 import type { Logger } from "../core/log";
 import type { Store } from "../core/store";
 import type { ChangeChannel } from "../platform/channel";
-import type { PageModeBackendLink, PageModePermission } from "../platform/page-mode";
+import type { PageModePermission, PageTabs } from "../platform/page-mode";
 import type { HostPermissions } from "../platform/permissions";
 
 /** Everything the options page needs from outside, so tests can pass fakes. */
@@ -10,10 +10,10 @@ export interface OptionsDeps {
   store: Store;
   channel: ChangeChannel;
   permissions: HostPermissions;
-  /** The `<all_urls>` permission of page mode (SPEC section 4.11). */
+  /** The `<all_urls>` permission of page mode, granted at installation (SPEC section 4.11). */
   pageMode: PageModePermission;
-  /** Has the background script register or unregister the content script. */
-  background: PageModeBackendLink;
+  /** Tells the open pages that page mode changed (`page-mode-off`, `settings-changed`). */
+  tabs: PageTabs;
   /** The page's `fetch`. */
   fetch: typeof fetch;
   clock: Clock;

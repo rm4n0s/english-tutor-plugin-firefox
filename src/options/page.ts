@@ -68,7 +68,6 @@ export function mountOptions(
   let welcome: WelcomeBlock | undefined;
   if (options.welcome === true) {
     welcome = new WelcomeBlock(doc, {
-      pageMode: general.pageMode,
       addLLM: () => {
         llms.startAdd();
       },
