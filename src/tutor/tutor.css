@@ -1,0 +1,206 @@
+/* Layout of the tutor page (SPEC section 4.2). */
+body {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  flex: none;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-label {
+  color: var(--fg-muted);
+}
+
+.legend-item {
+  background: transparent;
+  border-color: transparent;
+  padding: 2px 8px;
+}
+
+.legend-item[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+/* One line style per category (SPEC section 4.3). */
+.sample {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+}
+
+.sample-grammar {
+  text-decoration-color: var(--grammar);
+  text-decoration-style: wavy;
+}
+
+.sample-vocabulary {
+  text-decoration-color: var(--vocabulary);
+  text-decoration-style: dashed;
+}
+
+.sample-syntax {
+  text-decoration-color: var(--syntax);
+  text-decoration-style: dotted;
+}
+
+.panes {
+  --editor-share: 65%;
+  --issues-share: 40%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.editor-pane {
+  flex: 0 0 var(--editor-share);
+  min-width: 0;
+  display: flex;
+}
+
+#editor {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  padding: 12px;
+  background: var(--bg);
+  font-family: system-ui, sans-serif;
+  font-size: 13pt;
+  line-height: 1.6;
+}
+
+#editor:focus-visible {
+  outline: none;
+}
+
+.side {
+  --side-issues: var(--issues-share);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-alt);
+}
+
+.issues-pane {
+  flex: 0 0 var(--issues-share);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.explanation-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-size: 11pt;
+}
+
+h2 {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 11pt;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.issues {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 12px;
+  font-size: 11pt;
+}
+
+.empty {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.divider {
+  flex: none;
+  background: var(--divider);
+}
+
+.divider:hover,
+.divider.dragging,
+.divider:focus-visible {
+  background: var(--divider-hover);
+}
+
+.divider-x {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.divider-y {
+  height: 6px;
+  cursor: row-resize;
+}
+
+.status-bar {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-toolbar);
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.sep {
+  opacity: 0.6;
+}
+
+/* Below 800 px the right column moves under the editor. */
+@media (max-width: 799px) {
+  .panes {
+    flex-direction: column;
+  }
+
+  .editor-pane {
+    flex: 1 1 50%;
+  }
+
+  #divider-main {
+    display: none;
+  }
+
+  .side {
+    flex: 1 1 50%;
+    border-top: 1px solid var(--border);
+  }
+}

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Untitled – English Tutor</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="tutor.css" />
+    <script src="tutor.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="toolbar">
+        <div class="row">
+          <label for="llm-select">LLM:</label>
+          <select id="llm-select" disabled>
+            <option>No LLM configured</option>
+          </select>
+          <button id="check" class="primary" type="button" disabled title="Check (Ctrl+Enter)">
+            Check
+          </button>
+          <label class="inline"
+            ><input id="auto-check" type="checkbox" disabled /> Auto-check</label
+          >
+          <button id="stats" type="button" disabled>Stats</button>
+          <button id="prefs" type="button" disabled>Prefs</button>
+        </div>
+        <div class="row">
+          <button id="new" type="button" disabled>New</button>
+          <button id="open" type="button" disabled>Open</button>
+          <button id="save" type="button" disabled title="Save (Ctrl+S)">Save</button>
+          <button id="save-as" type="button" disabled title="Save As (Ctrl+Shift+S)">
+            Save As
+          </button>
+          <button id="save-to-library" type="button" disabled>Save to library</button>
+          <button id="library" type="button" disabled>Library</button>
+        </div>
+        <div class="row legend">
+          <span class="legend-label">Legend:</span>
+          <button class="legend-item" data-category="grammar" type="button" aria-pressed="true">
+            <span class="sample sample-grammar">grammar</span>
+          </button>
+          <button class="legend-item" data-category="vocabulary" type="button" aria-pressed="true">
+            <span class="sample sample-vocabulary">vocabulary</span>
+          </button>
+          <button class="legend-item" data-category="syntax" type="button" aria-pressed="true">
+            <span class="sample sample-syntax">syntax</span>
+          </button>
+          <span class="spacer"></span>
+          <button id="clear" type="button" disabled>Clear</button>
+          <button id="copy" type="button" disabled>Copy</button>
+        </div>
+      </header>
+
+      <main id="panes" class="panes">
+        <section class="editor-pane" aria-label="Text editor">
+          <textarea
+            id="editor"
+            spellcheck="true"
+            placeholder="Write or paste your English text here."
+          ></textarea>
+        </section>
+
+        <div
+          id="divider-main"
+          class="divider divider-x"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the editor"
+          aria-valuemin="30"
+          aria-valuemax="85"
+          aria-valuenow="65"
+          tabindex="0"
+        ></div>
+
+        <aside id="side" class="side" aria-label="Results">
+          <section class="issues-pane">
+            <h2 id="issues-header">Issues (0)</h2>
+            <div id="issues" class="issues" role="listbox" aria-labelledby="issues-header">
+              <p class="empty">Press Check to find errors</p>
+            </div>
+          </section>
+
+          <div
+            id="divider-side"
+            class="divider divider-y"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the issues list"
+            aria-valuemin="15"
+            aria-valuemax="85"
+            aria-valuenow="40"
+            tabindex="0"
+          ></div>
+
+          <section class="explanation-pane" aria-label="Explanation">
+            <p class="empty">Select an issue to see why it is wrong.</p>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="status-bar" role="status">
+        <span id="status-state">Ready</span>
+        <span class="sep">|</span>
+        <span id="status-words">0 words</span>
+        <span class="sep">|</span>
+        <span id="status-tokens">last: none · session: 0 / 0</span>
+      </footer>
+    </div>
+  </body>
+</html>

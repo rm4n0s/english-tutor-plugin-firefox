@@ -1,0 +1,88 @@
+/* Colours shared by the tutor page and the options page. Light and dark follow the browser. */
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --bg-alt: #f3f4f6;
+  --bg-toolbar: #eceef1;
+  --fg: #1c1e21;
+  --fg-muted: #5f6672;
+  --border: #c9ced6;
+  --accent: #0b5cad;
+  --accent-fg: #ffffff;
+  --divider: #d5d9e0;
+  --divider-hover: #9aa4b2;
+  --focus: #1a73e8;
+
+  /* Error categories, Okabe-Ito (SPEC section 4.3). */
+  --grammar: #d55e00;
+  --vocabulary: #0072b2;
+  --syntax: #009e73;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1d21;
+    --bg-alt: #23262b;
+    --bg-toolbar: #2a2d33;
+    --fg: #e6e8eb;
+    --fg-muted: #9aa1ac;
+    --border: #3d424a;
+    --accent: #4a9eff;
+    --accent-fg: #0b1220;
+    --divider: #353a42;
+    --divider-hover: #6b7380;
+    --focus: #6ab0ff;
+
+    --grammar: #ff8a4c;
+    --vocabulary: #56b4e9;
+    --syntax: #2fd3a2;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.55;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
