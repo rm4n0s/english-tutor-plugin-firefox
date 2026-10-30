@@ -29,6 +29,8 @@ export class FakeContextMenus implements ContextMenus {
   readonly entries = new Map<string, FakeEntry>();
   /** How many times `overrideContext` was called. */
   overridden = 0;
+  /** The `showDefaults` of the last `overrideContext` call. */
+  lastShowDefaults: boolean | undefined;
   /** How many times `refresh` was called. */
   refreshes = 0;
   failWith: Error | undefined;
@@ -77,8 +79,9 @@ export class FakeContextMenus implements ContextMenus {
     return Promise.resolve();
   }
 
-  overrideContext(): void {
+  overrideContext(options: { showDefaults: boolean }): void {
     this.overridden++;
+    this.lastShowDefaults = options.showDefaults;
   }
 
   onClicked(listener: (click: MenuClick) => void): () => void {

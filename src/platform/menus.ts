@@ -51,10 +51,12 @@ export interface ContextMenus {
   /** Redraws the menu that is open, after `update` calls made in an `onShown` listener. */
   refresh(): Promise<void>;
   /**
-   * Hides the browser's own entries in the menu that this `contextmenu` event opens, so it shows
-   * only the extension's visible entries. Call it synchronously from the event handler.
+   * Makes this `contextmenu` event open the extension's menu. With `showDefaults` false the
+   * browser's own entries are left out and only the extension's visible entries show (the issues
+   * list); with true they stay and the extension's follow them (the editor). Call it
+   * synchronously from the event handler.
    */
-  overrideContext(): void;
+  overrideContext(options: { showDefaults: boolean }): void;
   /** Returns the function that removes the listener. */
   onClicked(listener: (click: MenuClick) => void): () => void;
   onShown(listener: (shown: MenuShown) => void): () => void;
@@ -139,8 +141,8 @@ export class BrowserContextMenus implements ContextMenus {
     }
   }
 
-  overrideContext(): void {
-    this.api.menus.overrideContext({ showDefaults: false });
+  overrideContext(options: { showDefaults: boolean }): void {
+    this.api.menus.overrideContext({ showDefaults: options.showDefaults });
   }
 
   onClicked(listener: (click: MenuClick) => void): () => void {

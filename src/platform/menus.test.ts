@@ -125,18 +125,25 @@ describe("BrowserContextMenus", () => {
     });
   });
 
-  it("updates, refreshes and overrides the context menu without the browser's own entries", async () => {
+  it("updates and refreshes the context menu", async () => {
     const { api, calls } = fakeApi();
     const menus = new BrowserContextMenus(api);
     await menus.update("a", { visible: true, title: "T" });
     await menus.refresh();
-    menus.overrideContext();
     expect(calls).toEqual([
       { method: "update", args: ["a", { visible: true, title: "T" }] },
       { method: "refresh", args: [] },
-      { method: "overrideContext", args: [{ showDefaults: false }] },
     ]);
   });
+
+  it.each([{ showDefaults: false }, { showDefaults: true }])(
+    "overrides the context menu with %o",
+    (options) => {
+      const { api, calls } = fakeApi();
+      new BrowserContextMenus(api).overrideContext(options);
+      expect(calls).toEqual([{ method: "overrideContext", args: [options] }]);
+    },
+  );
 
   it("removes entries and skips one that is already gone", async () => {
     const { api, calls } = fakeApi();

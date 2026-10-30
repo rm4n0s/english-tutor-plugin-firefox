@@ -527,13 +527,14 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 | `UsageSaveFailed` | `store` | storing a request's token usage fails (the result is still shown) |
 | `UsageQueryFailed` | `store` | reading the Token usage tab fails |
 | `ContextMenuFailed` | `platform` | making, changing or refreshing a context menu entry fails (the page logs it and goes on without the menu) |
+| `ClipboardWriteFailed` | `platform` | Copy in the Alternatives panel cannot write to the clipboard (the panel says so under the list) |
 | `LinkOpenFailed` | `platform` | a link of an explanation cannot be opened in a new tab (`tabs.create` fails) |
 | `UnknownProvider` | `llm` | the provider string is not supported |
 | `HostPermissionDenied` | `llm` / `platform` | the origin of the LLM's base URL is not granted, or the user refused it |
 | `LLMCallFailed` | `llm` | network failure, non-2xx status, or a broken stream |
 | `LLMCallTimeout` | `llm` | the request exceeded its timeout |
 | `LLMResponseInvalid` | `analysis` | the reply does not fit the contract (or has no usable alternative), even after one retry; or an empty explanation |
-| `SelectionEmpty` | `analysis` | alternatives for an empty or white-space selection |
+| `SelectionEmpty` | `analysis` | alternatives or a selection check for an empty or white-space selection |
 | `SelectionTooLong` | `analysis` | alternatives for a selection over 600 words |
 | `FileReadFailed` | `tutor` | the file cannot be read, or is over 10 MB |
 | `FileNotUTF8` | `tutor` | the file is not valid UTF-8, or contains a NUL byte |

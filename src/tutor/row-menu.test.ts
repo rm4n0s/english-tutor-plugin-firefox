@@ -86,6 +86,7 @@ describe("RowMenu", () => {
     await menu.start();
     menu.open(4);
     expect(menus.overridden).toBe(1);
+    expect(menus.lastShowDefaults).toBe(false);
   });
 
   it("shows the entries, enabling Regenerate, when the menu it opened is shown, and hides them after", async () => {

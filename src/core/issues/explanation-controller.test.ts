@@ -257,6 +257,34 @@ describe("ExplanationController: selecting", () => {
     expect(runner.calls).toHaveLength(1);
   });
 
+  it("a selection check keeps the explanation of a selected issue outside the selection", async () => {
+    const { state, view, runner, check } = setupManual();
+    check();
+    state.select(1); // "aaaa", outside 5..14
+    runner.calls[0]?.done.resolve(READY("kept"));
+    await tick();
+    const key = runner.calls[0]?.request.key;
+    state.beginCheck(true);
+    state.finishCheck([placed(6, 8)], FIVE_TEXT, 0, [], { start: 5, end: 14 });
+    expect(runner.resets).toBe(1); // only the first result emptied the cache
+    expect(state.selectedId).toBe(1);
+    expect(view.events).toEqual(["loading:Verb form", "ready:kept"]);
+    // Selecting it again asks with the same key, so the explainer answers from its cache.
+    state.select(null);
+    state.select(1);
+    expect(runner.calls[1]?.request.key).toBe(key);
+  });
+
+  it("a selection check drops the explanation of a selected issue inside the selection", () => {
+    const { state, view, runner, check } = setupManual();
+    check();
+    state.select(2); // "bbbb", inside 5..14
+    state.beginCheck(true);
+    state.finishCheck([], FIVE_TEXT, 0, [], { start: 5, end: 14 });
+    expect(view.events).toEqual(["loading:Article", "idle"]);
+    expect(runner.cancels).toBeGreaterThan(0);
+  });
+
   it("a new check result empties the explainer's cache once, even while idle", () => {
     const { state, runner, check } = setupManual();
     check();
