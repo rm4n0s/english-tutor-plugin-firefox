@@ -1,6 +1,6 @@
 import { IDBKeyRange } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
-import { isAbortError, isConstraintError, requestResult, transact, walk } from "./idb";
+import { isAbortError, isConstraintError, requestResult, transact, walk, walkKeys } from "./idb";
 import { freshFactory } from "./testing/db";
 
 async function openPlain(): Promise<IDBDatabase> {
@@ -178,6 +178,60 @@ describe("walk", () => {
     const err = await caught(
       transact(db, "things", "readonly", (tx) =>
         walk(tx.objectStore("things"), () => {
+          throw new RangeError("visit");
+        }),
+      ),
+    );
+    expect(err).toBeInstanceOf(RangeError);
+  });
+});
+
+describe("walkKeys", () => {
+  const keysOf = (
+    options: Parameters<typeof walkKeys>[2],
+    stopAfter = Infinity,
+  ): Promise<[IDBValidKey, IDBValidKey][]> =>
+    seeded().then((db) =>
+      transact(db, "things", "readonly", async (tx) => {
+        const found: [IDBValidKey, IDBValidKey][] = [];
+        await walkKeys(
+          tx.objectStore("things").index("label"),
+          (key, primaryKey) => {
+            found.push([key, primaryKey]);
+            return found.length < stopAfter;
+          },
+          options,
+        );
+        return found;
+      }),
+    );
+
+  it.each([
+    { name: "all keys in order", options: {}, stopAfter: Infinity, expected: ["a", "b", "c"] },
+    {
+      name: "in reverse",
+      options: { direction: "prev" as const },
+      stopAfter: Infinity,
+      expected: ["c", "b", "a"],
+    },
+    {
+      name: "within a range",
+      options: { range: IDBKeyRange.lowerBound("b") },
+      stopAfter: Infinity,
+      expected: ["b", "c"],
+    },
+    { name: "until the visitor returns false", options: {}, stopAfter: 2, expected: ["a", "b"] },
+  ])("visits $name", async ({ options, stopAfter, expected }) => {
+    const found = await keysOf(options, stopAfter);
+    expect(found.map(([key]) => key)).toEqual(expected);
+  });
+
+  it("gives the primary key too, and rejects with the error of the visitor", async () => {
+    expect((await keysOf({}))[0]).toEqual(["a", 1]);
+    const db = await seeded();
+    const err = await caught(
+      transact(db, "things", "readonly", (tx) =>
+        walkKeys(tx.objectStore("things").index("label"), () => {
           throw new RangeError("visit");
         }),
       ),

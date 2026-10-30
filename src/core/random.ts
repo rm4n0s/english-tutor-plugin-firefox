@@ -4,6 +4,8 @@ export interface Random {
   int(maxExclusive: number): number;
   /** `byteCount` random bytes as lower-case hexadecimal (2 characters per byte). */
   hex(byteCount: number): string;
+  /** A random (version 4) UUID in its 36-character lower-case form, like `crypto.randomUUID()`. */
+  uuid(): string;
 }
 
 /** Fills the array with random bytes, like `crypto.getRandomValues`. */
@@ -39,5 +41,15 @@ export class CryptoRandom implements Random {
     const bytes = new Uint8Array(byteCount);
     this.fill(bytes);
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  uuid(): string {
+    const bytes = new Uint8Array(16);
+    this.fill(bytes);
+    // Version 4, variant 1 (RFC 9562).
+    bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+    const h = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   }
 }

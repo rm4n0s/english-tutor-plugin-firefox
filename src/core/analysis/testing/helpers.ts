@@ -9,6 +9,7 @@ import type { UsageRecord, UsageRecorder } from "../usage";
 /** A `Random` that counts up, so that every token differs and a test can predict them. */
 export class CountingRandom implements Random {
   private n = 0;
+  private uuids = 0;
 
   int(maxExclusive: number): number {
     return this.n++ % maxExclusive;
@@ -16,6 +17,10 @@ export class CountingRandom implements Random {
 
   hex(byteCount: number): string {
     return "00".repeat(byteCount);
+  }
+
+  uuid(): string {
+    return `00000000-0000-4000-8000-${String(this.uuids++).padStart(12, "0")}`;
   }
 }
 

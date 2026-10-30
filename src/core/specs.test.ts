@@ -14,10 +14,6 @@ const tags = parseErrorTags(spec);
  * is already covered, so the list only shrinks.
  */
 const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
-  "ErrorEventSaveFailed",
-  "StatsQueryFailed",
-  "StatsResetFailed",
-  "UsageQueryFailed",
   "FileReadFailed",
   "FileNotUTF8",
   "FileWriteFailed",

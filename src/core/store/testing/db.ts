@@ -1,7 +1,9 @@
 import { IDBFactory } from "fake-indexeddb";
 import { FakeClock } from "../../testing/fake-clock";
 import { openDatabase } from "../open";
+import { Stats } from "../stats";
 import { Store, type StoreOptions } from "../store";
+import { MemoryIgnoreSet } from "./ignore";
 
 /** A new, empty in-memory IndexedDB. Every test makes its own, so none shares a database. */
 export function freshFactory(): IDBFactory {
@@ -17,4 +19,17 @@ export async function freshStore(
   const db = await openDatabase(factory);
   const clock = new FakeClock(start);
   return { store: new Store(db, clock, options), clock, db, factory };
+}
+
+/** `Stats` on a fresh database with a fake clock and an in-memory ignore set. */
+export async function freshStats(start = 1_000): Promise<{
+  stats: Stats;
+  store: Store;
+  clock: FakeClock;
+  db: IDBDatabase;
+  ignore: MemoryIgnoreSet;
+}> {
+  const { store, clock, db } = await freshStore({}, start);
+  const ignore = new MemoryIgnoreSet();
+  return { stats: new Stats(db, clock, ignore), store, clock, db, ignore };
 }

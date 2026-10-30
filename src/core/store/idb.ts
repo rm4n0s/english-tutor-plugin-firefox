@@ -82,6 +82,40 @@ export function walk(
 }
 
 /**
+ * Like `walk`, but over the keys of an index only, so no record is read: `visit` gets the index
+ * key and the primary key. Stops when `visit` returns `false`.
+ */
+export function walkKeys(
+  index: IDBIndex,
+  visit: (key: IDBValidKey, primaryKey: IDBValidKey) => unknown,
+  options: { range?: IDBKeyRange; direction?: IDBCursorDirection } = {},
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const request = index.openKeyCursor(options.range, options.direction);
+    request.onerror = () => {
+      reject(requestError(request));
+    };
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor === null) {
+        resolve();
+        return;
+      }
+      try {
+        if (visit(cursor.key, cursor.primaryKey) === false) {
+          resolve();
+          return;
+        }
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      cursor.continue();
+    };
+  });
+}
+
+/**
  * Runs `work` in one transaction and resolves with its result once the transaction has
  * committed. If `work` rejects, or `signal` aborts, the transaction is rolled back and the
  * promise rejects with that error (for a signal, its reason, normally an `AbortError`). If the

@@ -64,3 +64,28 @@ describe("CryptoRandom.hex", () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe("CryptoRandom.uuid", () => {
+  it.each([
+    { name: "all zero bytes", fill: 0x00, expected: "00000000-0000-4000-8000-000000000000" },
+    { name: "all one bits", fill: 0xff, expected: "ffffffff-ffff-4fff-bfff-ffffffffffff" },
+    { name: "mixed bytes", fill: 0x5a, expected: "5a5a5a5a-5a5a-4a5a-9a5a-5a5a5a5a5a5a" },
+  ])("$name gives a version 4 UUID", ({ fill, expected }) => {
+    const random = new CryptoRandom((bytes) => {
+      bytes.fill(fill);
+    });
+    expect(random.uuid()).toBe(expected);
+  });
+
+  it("looks like crypto.randomUUID() and differs between calls with the real source", () => {
+    const random = new CryptoRandom();
+    const pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const seen = new Set<string>();
+    for (let i = 0; i < 50; i++) {
+      const id = random.uuid();
+      expect(id).toMatch(pattern);
+      seen.add(id);
+    }
+    expect(seen.size).toBe(50);
+  });
+});
