@@ -225,8 +225,23 @@ describe("the saved tab", () => {
     { name: "a document id of 0", raw: withField("documentId", 0) },
     { name: "a fractional document id", raw: withField("documentId", 1.5) },
     { name: "a document id that is a string", raw: withField("documentId", "3") },
+    { name: "a tab id that is a string", raw: withField("tabId", "3") },
+    { name: "a negative tab id", raw: withField("tabId", -1) },
+    { name: "a fractional tab id", raw: withField("tabId", 1.5) },
   ])("gives nothing for $name", ({ raw }) => {
     expect(parseSavedTab(raw)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "none stored before",
+      raw: JSON.stringify({ ...good, tabId: undefined }),
+      expected: undefined,
+    },
+    { name: "null", raw: withField("tabId", null), expected: undefined },
+    { name: "a tab id", raw: withField("tabId", 9), expected: 9 },
+  ])("reads the tab id: $name", ({ raw, expected }) => {
+    expect(parseSavedTab(raw)?.tabId).toBe(expected);
   });
 
   it("treats an empty stored name as no name", () => {

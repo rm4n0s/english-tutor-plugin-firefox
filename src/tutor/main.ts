@@ -1,4 +1,5 @@
 import { SystemClock, SystemScheduler } from "../core/clock";
+import { HandoffStore } from "../core/handoff";
 import { validateConfig } from "../core/llm";
 import { Logger } from "../core/log";
 import { CryptoRandom } from "../core/random";
@@ -6,15 +7,17 @@ import { openDatabase, Stats, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
 import { BrowserClipboard } from "../platform/clipboard";
 import { BrowserDownloads } from "../platform/downloads";
+import { WindowFragment } from "../platform/fragment";
 import { SessionIgnoreSet } from "../platform/ignore-set";
 import { BrowserLinkOpener } from "../platform/links";
 import { BrowserContextMenus } from "../platform/menus";
+import { BrowserNotifier } from "../platform/notifications";
 import { BrowserOptionsOpener } from "../platform/options-page";
 import { BrowserHostPermissions } from "../platform/permissions";
 import { BrowserSessionStorage } from "../platform/session-storage";
 import { SessionTabStorage } from "../platform/tab-storage";
 import { BrowserCurrentTab } from "../platform/tabs";
-import { attachDivider } from "../ui/divider";
+import { BrowserTutorPingResponder } from "../platform/tutor-tabs";
 import { mountTutor } from "./page";
 
 const log = new Logger(console);
@@ -25,28 +28,13 @@ function element(id: string): HTMLElement {
   return found;
 }
 
-// The two draggable dividers. Their positions are remembered in step 12.
-attachDivider(element("divider-main"), {
-  container: element("panes"),
-  axis: "x",
-  property: "--editor-share",
-  min: 30,
-  max: 85,
-});
-attachDivider(element("divider-side"), {
-  container: element("side"),
-  axis: "y",
-  property: "--issues-share",
-  min: 15,
-  max: 85,
-});
-
 async function main(): Promise<void> {
   const clock = new SystemClock();
   const db = await openDatabase(indexedDB);
   const store = new Store(db, clock, { validateConfig });
   const stats = new Stats(db, clock, new SessionIgnoreSet(new BrowserSessionStorage(browser)));
   const options = new BrowserOptionsOpener(browser);
+  const random = new CryptoRandom();
   const page = mountTutor(document, {
     store,
     stats,
@@ -69,7 +57,11 @@ async function main(): Promise<void> {
     // The page's own fetch, called as a method of window.
     fetch: (input, init) => window.fetch(input, init),
     scheduler: new SystemScheduler(),
-    random: new CryptoRandom(),
+    random,
+    handoff: new HandoffStore(new BrowserSessionStorage(browser), clock, random),
+    fragment: new WindowFragment(window),
+    notifier: new BrowserNotifier(browser),
+    pingResponder: new BrowserTutorPingResponder(browser),
     openOptions: () => {
       options.open().catch((err: unknown) => {
         log.error("could not open the options page", { err });
@@ -80,7 +72,10 @@ async function main(): Promise<void> {
     page.destroy();
   });
   await page.ready;
-  element("editor").focus();
+  // A hand-off may have put the focus in the Alternatives panel already.
+  if (document.activeElement === null || document.activeElement === document.body) {
+    element("editor").focus();
+  }
   log.debug("tutor page ready");
 }
 

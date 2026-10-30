@@ -18,6 +18,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* The font of the buttons (SPEC section 4.7); the buttons and selects inherit it. */
+  font-family: var(--button-font-family, inherit);
+  font-size: var(--button-font-size, inherit);
 }
 
 .row {
@@ -112,7 +115,6 @@ label.inline {
   flex-direction: column;
   overflow: hidden;
   padding: 10px 12px;
-  font-size: 11pt;
 }
 
 .divider {

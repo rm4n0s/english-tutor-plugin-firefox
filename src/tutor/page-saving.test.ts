@@ -4,7 +4,13 @@ import { reply, slowReply } from "../core/analysis/testing/helpers";
 import { parseSavedTab, serialiseSavedTab, type SavedTab } from "../core/files";
 import type { ErrorEvent } from "../core/store";
 import { requestResult } from "../core/store/idb";
-import { config, mountForTest, type HarnessOptions, type TutorHarness } from "./testing/harness";
+import {
+  config,
+  mountForTest,
+  TAB_ID,
+  type HarnessOptions,
+  type TutorHarness,
+} from "./testing/harness";
 import { FLASH_MS } from "./status-bar";
 import { PERSIST_DELAY_MS } from "./tab-persistence";
 
@@ -856,6 +862,7 @@ describe("the tab's state in sessionStorage", () => {
       documentId: undefined,
       lineEnding: "lf",
       dirty: true,
+      tabId: TAB_ID,
     });
     expect(h.tabStorage.value).not.toContain("issues");
   });

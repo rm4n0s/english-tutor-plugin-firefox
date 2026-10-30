@@ -64,3 +64,73 @@ describe("attachDivider keyboard", () => {
     expect(handle.getAttribute("aria-valuenow")).toBe("80");
   });
 });
+
+describe("attachDivider remembering", () => {
+  function setup() {
+    const container = document.createElement("div");
+    const handle = document.createElement("div");
+    handle.setAttribute("aria-valuenow", "50");
+    container.append(handle);
+    document.body.append(container);
+    const committed: number[] = [];
+    const divider = attachDivider(handle, {
+      container,
+      axis: "x",
+      property: "--share",
+      min: 20,
+      max: 80,
+      step: 5,
+      onCommit: (percent) => committed.push(percent),
+    });
+    // happy-dom has no pointer capture: the handle remembers it.
+    let captured = false;
+    handle.setPointerCapture = () => {
+      captured = true;
+    };
+    handle.hasPointerCapture = () => captured;
+    handle.releasePointerCapture = () => {
+      captured = false;
+    };
+    container.getBoundingClientRect = () => new DOMRect(100, 0, 1000, 500);
+    return { container, handle, divider, committed };
+  }
+
+  const pointer = (type: string, clientX = 0) =>
+    Object.assign(new Event(type, { cancelable: true }), { pointerId: 1, clientX, clientY: 0 });
+
+  it("set moves the divider, clamped, without committing", () => {
+    const { container, handle, divider, committed } = setup();
+    divider.set(33.5);
+    expect(container.style.getPropertyValue("--share")).toBe("33.5%");
+    expect(handle.getAttribute("aria-valuenow")).toBe("34");
+    divider.set(99);
+    expect(container.style.getPropertyValue("--share")).toBe("80%");
+    expect(committed).toEqual([]);
+  });
+
+  it("commits once at the end of a drag, with the last size", () => {
+    const { container, handle, committed } = setup();
+    handle.dispatchEvent(pointer("pointerdown"));
+    handle.dispatchEvent(pointer("pointermove", 400));
+    handle.dispatchEvent(pointer("pointermove", 600));
+    expect(committed).toEqual([]);
+    handle.dispatchEvent(pointer("pointerup"));
+    expect(committed).toEqual([50]);
+    expect(container.style.getPropertyValue("--share")).toBe("50%");
+  });
+
+  it("commits nothing for a click without a move", () => {
+    const { handle, committed } = setup();
+    handle.dispatchEvent(pointer("pointerdown"));
+    handle.dispatchEvent(pointer("pointerup"));
+    expect(committed).toEqual([]);
+  });
+
+  it("commits each arrow key, and ignores other keys", () => {
+    const { handle, committed } = setup();
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    expect(committed).toEqual([55, 60]);
+  });
+});

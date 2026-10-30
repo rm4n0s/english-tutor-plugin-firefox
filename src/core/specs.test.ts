@@ -13,10 +13,7 @@ const tags = parseErrorTags(spec);
  * adds its route test and removes the tag from this list; the test below fails if a listed tag
  * is already covered, so the list only shrinks.
  */
-const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
-  "PageFrameBlocked",
-  "PageModePermissionDenied",
-];
+const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = ["PageFrameBlocked", "PageModePermissionDenied"];
 
 function testSources(dir: string): string[] {
   const sources: string[] = [];

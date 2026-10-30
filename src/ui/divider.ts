@@ -10,6 +10,17 @@ export interface DividerOptions {
   max: number;
   /** Arrow key step, in percent. */
   step?: number;
+  /**
+   * Called with the new size, clamped, when the user has moved the divider: at the end of a drag
+   * and after each arrow key. Not called by `set`.
+   */
+  onCommit?: (percent: number) => void;
+}
+
+/** What `attachDivider` gives back. */
+export interface Divider {
+  /** Moves the divider (clamped) without calling `onCommit`: restoring a remembered size. */
+  set(percent: number): void;
 }
 
 export function clampPercent(value: number, min: number, max: number): number {
@@ -28,15 +39,18 @@ export function percentAt(
   return clampPercent(((position - start) / size) * 100, min, max);
 }
 
-export function attachDivider(handle: HTMLElement, options: DividerOptions): void {
+export function attachDivider(handle: HTMLElement, options: DividerOptions): Divider {
   const { container, axis, property, min, max } = options;
   const step = options.step ?? 2;
 
-  const apply = (percent: number): void => {
+  const apply = (percent: number): number => {
     const value = clampPercent(percent, min, max);
     container.style.setProperty(property, `${String(value)}%`);
     handle.setAttribute("aria-valuenow", String(Math.round(value)));
+    return value;
   };
+  let last: number | undefined;
+  let moved = false;
 
   const current = (): number => {
     const parsed = Number.parseFloat(container.style.getPropertyValue(property));
@@ -49,19 +63,23 @@ export function attachDivider(handle: HTMLElement, options: DividerOptions): voi
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
     handle.classList.add("dragging");
+    moved = false;
   });
   handle.addEventListener("pointermove", (event) => {
     if (!handle.hasPointerCapture(event.pointerId)) return;
     const rect = container.getBoundingClientRect();
-    apply(
+    last = apply(
       axis === "x"
         ? percentAt(event.clientX, rect.left, rect.width, min, max)
         : percentAt(event.clientY, rect.top, rect.height, min, max),
     );
+    moved = true;
   });
   const stop = (event: PointerEvent): void => {
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
     handle.classList.remove("dragging");
+    if (moved && last !== undefined) options.onCommit?.(last);
+    moved = false;
   };
   handle.addEventListener("pointerup", stop);
   handle.addEventListener("pointercancel", stop);
@@ -69,9 +87,16 @@ export function attachDivider(handle: HTMLElement, options: DividerOptions): voi
   const decrease = axis === "x" ? "ArrowLeft" : "ArrowUp";
   const increase = axis === "x" ? "ArrowRight" : "ArrowDown";
   handle.addEventListener("keydown", (event) => {
-    if (event.key === decrease) apply(current() - step);
-    else if (event.key === increase) apply(current() + step);
+    if (event.key === decrease) last = apply(current() - step);
+    else if (event.key === increase) last = apply(current() + step);
     else return;
     event.preventDefault();
+    options.onCommit?.(last);
   });
+
+  return {
+    set: (percent) => {
+      apply(percent);
+    },
+  };
 }

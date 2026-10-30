@@ -3,13 +3,16 @@ import { join } from "node:path";
 import { CountingRandom } from "../../core/analysis/testing/helpers";
 import { validateConfig } from "../../core/llm";
 import { FakeFetch, type FakeScript } from "../../core/llm/testing/fake-fetch";
+import { handoffFragment, HandoffStore } from "../../core/handoff";
 import { Logger } from "../../core/log";
-import { Stats, type DocumentInput, type LLMConfigInput } from "../../core/store";
+import { Stats, type DocumentInput, type LLMConfigInput, type Settings } from "../../core/store";
 import { freshStore } from "../../core/store/testing/db";
 import type { FakeClock } from "../../core/testing/fake-clock";
 import { FakeScheduler } from "../../core/testing/fake-clock";
 import { SessionIgnoreSet } from "../../platform/ignore-set";
+import { FakeNotifier, FakePingResponder } from "../../platform/testing/fake-background";
 import { FakeChannelBus, type FakeChangeChannel } from "../../platform/testing/fake-channel";
+import { FakeFragment } from "../../platform/testing/fake-fragment";
 import { FakeClipboard } from "../../platform/testing/fake-clipboard";
 import { FakeDownloads } from "../../platform/testing/fake-downloads";
 import { FakeLinkOpener } from "../../platform/testing/fake-link-opener";
@@ -83,6 +86,14 @@ export interface TutorHarness {
   links: FakeLinkOpener;
   /** How many times the page asked to open the options page. */
   opened: { options: number };
+  /** The hand-off entries, over `session`. */
+  handoff: HandoffStore;
+  /** The address fragment of the page. */
+  fragment: FakeFragment;
+  /** The notifications the page showed. */
+  notifier: FakeNotifier;
+  /** The background script's ping, answered by the page. */
+  pings: FakePingResponder;
 }
 
 export interface HarnessOptions {
@@ -99,7 +110,23 @@ export interface HarnessOptions {
   tabState?: string;
   /** Documents stored in the library before the page opens. */
   documents?: DocumentInput[];
+  /** The address fragment the page opens with, for example `#handoff=<key>`. */
+  fragment?: string;
+  /** Stores a hand-off entry before the page opens, and opens the page by its fragment. */
+  handoff?: { text: string; action: "check" | "alternatives" };
+  /** The tab id the page is in (default `TAB_ID`). */
+  tab?: number;
+  /** Other settings (fonts, pane sizes) stored before the page opens. */
+  more?: Partial<Pick<Settings, FontKey | "pane_sizes">>;
 }
+
+type FontKey =
+  | "editor_font_family"
+  | "editor_font_size"
+  | "button_font_family"
+  | "button_font_size"
+  | "results_font_family"
+  | "results_font_size";
 
 /** Mounts the tutor page on a fresh database with fakes. */
 export async function mountForTest(
@@ -122,6 +149,9 @@ export async function mountForTest(
     await store.setSetting("auto_check_delay_s", options.settings.auto_check_delay_s);
   }
   for (const document of options.documents ?? []) await store.createDocument(document);
+  for (const [key, value] of Object.entries(options.more ?? {}) as [FontKey, never][]) {
+    await store.setSetting(key, value);
+  }
   const bus = new FakeChannelBus();
   const received: string[] = [];
   const otherChannel = bus.connect();
@@ -144,6 +174,15 @@ export async function mountForTest(
   const downloads = new FakeDownloads();
   const tabStorage = new FakeTabStorage(options.tabState ?? null);
   const channel = bus.connect();
+  const handoff = new HandoffStore(session, clock, new CountingRandom());
+  const fragment = new FakeFragment(options.fragment ?? "");
+  if (options.handoff !== undefined) {
+    fragment.hash = handoffFragment(
+      await handoff.put(options.handoff.text, options.handoff.action),
+    );
+  }
+  const notifier = new FakeNotifier();
+  const pings = new FakePingResponder();
   const deps: TutorDeps = {
     store,
     stats,
@@ -151,7 +190,7 @@ export async function mountForTest(
     clipboard,
     downloads,
     tabStorage,
-    currentTab: new FakeCurrentTab(TAB_ID),
+    currentTab: new FakeCurrentTab(options.tab ?? TAB_ID),
     pageUrl: PAGE_URL,
     channel,
     permissions,
@@ -166,6 +205,10 @@ export async function mountForTest(
       warn: sink("warn"),
       error: sink("error"),
     }),
+    handoff,
+    fragment,
+    notifier,
+    pingResponder: pings,
     openOptions: () => {
       opened.options++;
     },
@@ -192,5 +235,9 @@ export async function mountForTest(
     tabStorage,
     links,
     opened,
+    handoff,
+    fragment,
+    notifier,
+    pings,
   };
 }

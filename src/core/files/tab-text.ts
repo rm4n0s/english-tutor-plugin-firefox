@@ -19,6 +19,11 @@ export interface SavedTab extends TextInfo {
   /** The source key (`session:<uuid>` or `doc:<id>`, SPEC section 5.7). */
   source: string;
   dirty: boolean;
+  /**
+   * The id of the tab that wrote this, so that a duplicated tab (which copies `sessionStorage`)
+   * can tell the state is not its own (SPEC section 4.2). Undefined when it was not known.
+   */
+  tabId?: number | undefined;
 }
 
 /**
@@ -136,6 +141,7 @@ export function serialiseSavedTab(tab: SavedTab): string {
     documentId: tab.documentId ?? null,
     lineEnding: tab.lineEnding,
     dirty: tab.dirty,
+    tabId: tab.tabId ?? null,
   });
 }
 
@@ -152,12 +158,23 @@ export function parseSavedTab(raw: string | null | undefined): SavedTab | undefi
     return undefined;
   }
   if (typeof value !== "object" || value === null) return undefined;
-  const { v, text, source, name, documentId, lineEnding, dirty } = value as Record<string, unknown>;
+  const { v, text, source, name, documentId, lineEnding, dirty, tabId } = value as Record<
+    string,
+    unknown
+  >;
   if (v !== 1 || typeof text !== "string" || typeof source !== "string") return undefined;
   if (!SOURCE_KEY.test(source) || typeof dirty !== "boolean") return undefined;
   if (name !== null && typeof name !== "string") return undefined;
   if (lineEnding !== "lf" && lineEnding !== "crlf") return undefined;
   if (documentId !== null && !(Number.isInteger(documentId) && (documentId as number) > 0)) {
+    return undefined;
+  }
+  // A state from before the tab id was kept has none; anything else must be a tab id or null.
+  if (
+    tabId !== undefined &&
+    tabId !== null &&
+    !(Number.isSafeInteger(tabId) && (tabId as number) >= 0)
+  ) {
     return undefined;
   }
   return {
@@ -167,5 +184,6 @@ export function parseSavedTab(raw: string | null | undefined): SavedTab | undefi
     documentId: documentId === null ? undefined : (documentId as number),
     lineEnding,
     dirty,
+    tabId: typeof tabId === "number" ? tabId : undefined,
   };
 }

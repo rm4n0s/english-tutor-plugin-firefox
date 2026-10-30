@@ -19,12 +19,16 @@ import {
   SelectedIssueHeader,
   TokenTally,
   TrackedText,
+  checkStatusText,
   type CheckOutcome,
 } from "../core/issues";
-import { TabText } from "../core/files";
+import { NEW_TEXT, TabText } from "../core/files";
+import { parseHandoffFragment } from "../core/handoff";
 import { effectiveBaseUrl } from "../core/llm";
 import { StoreUsageRecorder, TabSource, type LLMConfig, type MistakeInput } from "../core/store";
 import { Banner } from "../ui/banner";
+import { attachDivider } from "../ui/divider";
+import { applyFonts } from "../ui/fonts";
 import { EditorSelection } from "../ui/editor-selection";
 import { ExplanationPanel } from "../ui/explanation-panel";
 import { IssuesList } from "../ui/issues-list";
@@ -43,6 +47,7 @@ import { LLMSelector } from "./llm-selector";
 import { RowMenu } from "./row-menu";
 import { SavingFlow } from "./saving";
 import { TabPersistence } from "./tab-persistence";
+import { TutorPresence } from "./presence";
 import { StatusBar } from "./status-bar";
 
 /** The banner text when an edit touched the checked selection (SPEC section 5.1). */
@@ -107,6 +112,8 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   // when the tab loads, renewed by New, Clear and Open, and moved by Save to library.
   const source = new TabSource(deps.random);
   const tabText = new TabText();
+  // The id of this tab, known once `tabs.getCurrent()` answers (in `start`).
+  let tabId: number | undefined;
   const persistence = new TabPersistence({
     storage: deps.tabStorage,
     scheduler: deps.scheduler,
@@ -118,12 +125,14 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       documentId: tabText.documentId,
       lineEnding: tabText.lineEnding,
       dirty: tabText.dirty,
+      tabId,
     }),
   });
   // A reload, or a restored closed tab, gives the text back (SPEC section 4.2). Issues are not
   // kept: the text has to be checked again, which counts nothing twice.
   const restored = persistence.restore();
   if (restored !== undefined) {
+    tabId = restored.tabId;
     editor.value = restored.text;
     source.restore(restored.source);
     tabText.loaded(
@@ -167,6 +176,36 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   };
 
   const counts = new IssueCounts(state, deps.stats, report);
+
+  // The two dividers (SPEC section 4.2): their positions are remembered in `pane_sizes`.
+  const paneSizes = { editor: 65, issues: 40 };
+  const savePaneSizes = (): void => {
+    deps.store
+      .setSetting("pane_sizes", { editor: paneSizes.editor, issues: paneSizes.issues })
+      .catch(report);
+  };
+  const mainDivider = attachDivider(requireElement(doc, "divider-main", HTMLElement), {
+    container: requireElement(doc, "panes", HTMLElement),
+    axis: "x",
+    property: "--editor-share",
+    min: 30,
+    max: 85,
+    onCommit: (percent) => {
+      paneSizes.editor = percent;
+      savePaneSizes();
+    },
+  });
+  const sideDivider = attachDivider(requireElement(doc, "divider-side", HTMLElement), {
+    container: requireElement(doc, "side", HTMLElement),
+    axis: "y",
+    property: "--issues-share",
+    min: 15,
+    max: 85,
+    onCommit: (percent) => {
+      paneSizes.issues = percent;
+      savePaneSizes();
+    },
+  });
 
   let model: AnalysisModel | undefined;
   const linkConfirm = new LinkConfirm(doc, doc.body);
@@ -347,12 +386,31 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       .catch(report);
   }
 
+  // A manual check that ends with a result or a failure while the tab is hidden or its window
+  // unfocused shows a notification; clicking it brings the tab back (SPEC section 4.10). A
+  // cancelled or discarded check, an auto-check and a check seen by the user do not notify.
+  function notifyIfAway(outcome: CheckOutcome): void {
+    if (tabId === undefined || (outcome.kind !== "finished" && outcome.kind !== "failed")) return;
+    if (!outcome.manual) return;
+    if (doc.visibilityState !== "hidden" && doc.hasFocus()) return;
+    const shown =
+      outcome.kind === "finished"
+        ? { title: "Check finished", message: checkStatusText(state) }
+        : { title: "Check failed", message: outcome.error.message };
+    deps.notifier
+      .show(`check-${String(tabId)}`, shown.title, shown.message)
+      .catch((err: unknown) => {
+        deps.log.warn("could not show the notification", { err });
+      });
+  }
+
   function runCheck(manual: boolean, selection?: { start: number; end: number }): void {
     const config = selector.selected;
     controller
       .check(selection === undefined ? { manual } : { manual, selection })
       .then((outcome) => {
         handleOutcome(outcome, config);
+        notifyIfAway(outcome);
         if (outcome.kind !== "finished") return undefined;
         // The source as it is when the check ends: Save to library may have moved it meanwhile,
         // and a loaded text would have cancelled this check.
@@ -570,11 +628,22 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     },
   });
 
-  async function loadAutoCheck(): Promise<void> {
+  // The settings the page shows: auto-check, the fonts (live, SPEC section 4.7) and, the first
+  // time, the pane sizes (SPEC section 4.2).
+  let panesRestored = false;
+  async function loadSettings(): Promise<void> {
     const settings = await deps.store.getSettings();
     autoCheckBox.checked = settings.auto_check;
     autoCheckDelay = settings.auto_check_delay_s;
     if (!settings.auto_check) autoCheck.stop();
+    applyFonts(doc.documentElement.style, settings);
+    if (!panesRestored) {
+      panesRestored = true;
+      paneSizes.editor = settings.pane_sizes.editor;
+      paneSizes.issues = settings.pane_sizes.issues;
+      mainDivider.set(paneSizes.editor);
+      sideDivider.set(paneSizes.issues);
+    }
   }
 
   autoCheckBox.addEventListener("change", () => {
@@ -655,7 +724,7 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const stopChannel = deps.channel.subscribe((message) => {
     if (message.type === "configs-changed" || message.type === "settings-changed") {
       selector.load().catch(report);
-      loadAutoCheck().catch(report);
+      loadSettings().catch(report);
     } else if (message.type === "library-changed") {
       // The open document may have been renamed or deleted in another tab.
       saving.syncWithLibrary().catch(report);
@@ -674,10 +743,61 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   editorMenu.start().catch((err: unknown) => {
     deps.log.warn("the editor menu is not available", { err });
   });
-  const ready = Promise.all([selector.load(), loadAutoCheck(), saving.syncWithLibrary()]).then(
-    () => undefined,
-    report,
-  );
+  // Learns the tab's id; a duplicated tab keeps the text but not the source; applies a hand-off.
+  async function start(): Promise<void> {
+    const [, , , tab] = await Promise.all([
+      selector.load(),
+      loadSettings(),
+      saving.syncWithLibrary(),
+      deps.currentTab.info(),
+    ]);
+    const stored = tabId;
+    tabId = tab?.tabId;
+    if (restored !== undefined && stored !== undefined && tabId !== undefined && stored !== tabId) {
+      // Duplicating a tab copies its `sessionStorage`, and so the source key. Two tabs counting
+      // mistakes under one source would count the same text once (SPEC section 5.7), so this tab
+      // gets a source of its own. A `doc:` source stays: both tabs edit that document.
+      if (source.key.startsWith("session:")) source.renew();
+      persistence.schedule();
+    }
+    await applyHandoff();
+  }
+
+  // A text handed over by the web page menu (SPEC section 4.1): read and deleted, the fragment
+  // cleared at once so that a reload does not look for it again.
+  async function applyHandoff(): Promise<void> {
+    const key = parseHandoffFragment(deps.fragment.get());
+    if (key === undefined) return;
+    deps.fragment.clear();
+    let entry;
+    try {
+      entry = await deps.handoff.take(key);
+    } catch (err) {
+      report(err);
+      return;
+    }
+    loadText(entry.text);
+    tabText.loaded(NEW_TEXT, entry.text);
+    source.renew();
+    persistence.schedule();
+    if (entry.action === "check") {
+      if (!checkButton.disabled) runCheck(true);
+    } else {
+      editor.focus();
+      editor.setSelectionRange(0, entry.text.length);
+      alternatives.ask();
+    }
+  }
+
+  const presence = new TutorPresence(doc, {
+    responder: deps.pingResponder,
+    currentTab: deps.currentTab,
+    clock: deps.clock,
+    isDirty: () => tabText.unsaved,
+  });
+  presence.start();
+
+  const ready = start().then(() => undefined, report);
   updateCheckButton();
 
   return {
@@ -692,6 +812,7 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     destroy: () => {
       persistence.flush();
       persistence.destroy();
+      presence.destroy();
       stopTabText();
       win?.removeEventListener("beforeunload", onBeforeUnload);
       doc.removeEventListener("visibilitychange", onVisibility);
