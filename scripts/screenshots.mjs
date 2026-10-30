@@ -525,7 +525,7 @@ const SCENARIOS = {
       await ctx.expectDataState("explain-panel", "ready");
       await ctx.expectMarkdownRendered();
       await ctx.expectHidden("explain-progress");
-      await ctx.expectHidden("explain-not-error");
+      await ctx.waitForVisible("explain-not-error");
       await ctx.expectTheme();
       await ctx.stabilise();
       await ctx.screenshot();
@@ -598,7 +598,198 @@ const SCENARIOS = {
       await ctx.expectTutorPage();
     },
   },
+  badges: {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      // Two manual checks of different texts. The second text repeats two error types of the
+      // first, so its rows show how often each type has been made so far (SPEC section 4.4).
+      await checkTwoTexts(ctx);
+      await ctx.waitForBadges(["x3", "x2", "x2", "x3", "x1"]);
+      await ctx.expectBadgeTitle(1, "You have made this mistake 3 times");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "header-counts": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await checkTwoTexts(ctx);
+      await ctx.waitForBadges(["x3", "x2", "x2", "x3", "x1"]);
+      await ctx.click("issues", ".issue-row:nth-child(1)");
+      await ctx.expectSelectedRow(1, "She dont");
+      await ctx.waitForExplanation("Subject-verb agreement");
+      await ctx.waitForText(
+        "explain-header",
+        "Subject-verb agreement: you have made this mistake 3 times (3 in the last 7 days)",
+      );
+      await ctx.waitForVisible("explain-not-error");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "stats-mistakes": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      await ctx.expectStatsRows([
+        ["Subject-verb agreement", "Grammar", "3"],
+        ["Verb form", "Grammar", "3"],
+        ["Article", "Grammar", "2"],
+        ["Collocation", "Vocabulary", "1"],
+        ["Missing word", "Syntax", "1"],
+        ["Preposition", "Grammar", "1"],
+        ["Word order", "Syntax", "1"],
+        ["Wrong word", "Vocabulary", "1"],
+      ]);
+      await ctx.expectText(
+        "stats-summary",
+        "13 mistakes in all time. Most frequent: Subject-verb agreement.",
+      );
+      await ctx.fixDates("stats-dialog");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "stats-examples": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      await ctx.click("stats-rows", '.stats-row[data-type="subject_verb_agreement"] td');
+      await ctx.waitForText("stats-examples", "Most recent examples: Subject-verb agreement");
+      await ctx.waitForCount("#stats-examples li", 3);
+      await ctx.expectText("stats-examples", "My brother have");
+      await ctx.expectText("stats-examples", "She dont");
+      await ctx.expectText("stats-examples", "He go");
+      await ctx.fixDates("stats-dialog");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "stats-filtered": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      await ctx.choose("stats-category", "grammar");
+      await ctx.choose("stats-period", "7d");
+      // Sorted by error type, A to Z: a click on the header.
+      await ctx.click("stats-table", 'th button[data-column="type"]');
+      await ctx.expectStatsRows([
+        ["Article", "Grammar", "2"],
+        ["Preposition", "Grammar", "1"],
+        ["Subject-verb agreement", "Grammar", "3"],
+        ["Verb form", "Grammar", "3"],
+      ]);
+      await ctx.expectText(
+        "stats-summary",
+        "9 mistakes in the last 7 days (Grammar). Most frequent: Subject-verb agreement.",
+      );
+      await ctx.fixDates("stats-dialog");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "stats-tokens": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      await ctx.click("stats-tab-tokens");
+      await ctx.waitForVisible("usage-table");
+      await ctx.waitForCount("#usage-rows .usage-row", 2);
+      // The first LLM reported its tokens. The second one did not, so they are estimates (`~`).
+      await ctx.expectText("usage-rows", "Fake LLM");
+      await ctx.expectText("usage-rows", "1.5k in / 284 out");
+      await ctx.expectText("usage-rows", "Slow LLM");
+      await ctx.expectText("usage-rows", "~");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "stats-reset-confirm": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      const [first] = await ctx.driver.getAllWindowHandles();
+      await ctx.click("stats-reset");
+      await ctx.waitForVisible("stats-reset-confirm");
+      await ctx.expectText("stats-reset-confirm", "Delete every recorded mistake?");
+      await ctx.fixDates("stats-dialog");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+      // Confirming resets the statistics, and the badges of the other tab, which is still open
+      // behind this one, go too (the `stats-changed` message of SPEC section 4.2).
+      await ctx.click("stats-reset-confirm-yes");
+      await ctx.waitForText("stats-summary", "No mistakes recorded yet.");
+      await ctx.waitForCount("#stats-rows .stats-row", 0);
+      await ctx.driver.switchTo().window(first);
+      await ctx.waitForBadges(["", "", ""]);
+    },
+  },
+  "stats-dark": {
+    theme: "dark",
+    dir: "step-09-stats",
+    async run(ctx) {
+      await openStatsAfterThreeChecks(ctx);
+      await ctx.click("stats-rows", '.stats-row[data-type="subject_verb_agreement"] td');
+      await ctx.waitForCount("#stats-examples li", 3);
+      await ctx.fixDates("stats-dialog");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "row-menu-not-an-error": {
+    theme: "light",
+    dir: "step-09-stats",
+    async run(ctx) {
+      // The native menu cannot be captured in a screenshot (Selenium captures the page, and the
+      // menu is a separate popup of the browser), so the scenario drives the real menu instead:
+      // it right-clicks a row, reads the entries of the open menu, and chooses one. The picture
+      // shows the page after "Not an error" and "Regenerate explanation" were chosen from it.
+      await checkedSample(ctx);
+      await ctx.waitForBadges(["x1", "x1", "x1", "x1", "x1"]);
+      // The menu holds the two entries and nothing of the browser's own.
+      const entries = await ctx.openRowMenu(3);
+      if (JSON.stringify(entries) !== JSON.stringify(["Not an error", "Regenerate explanation"])) {
+        throw new Error(`the row menu holds ${JSON.stringify(entries)}`);
+      }
+      await ctx.chooseRowMenuItem("Regenerate explanation");
+      // Choosing it selected the third row ("make a photo") and explained it.
+      await ctx.expectSelectedRow(3, "make a photo");
+      await ctx.waitForExplanation("Collocation");
+      // Not an error on the second row ("He go"), which is not the selected one.
+      await ctx.openRowMenu(2);
+      await ctx.chooseRowMenuItem("Not an error");
+      await ctx.waitForCount("#issues .issue-row", 4);
+      await ctx.expectUnderlined(["I seen", "make a photo", "I very like", "boring"]);
+      await ctx.expectNoText("issues", "He go");
+      await ctx.expectSelectedRow(2, "make a photo");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
 };
+
+/** In the browser's own code: the visible entries of the open page context menu. */
+const ROW_MENU_LABELS = `
+  const popup = document.getElementById("contentAreaContextMenu");
+  if (popup === null || popup.state !== "open") return [];
+  return [...popup.children].filter((m) => m.localName === "menuitem" && !m.hidden).map((m) => m.label);
+`;
 
 /** Keys that put the caret at the start of a short text (the sample wraps to two lines). */
 const TO_START = Key.ARROW_UP.repeat(6) + Key.HOME;
@@ -650,6 +841,141 @@ const CHECK_REPLY = {
   }),
   usage: { prompt_tokens: 812, completion_tokens: 164 },
 };
+
+/** A second text for the statistics scenarios. It repeats two error types of the sample text. */
+const TEXT_B =
+  "She dont like apples. I have a apple and a orange. My brother have two cats. I want go to the park.";
+const REPLY_B = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "She dont",
+        error_type: "subject_verb_agreement",
+        message: "Use doesn't with she.",
+        context_before: "",
+        context_after: " like apples",
+      },
+      {
+        text: "a apple",
+        error_type: "article",
+        message: "Use an before a vowel sound.",
+        context_before: "I have ",
+        context_after: " and a orange",
+      },
+      {
+        text: "a orange",
+        error_type: "article",
+        message: "Use an before a vowel sound.",
+        context_before: "apple and ",
+        context_after: ". My brother",
+      },
+      {
+        text: "My brother have",
+        error_type: "subject_verb_agreement",
+        message: "Use has with he or my brother.",
+        context_before: "orange. ",
+        context_after: " two cats",
+      },
+      {
+        text: "want go",
+        error_type: "missing_word",
+        message: "Add to: want to go.",
+        context_before: "I ",
+        context_after: " to the park",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 640, completion_tokens: 120 },
+};
+
+/** A third text. The fake server reports no tokens for it, so the app estimates them. */
+const TEXT_C = "I am agree with you. She explained me the rule. I look forward to meet you.";
+const REPLY_C = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "am agree",
+        error_type: "verb_form",
+        message: "Say I agree.",
+        context_before: "I ",
+        context_after: " with you",
+      },
+      {
+        text: "explained me the rule",
+        error_type: "preposition",
+        message: "Say explained the rule to me.",
+        context_before: "She ",
+        context_after: ". I look",
+      },
+      {
+        text: "to meet",
+        error_type: "verb_form",
+        message: "Use meeting after look forward to.",
+        context_before: "forward ",
+        context_after: " you",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 0, completion_tokens: 0 },
+};
+
+/** Answers the checks of the three texts and the explanations. */
+const STATS_REPLIES = (request) => {
+  if (isExplainRequest(request)) return explanationFor(request);
+  const user = request.body.messages.find((m) => m.role === "user")?.content ?? "";
+  if (user.includes("She dont")) return REPLY_B;
+  if (user.includes("I am agree")) return REPLY_C;
+  return CHECK_REPLY;
+};
+
+/** Two manual checks, of the sample text and then of `TEXT_B`, by the first LLM. */
+async function checkTwoTexts(ctx) {
+  ctx.llm.setReplies(STATS_REPLIES);
+  await openTutorWithText(ctx);
+  await ctx.click("check");
+  await ctx.waitForText("issues", "I seen");
+  await ctx.waitForCount("#mirror span.issue", 5);
+  await ctx.waitForBadges(["x1", "x1", "x1", "x1", "x1"]);
+  await ctx.fill("editor", TEXT_B);
+  await ctx.click("check");
+  await ctx.waitForText("issues", "She dont");
+  await ctx.waitForCount("#mirror span.issue", 5);
+}
+
+/**
+ * Three manual checks: the sample text and `TEXT_B` by "Fake LLM", `TEXT_C` by "Slow LLM"
+ * (a second LLM, which reports no tokens), then a second tab with the Statistics dialog open.
+ * Everything goes through the UI; nothing is written to the database by the harness.
+ */
+async function openStatsAfterThreeChecks(ctx) {
+  ctx.llm.setReplies(STATS_REPLIES);
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.addLLM({ name: "Slow LLM" });
+  await ctx.open("tutor.html");
+  await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+  await ctx.waitForText("llm-select", "Fake LLM");
+  await ctx.fill("editor", SAMPLE_TEXT);
+  await ctx.click("check");
+  await ctx.waitForText("issues", "I seen");
+  await ctx.waitForBadges(["x1", "x1", "x1", "x1", "x1"]);
+  await ctx.fill("editor", TEXT_B);
+  await ctx.click("check");
+  await ctx.waitForText("issues", "She dont");
+  await ctx.waitForBadges(["x3", "x2", "x2", "x3", "x1"]);
+  // The second LLM, for the third text.
+  await ctx.choose("llm-select", "2");
+  await ctx.fill("editor", TEXT_C);
+  await ctx.click("check");
+  await ctx.waitForText("issues", "am agree");
+  await ctx.waitForBadges(["x3", "x1", "x3"]);
+  // A second tab, so that a reset there can be seen in the first (stats-reset-confirm).
+  await ctx.openAlongside("tutor.html");
+  await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+  await ctx.waitForText("llm-select", "Fake LLM");
+  await ctx.click("stats");
+  await ctx.waitForVisible("stats-dialog");
+  await ctx.waitForCount("#stats-rows .stats-row", 8);
+}
 
 /** Adds the fake LLM, opens the tutor page and types the sample text. */
 async function openTutorWithText(ctx, text = SAMPLE_TEXT) {
@@ -703,6 +1029,7 @@ const OTHER_EXPLANATIONS = {
   "make a photo": ["Say **take a photo**.", "*Take* goes with *photo*, *picture* and *shower*."],
   "I very like": ["Put *very much* after the object.", "Say **I like his camera very much**."],
   boring: ["Say **bored** for a feeling.", "*Boring* describes the thing that causes it."],
+  "She dont": ["Use **doesn't** with *he*, *she* and *it*.", "Say **She doesn't like apples**."],
 };
 
 /** The canned explanation for the faulty words of an explanation request. */
@@ -1191,6 +1518,129 @@ function makeContext(name, scenario, driver, llm, policy) {
     async expectTutorPage() {
       const url = await driver.getCurrentUrl();
       if (!url.endsWith("/tutor.html")) throw new Error(`the page navigated to ${url}`);
+    },
+    /**
+     * Waits until the count badges of the rows (in order) read exactly `texts`: "x3", or "" for a
+     * row without a badge.
+     */
+    async waitForBadges(texts) {
+      let last;
+      await driver
+        .wait(async () => {
+          last = await driver.executeScript(
+            `return [...document.querySelectorAll("#issues .issue-row .count-badge")].map(
+               (b) => (b.hidden ? "" : b.textContent));`,
+          );
+          return JSON.stringify(last) === JSON.stringify(texts);
+        }, PAGE_TIMEOUT_MS)
+        .catch(() => {
+          throw new Error(`the badges read ${JSON.stringify(last)}, not ${JSON.stringify(texts)}`);
+        });
+    },
+    async expectBadgeTitle(n, title) {
+      const found = await driver.executeScript(
+        `return document.querySelectorAll("#issues .issue-row .count-badge")[arguments[0] - 1].title`,
+        n,
+      );
+      if (found !== title) throw new Error(`badge ${n} has the title ${JSON.stringify(found)}`);
+    },
+    /**
+     * Harness only: the dates in the Statistics dialog are the day the scenario runs on (the
+     * mistakes were just recorded), so they are rewritten to a fixed day right before the shot, as
+     * `roundDuration` does for a duration.
+     */
+    async fixDates(id, day = "2026-03-05") {
+      await driver.executeScript(
+        `const walker = document.createTreeWalker(document.getElementById(arguments[0]), NodeFilter.SHOW_TEXT);
+         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+           node.textContent = node.textContent.replace(/\\d{4}-\\d{2}-\\d{2}/g, arguments[1]);
+         }`,
+        id,
+        day,
+      );
+    },
+    /** Fails unless the table of the Mistakes tab has these rows (type, category, total), in order. */
+    async expectStatsRows(expected) {
+      const found = await driver.executeScript(
+        `return [...document.querySelectorAll("#stats-rows .stats-row")].map(
+           (tr) => [...tr.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent));`,
+      );
+      if (JSON.stringify(found) !== JSON.stringify(expected)) {
+        throw new Error(
+          `the table has ${JSON.stringify(found)}, expected ${JSON.stringify(expected)}`,
+        );
+      }
+    },
+    /**
+     * Opens an extension page in a new tab and leaves the others open, unlike `open`.
+     */
+    async openAlongside(page) {
+      const before = await driver.getAllWindowHandles();
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        await driver.executeScript(
+          `const tab = gBrowser.addTab(arguments[0], {
+             triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+           });
+           gBrowser.selectedTab = tab;`,
+          `moz-extension://${EXTENSION_UUID}/${page}`,
+        );
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+      let handle;
+      await driver.wait(async () => {
+        const after = await driver.getAllWindowHandles();
+        handle = after.find((h) => !before.includes(h));
+        return handle !== undefined;
+      }, PAGE_TIMEOUT_MS);
+      await driver.switchTo().window(handle);
+      await sizeViewport(driver);
+      await driver.wait(
+        async () => (await driver.executeScript("return document.readyState")) === "complete",
+        PAGE_TIMEOUT_MS,
+      );
+    },
+    /**
+     * Right-clicks the n-th row (1-based) and returns the labels of the entries of the browser's
+     * context menu, read from the browser itself. The menu stays open.
+     */
+    async openRowMenu(n) {
+      const row = await driver.findElement(By.css(`#issues .issue-row:nth-child(${n})`));
+      await driver.actions({ async: true }).contextClick(row).perform();
+      let labels = [];
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        await driver.wait(
+          async () => {
+            labels = await driver.executeScript(ROW_MENU_LABELS);
+            return labels.length > 0;
+          },
+          PAGE_TIMEOUT_MS,
+          "the row menu never opened",
+        );
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+      return labels;
+    },
+    /** Chooses an entry of the open context menu, as a click on it does. */
+    async chooseRowMenuItem(label) {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        const chosen = await driver.executeScript(
+          `const popup = document.getElementById("contentAreaContextMenu");
+           const item = [...popup.children].find((m) => m.localName === "menuitem" && !m.hidden && m.label === arguments[0]);
+           if (item === undefined || item.disabled) return false;
+           item.doCommand();
+           popup.hidePopup();
+           return true;`,
+          label,
+        );
+        if (!chosen) throw new Error(`the menu has no enabled entry "${label}"`);
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
     },
     async scrollTo(id) {
       await driver.executeScript("document.getElementById(arguments[0]).scrollIntoView()", id);
