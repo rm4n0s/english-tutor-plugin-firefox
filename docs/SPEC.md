@@ -78,7 +78,7 @@ These development dependencies are approved: `typescript`, `esbuild`, `vitest`, 
 
 ### 3.2 Manifest and permissions
 
-- `browser_specific_settings.gecko.id`: `english-tutor@rm4n0s.dev`.
+- `browser_specific_settings.gecko.id`: `english-tutor@rm4n0s.dev`. `strict_min_version` is `140.0`. `gecko.data_collection_permissions` is `{"required": ["websiteContent"]}`: the text the user checks (typed, or selected on a web page) is sent to the LLM server the user configures. `web-ext lint` and AMO require the key, and it needs Firefox 140 or newer on desktop. `gecko_android.strict_min_version` is `142.0` only because `web-ext lint` demands it once `data_collection_permissions` is set; Firefox for Android is still not supported (section 2).
 - `background.scripts`: one bundled script (an event page; Firefox MV3 has no service worker requirement).
 - `action`: toolbar button with the extension's icon and the title "English Tutor".
 - `options_ui`: `options.html`, `open_in_tab: true`.

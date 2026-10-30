@@ -1,0 +1,37 @@
+{
+  "name": "english-tutor-firefox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "English Tutor for Firefox",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "web-ext run -s dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:ext": "web-ext lint -s dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "package": "web-ext build -s dist --overwrite-dest",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/firefox-webext-browser": "^143.0.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.13.0",
+    "fake-indexeddb": "^6.2.7",
+    "happy-dom": "^21.0.4",
+    "prettier": "^3.9.10",
+    "selenium-webdriver": "^4.51.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.5",
+    "web-ext": "^10.8.0"
+  }
+}
