@@ -149,10 +149,10 @@ describe("AlternativesPanel actions", () => {
   });
 
   it("a click selects a row, a double click uses it", () => {
-    click(rows()[1] as HTMLElement);
+    click(rows()[1]!);
     expect(selectedRows()).toEqual([1]);
     expect(calls).toEqual([]);
-    dblclick(rows()[2] as HTMLElement);
+    dblclick(rows()[2]!);
     expect(selectedRows()).toEqual([2]);
     expect(calls).toEqual(["use:three"]);
   });
