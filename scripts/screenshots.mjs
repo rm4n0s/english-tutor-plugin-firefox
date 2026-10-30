@@ -1544,6 +1544,10 @@ const SCENARIOS = {
       await ctx.expectHidden("page-mode-error");
       await ctx.scrollTo("page-mode");
       await ctx.expectTheme();
+      // The browser fades the checkbox's focus ring out of its own accord (it is not a CSS
+      // animation that could be paused), so blur it and wait until the fade is over.
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
       await ctx.screenshot();
     },
   },
