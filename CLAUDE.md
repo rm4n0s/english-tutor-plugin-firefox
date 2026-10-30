@@ -3,11 +3,11 @@
 Guidance for Claude Code when working in this repository (a Firefox WebExtension in TypeScript, hosted on GitHub).
 
 ## Project notes
-English Tutor for Firefox is a browser extension that does in Firefox what the desktop app [rm4n0s/english-tutor](https://github.com/rm4n0s/english-tutor) does on Linux. The user writes English text in an editor page. An LLM the user configures (Ollama, an OpenAI-compatible server or Anthropic) finds grammar, vocabulary and syntax errors. The page underlines them, explains the selected one in markdown, suggests alternatives for a selection, and counts the user's mistakes by error type. The design is in [docs/SPEC.md](docs/SPEC.md); read the relevant section before changing behaviour.
+English Tutor for Firefox is a browser extension that does in Firefox what the desktop app [rm4n0s/english-tutor](https://github.com/rm4n0s/english-tutor) does on Linux. The user writes English text in an editor page. An LLM the user configures (Ollama, an OpenAI-compatible server or Anthropic) finds grammar, vocabulary and syntax errors. The page underlines them, explains the selected one in markdown, suggests alternatives for a selection, and counts the user's mistakes by error type. With *page mode* turned on, it does the same inside text boxes on web pages: underlines in the box, an error-count badge, an issues dialog, and an explanation popover on a click (SPEC §4.11). The design is in [docs/SPEC.md](docs/SPEC.md); read the relevant section before changing behaviour.
 
 **Reference implementation.** The desktop app is the source of truth for prompts, parsing, locating, chunking, the error taxonomy, fingerprints and the statistics rules. SPEC.md §2.1 names the commit the port follows. Read it from GitHub, or clone it into a scratch directory outside this repo. Never vendor or copy its files into this repo: port the logic to TypeScript, with tests.
 
-**Out of scope on purpose (v1):** checking text inside other websites' fields (no content scripts), writing changes back into web pages, the desktop app's web server, system tray, single-instance lock and desktop entry, sync and accounts (see SPEC §2).
+**Out of scope on purpose (v1):** writing corrections back into web pages' text boxes, canvas-based editors, the desktop app's web server, system tray, single-instance lock and desktop entry, sync and accounts (see SPEC §2).
 
 ## Commands
 - Install: `npm ci`
@@ -38,6 +38,8 @@ Before reporting a task as finished, run `npm run format:check`, `npm run typech
 - `src/background/`: event page with the toolbar button, context menus, keyboard command and notification clicks. It never calls an LLM
 - `src/tutor/`: the editor page (the desktop app's main window)
 - `src/options/`: the options page (the desktop app's Preferences dialog)
+- `src/content/`: the page-mode content script: finds text boxes, draws the badge and underlines. It never calls an LLM and never sees API keys
+- `src/page-ui/`: the page-mode frame (`page-ui.html`), an extension page inside web pages that runs the checks and shows the popover and the dialog
 - `src/ui/`: DOM components shared by the pages
 - Tests live next to the code (`foo.test.ts`)
 - `scripts/`: build and screenshot scripts (plain Node.js)
@@ -57,7 +59,8 @@ Before reporting a task as finished, run `npm run format:check`, `npm run typech
 - Never use `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` or `eval`/`new Function`. Build DOM with `createElement` and `textContent`. `web-ext lint` flags violations, and they are also a review blocker
 - LLM output is untrusted (SPEC §5.9). Explanations go through the safe markdown renderer in `src/core/markdown` only. Alternatives are shown as plain text only
 - Never log the user's text, LLM replies or API keys, and never put them in error metadata or messages. Token counts and timings may be logged
-- Request host permissions per LLM origin at runtime (`permissions.request`). Never add `<all_urls>` or broad `host_permissions` to the manifest
+- Request host permissions per LLM origin at runtime (`permissions.request`). `<all_urls>` exists only as an optional host permission, requested when the user turns page mode on and removed when it is turned off. Never add static `content_scripts` or `host_permissions` to the manifest
+- Content scripts run next to untrusted pages. Everything they add lives in a closed shadow root. They ignore untrusted events (`isTrusted === false`), read only the text boxes SPEC §4.11 allows (never password, payment or code fields), and pass text only over their `runtime` port to the page-mode frame. They never receive API keys or settings beyond what they need
 - Adding a permission to the manifest is a spec change (SPEC §3.2)
 
 ## Error handling

@@ -6,7 +6,7 @@ Status: draft v0.1
 
 A Firefox extension for practising written English. It does in the browser what the desktop application [English Tutor](https://github.com/rm4n0s/english-tutor) does on Linux. The user writes a sentence or an essay in the extension's editor page. An LLM finds grammar, vocabulary and syntax errors, and the editor underlines them, with a different colour and line style for each category. When the user selects an error, a side panel explains why it is wrong and shows better alternatives, rendered from the LLM's markdown. The extension counts how often the user makes each kind of mistake, so the user can see what to work on.
 
-The extension also adds entries to the right-click menu of web pages, so text selected on any page can be checked in the editor page.
+The extension also checks what the user writes in text boxes on web pages, if the user turns that on (page mode, section 4.11): it underlines the errors inside the text box, shows the number of errors on a badge, and shows the LLM's explanation of an error in a dialog or when the user clicks the underline. And it adds entries to the right-click menu of web pages, so text selected on any page can be checked in the editor page.
 
 ## 2. Goals and non-goals
 
@@ -15,13 +15,15 @@ The extension also adds entries to the right-click menu of web pages, so text se
 - Learn from each error: a markdown explanation and better alternatives, next to the editor.
 - Ask for other ways to write a selected word, sentence or paragraph, from the editor's right-click menu (sections 4.6 and 5.10).
 - Send text selected on any web page to the editor page and check it there (section 4.1).
+- Check text boxes on web pages in place, with underlines, an error-count badge, an issues dialog and an explanation popover (page mode, section 4.11).
 - Choose which LLM is used from a selector above the editor, and manage the LLM list on the options page.
 - Open and download text files, and keep documents in a library inside the extension.
 - Count mistakes by error type, so the user sees which mistakes they repeat.
 - Behave like the desktop application wherever a browser allows it. Section 2.2 lists every place where it differs.
 
 **Non-goals (v1)**
-- No checking inside other websites' text fields: no content scripts and no underlines on web pages. Text from a web page is copied into the editor page. Nothing is written back to the page.
+- Page mode (section 4.11) never changes the text of a web page: it does not apply corrections or alternatives inside a text box. The Alternatives panel exists only in the tutor page.
+- No checking of rich editors that draw their own text without a text box or `contenteditable` (for example canvas-based editors such as Google Docs).
 - No rich text formatting; the editor is plain text.
 - No offline or rule-based checker; every error comes from the LLM.
 - No language other than English as the text being checked. Explanations are in English.
@@ -54,6 +56,7 @@ The prompts (check, retry reminder, explanation, alternatives, Test connection) 
 | langchaingo | Small `fetch` clients written for the three wire formats (section 6) |
 | Log file | The browser console of the extension, with the same privacy rules (section 9.1) |
 | Web server, single instance, `-setup-desktop` | Not applicable |
+| (none) | **Page mode**: underlines, an error badge, an issues dialog and an explanation popover inside text boxes on web pages (section 4.11) |
 
 ## 3. Technology
 
@@ -85,9 +88,10 @@ These development dependencies are approved: `typescript`, `esbuild`, `vitest`, 
 - `commands`: `open-tutor`, suggested key `Alt+Shift+E`. The user can change it in `about:addons`.
 - `content_security_policy.extension_pages`: the MV3 default (`script-src 'self'`), plus `style-src 'self'`. No inline script, no `eval`, no remote code.
 - `incognito`: `not_allowed`.
-- `permissions`: `storage` (`storage.session` for the hand-off, section 4.1), `menus`, `notifications`, `downloads`.
-- `optional_host_permissions`: `http://*/*`, `https://*/*`. Nothing is granted at install. The options page asks for the origin of one LLM's base URL when that LLM is saved or tested (section 4.7).
-- No `tabs`, `scripting`, `activeTab`, `<all_urls>` or `host_permissions`. Adding a permission is a change to this section.
+- `permissions`: `storage` (`storage.session` for the hand-off, section 4.1), `menus`, `notifications`, `downloads`, `scripting` (to register the page-mode content script only while page mode is on, section 4.11).
+- `optional_host_permissions`: `http://*/*`, `https://*/*`, `<all_urls>`. Nothing is granted at install. The options page asks for the origin of one LLM's base URL when that LLM is saved or tested (section 4.7), and for `<all_urls>` only when the user turns page mode on (section 4.11); turning page mode off removes it.
+- `web_accessible_resources`: `[{ "resources": ["page-ui.html", "page-ui.js", "page-ui.css"], "matches": ["<all_urls>"] }]`, so the content script can load the page-mode frame (section 4.11). Firefox gives every install its own random `moz-extension://` address, so the address does not identify the extension across users.
+- No static `content_scripts`, no `tabs`, no `activeTab`, and no `host_permissions`. Adding a permission is a change to this section.
 
 ## 4. User interface
 
@@ -220,7 +224,7 @@ Opened from the Preferences button (`runtime.openOptionsPage()`), from the toolb
 - API keys are never shown back in the list, only "key stored". An empty key field in the Edit form keeps the stored key, and a "Remove key" box removes it.
 - Deleting the selected LLM selects the first remaining one by name, or none.
 
-**General section.** Auto-check (default off) and its delay in seconds (default 3, 1 to 60; disabled while auto-check is off). A font for the editor, the buttons and the results (issues list and explanation): each is a family name typed as text (at most 100 characters; empty means the page's default, a missing font falls back to it) and a size from 6 to 48 points (defaults 13, 11, 11). Family names are applied through CSS custom properties set with `style.setProperty`, never by building CSS text.
+**General section.** Auto-check (default off) and its delay in seconds (default 3, 1 to 60; disabled while auto-check is off, unless page mode is on, which uses it too). Page mode: the box "Check text boxes on websites" with its privacy note, and the list of hosts it is turned off on (section 4.11). A font for the editor, the buttons and the results (issues list and explanation): each is a family name typed as text (at most 100 characters; empty means the page's default, a missing font falls back to it) and a size from 6 to 48 points (defaults 13, 11, 11). Family names are applied through CSS custom properties set with `style.setProperty`, never by building CSS text.
 
 ### 4.8 Statistics dialog
 
@@ -237,6 +241,60 @@ Failures that are not shown in a panel (a failed check, a file that cannot be op
 ### 4.10 Check finished notification
 
 When a manual check ends with a result or a failure while its tutor tab is not visible, or its window is not focused (`document.visibilityState === "hidden"` or `!document.hasFocus()`), the page shows a `notifications` message. It reads "Check finished" with the status text ("3 issues", "No errors found"), or "Check failed" with the error's message. The notification id is `check-<tabId>`. The background script handles `notifications.onClicked` and focuses that tab and its window. A check the user cancelled, a check whose result was discarded, an auto-check, and a check that ends while the tab is visible and focused do not notify.
+
+### 4.11 Text boxes on web pages (page mode)
+
+When page mode is on, the extension checks what the user writes in text boxes on web pages, in place, the way it checks the editor page. Underlines appear under the errors inside the text box, a badge on the text box shows how many errors it has, a click on the badge opens a dialog with the issues and their explanations, and a click on an underlined error shows that error's explanation next to it.
+
+```
+ +--------------------------------------------------------+
+ | Yesterday I seen him. He go to school every day.       |
+ |             ~~~~      ~~~~~                            |
+ |                  +-------------------------------+     |
+ |                  | Subject-verb agreement        |     |
+ |                  | "He go" -> "He goes" ...      |  (3)| <- badge
+ +------------------| [Not an error] [Regenerate]   |-----+
+                    +-------------------------------+
+                      explanation popover (click on an underline)
+```
+
+**Turning it on.**
+- Page mode is **off by default**, because it sends what the user types on websites to the LLM. The options page's General section has a box "Check text boxes on websites", with the note "What you type in text boxes on websites is sent to <server of the selected LLM> to be checked." (or, for a server on this computer, "... is checked by <server>, on this computer.").
+- Ticking the box calls `permissions.request({ origins: ["<all_urls>"] })` synchronously in the click handler (section 4.7). If the user refuses, the box stays off and the form says so. If it is granted, the options page stores `page_mode = true` and asks the background script to register the content script: `scripting.registerContentScripts([{ id: "page-mode", matches: ["<all_urls>"], js: ["page.js"], runAt: "document_idle", allFrames: true }])`. Unticking it unregisters the script, removes the `<all_urls>` permission, stores `page_mode = false`, and tells the open pages to remove their badges and underlines (they listen for a `page-mode-off` `runtime` message).
+- The background script makes the registration match the setting and the permission each time it starts (`runtime.onStartup`, `runtime.onInstalled`) and on `permissions.onRemoved`: if the user withdrew the permission in `about:addons`, page mode is switched off.
+- **Per site.** The toolbar button's context menu has **Turn off on <host>** (or **Turn on on <host>**) for the active tab's host, stored in `page_mode_off_hosts`. The options page lists those hosts with a Remove button. The content script reads the list when it starts and on `settings-changed`, and does nothing on a host in it.
+- Page mode never runs on the extension's own pages, and Firefox does not run content scripts on `about:` pages, `addons.mozilla.org` and other restricted pages.
+
+**Which text boxes.**
+- A *text box* is a `<textarea>`, an `<input>` whose type is `text` or missing, or an editing host with `contenteditable="true"` or `"plaintext-only"`.
+- These are never read, checked or touched: `<input>` of any other type (password, email, url, search, number, tel, ...); a field whose `autocomplete` is `current-password`, `new-password`, `one-time-code`, `username`, or starts with `cc-`; a `readonly` or `disabled` field; a field with `spellcheck="false"` (code editors and terminals set it); a field inside an element with `data-english-tutor="off"`; and a field that is not visible or is smaller than 40×16 CSS pixels.
+- A text box takes part only after the user focuses it. Text boxes the user never focuses are never read.
+- A text box is checked only when its text has at least 3 words. A text over 10,000 words is not checked, and its badge says so.
+
+**Checking.**
+- Checks start by themselves: when a text box gets the focus with at least 3 words in it, and after the user stops typing for the auto-check delay (`auto_check_delay_s`, section 4.7; the editor's own Auto-check box does not apply here). Only the focused text box is checked. A new check of the same box cancels the running one.
+- Each text box has its own text state, as a tutor tab has (section 5): issues, revision, edit log, selection, and a `session:<uuid>` source made when the box is first focused on that page load.
+- Checks that start by themselves are not recorded in the statistics, like an auto-check (section 5.7). The dialog's **Check** button runs a manual check, which is recorded under the box's source.
+- Edits move and remove issues as in section 5.5: the content script compares the old and the new text of the box on each `input` event.
+- With no LLM configured, the badge shows `!`, and the dialog says so with a link that opens the options page.
+
+**Badge.** A small round button at the bottom right inside the focused text box, moving with it (scrolling, resizing, layout changes). It shows the extension icon before the first check, a spinner while checking, the number of issues (in the colour of the category with the most issues, with the count as text so colour is not the only signal), a check mark when there are none, and `!` after a failure (its tooltip has the error's message). It stays on a text box that has issues after the focus leaves it, and goes when the box's issues are gone or the box leaves the page. Clicking it opens the dialog.
+
+**Underlines.** Drawn over the text box with the colours and styles of section 4.3, never by changing the page's DOM inside the box or its text.
+- For a `<textarea>` or `<input>`, a mirror element copies the box's computed text styles (font, size, line height, letter and word spacing, padding, border widths, `white-space`, wrapping, text direction, `text-indent`, `tab-size`), its size and its scroll position, and holds the text in transparent colour with each issue in a `<span>`. Only the spans' underlines are visible.
+- For a `contenteditable` box, the text is read as a string from its text nodes (block elements and `<br>` become `\n`), positions are mapped back to text nodes, and the underlines are drawn along the rectangles of a `Range` over each issue (`getClientRects`).
+- The overlay has `pointer-events: none`, so typing, clicking and selecting work as if it were not there. It follows scrolling and resizing, and is redrawn at most once per animation frame. The selected issue also gets the 20% background of section 4.3.
+
+**Explanation popover.** When the user clicks inside an underlined error (the caret lands inside an issue, or the click point is inside an issue's rectangles), a card opens just below the underline (above it when there is no room). It has the header of section 4.5 (label and counts), the streamed explanation with its states (loading, ready, failed, cancelled), and the buttons **Not an error**, **Regenerate** / **Retry** and **All issues** (opens the dialog). Moving the caret to another issue switches the card to that issue. `Escape`, a click elsewhere, or typing closes it. It never takes the focus from the text box unless the user clicks into it.
+
+**Issues dialog.** Opened from the badge, or from All issues in the popover. A panel of about 440×520 CSS pixels next to the text box (inside the viewport), with the issues list of section 4.4 on top and the explanation panel of section 4.5 below it, for the issue selected in the list. Selecting a row highlights that issue in the text box and scrolls it into view, without moving the caret. It also has **Check** (a recorded manual check, Cancel while it runs), **Open in English Tutor** (sends the box's text to a new tutor tab with the hand-off of section 4.1; nothing is written back), and **Close** (`Escape`). The legend toggles of section 4.3 are not part of page mode.
+
+**How it is built.**
+- The content script (`src/content/`) finds text boxes, keeps their text states, and draws the badge and the underlines. Everything it adds to the page lives in one element whose closed shadow root holds the badge, the overlays and the frames, with `all: initial`, so the page's styles cannot change it and it cannot change the page. It never uses `innerHTML`, and never trusts the page: it reads only the text boxes it is about, and it ignores events the page dispatches itself (`event.isTrusted === false`).
+- The popover and the dialog are one extension page, `page-ui.html` (`src/page-ui/`), loaded in an `<iframe>` inside that shadow root. It is listed in `web_accessible_resources` for `<all_urls>`. It is an extension context, so it uses the same store, LLM clients, analysis code and UI components as the tutor page. The frame is created, hidden, when the first text box is focused, and it runs the checks and the explanations of that page (one frame per page frame that has a focused text box). The page cannot read the frame, and the content script never receives API keys or makes LLM requests.
+- The content script and its frame talk over a `runtime.connect` port named `page-ui:<random id>`, where the id is in the frame's address. Messages carry the box's id, the text, the revision and the edits from the content script, and the issues, the badge state and the popover or dialog requests back from the frame. Page scripts cannot use `runtime` messaging, so they cannot talk to the frame.
+- If the page's Content Security Policy keeps the frame from loading (no `load` within 5 seconds), the badge shows `!` with `PageFrameBlocked` ("This site does not let English Tutor show its panel"), and its click offers only Open in English Tutor.
+- **Shared UI.** The issues list (section 4.4) and the explanation panel (section 4.5) are components in `src/ui/` that both the tutor page and `page-ui.html` use.
 
 ## 5. Error analysis
 
@@ -308,7 +366,7 @@ As desktop SPEC §5.7:
 - A **mistake** is a placed issue of a manual check, stored as an event: error type, category, snippet, source key, fingerprint, LLM name, time.
 - **Fingerprint:** hex SHA-256 (`crypto.subtle.digest`) of `normalise(snippet) + "\u0000" + occurrence`. `normalise` lowercases the snippet and collapses every run of whitespace to one space, trimming the ends. `occurrence` is the number of non-overlapping occurrences of the lowercased snippet in the lowercased text before the snippet's start, in decimal. The pair (`source_key`, `fingerprint`) is unique, and inserting an existing pair does nothing. If a later check gives the same mistake another type, the first type stays.
 - **Sources:**
-  - `session:<uuid>` (`crypto.randomUUID()`) for a new text: at New, at the first load of a tab, for an opened file, and for a hand-off from a web page;
+  - `session:<uuid>` (`crypto.randomUUID()`) for a new text: at New, at the first load of a tab, for an opened file, for a hand-off from a web page, and for each page-mode text box when it is first focused on a page load (section 4.11);
   - `doc:<id>` for a library document.
 
   There is no `file:` source, because the browser gives no file path. Opening the same file twice counts its mistakes twice (section 13).
@@ -384,7 +442,7 @@ As desktop SPEC §4.5: fields are added at the top level of the body, keeping an
 
 - All work runs on the page's single thread with `async` functions. No Web Workers in v1.
 - Every cancellable operation takes an `AbortSignal`. A check, an explanation, an alternatives request and a Test connection each own an `AbortController`. Starting a newer one of the same kind, loading a text, or closing the tab aborts it.
-- LLM requests run in the tutor page (or the options page for Test connection), so they live as long as that tab. Closing or reloading the tab ends them. A reload loses a running check, and the text is kept (section 4.2).
+- LLM requests run in the tutor page (or the options page for Test connection, or a page-mode frame, section 4.11), so they live as long as that tab. A page-mode frame's requests end when its web page is closed or navigates away. Closing or reloading the tab ends them. A reload loses a running check, and the text is kept (section 4.2).
 - The background script registers all its listeners synchronously at the top level, keeps no state in memory between events (what it needs is in `storage.session`), and does no I/O except `storage.session`, `menus`, `notifications`, `runtime` messaging and focusing tabs.
 - **Updates.** An extension update closes the extension's tabs. The background script listens to `runtime.onUpdateAvailable`. It pings the tutor pages (section 4.1) and calls `runtime.reload()` only when none has unsaved changes. Otherwise the update waits for the next browser start.
 - Timeouts: check chunk 15 minutes, explanation and alternatives 120 s, Test connection 60 s. The LLM's *Timeout* replaces the first three. The check timeout applies to each chunk.
@@ -423,7 +481,7 @@ All data stays in the user's Firefox profile and is removed when the extension i
 
 Migration 1 creates all five stores. An index is named after its key path fields joined by `_`, so the compound ones are `source_key_fingerprint` and `error_type_created_at`. `line_ending` is `"lf"` or `"crlf"`. Optional numbers (`temperature`, `timeout_seconds`) are `null` when not set; `base_url` and `api_key` are `""` when not set.
 
-**Settings keys:** `selected_llm_id`, `auto_check`, `auto_check_delay_s`, `editor_font_family`, `editor_font_size`, `button_font_family`, `button_font_size`, `results_font_family`, `results_font_size`, `pane_sizes`. `pane_sizes` holds two percentages, stored as the array `[editor, issues]`: the editor's share of the width, and the issues list's share of the right column (each above 0 and below 100). A missing or invalid value gives the default: auto-check off, delay 3 (1 to 60), sizes 13 / 11 / 11 (outside 6 to 48 is invalid), default font families (a family over 100 characters is invalid), no selected LLM (anything but a positive integer is invalid), panes 65 / 40. Reading never fails on a bad stored value; setting a setting to a value that would read back as invalid is refused with `SettingInvalid`.
+**Settings keys:** `selected_llm_id`, `auto_check`, `auto_check_delay_s`, `editor_font_family`, `editor_font_size`, `button_font_family`, `button_font_size`, `results_font_family`, `results_font_size`, `pane_sizes`, `page_mode`, `page_mode_off_hosts`. `pane_sizes` holds two percentages, stored as the array `[editor, issues]`: the editor's share of the width, and the issues list's share of the right column (each above 0 and below 100). A missing or invalid value gives the default: auto-check off, delay 3 (1 to 60), sizes 13 / 11 / 11 (outside 6 to 48 is invalid), default font families (a family over 100 characters is invalid), no selected LLM (anything but a positive integer is invalid), panes 65 / 40, page mode off, no hosts with page mode turned off (`page_mode_off_hosts` is a list of host names, each at most 253 characters). Reading never fails on a bad stored value; setting a setting to a value that would read back as invalid is refused with `SettingInvalid`.
 
 **`storage.session`:** hand-off entries (section 4.1) and the Not-an-error ignore set (section 5.7). Cleared when the browser closes.
 
@@ -467,6 +525,8 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 | `FileNotUTF8` | `tutor` | the file is not valid UTF-8, or contains a NUL byte |
 | `FileWriteFailed` | `tutor` | a download fails |
 | `HandoffExpired` | `tutor` | the hand-off entry of a web page selection is missing |
+| `PageFrameBlocked` | `content` | the page-mode frame does not load in a web page within 5 seconds (usually the page's Content Security Policy) |
+| `PageModePermissionDenied` | `options` | the user refused the `<all_urls>` permission when turning page mode on |
 
 - The UI shows an error's message in the banner (or in its panel) and logs it with `{ err }`.
 - Cancelling is not an error and creates no tag (section 5.1).
@@ -482,10 +542,11 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 - **statistics:** recording twice counts once; the same snippet in two sources counts twice; moving a session source to a document, including duplicates; 7 and 30 day windows with a fake clock; Not an error and the ignore set; resets.
 - **markdown:** each supported construct, links (allowed and refused schemes), images as alt text, raw HTML as text, and the randomised property test of section 5.9.
 - **UI (happy-dom):** the mirror's spans match the issues after edits; the list and editor share the selection; explanation panel states and throttling; the loading layer and read-only text; the alternatives panel states, the replacement guard and Copy; the unsaved-changes dialog; the status bar text; the options form (provider switching, Ollama default URL, key handling, validation messages).
+- **page mode:** in `happy-dom`: which elements count as text boxes (the whole table of section 4.11, including every excluded type, `autocomplete` value and attribute), the `contenteditable` text model and its mapping back to text nodes, edits and rebasing per box, the badge states, the port protocol between the content script and the frame (with a fake port), ignoring untrusted events, and turning page mode on and off (registration, permission, `page-mode-off`). Positions of underlines and of the popover are checked by screenshots.
 - **background:** hand-off storage and expiry, menu creation, focusing the latest tutor tab, notification clicks, and update deferral, all against the fake `browser`.
 - **Screenshots** (`npm run screenshots`): the built extension is loaded into a headless Firefox, which talks to a fake OpenAI-compatible LLM server on `127.0.0.1`. Every UI function has a scenario that drives the real pages and saves a PNG under `docs/screenshots/` (docs/IMPLEMENTATION.md, "Screenshot harness"). A scenario that fails to reach its state fails the run.
 - `src/core/specs.test.ts` checks that every tag in the section 10 table has a route test, and that the taxonomy table in section 5.6 matches the code.
-- **Manual smoke check** in a real Firefox (`npm run start`) with a real LLM, before a release. It follows the desktop README's checklist, adapted, plus: the toolbar button and command focus the latest tutor tab; both web page menu entries; the host permission prompt and Grant access; a notification when the tab is in the background; Save As's dialog; reload keeps the text; light and dark; a narrow window.
+- **Manual smoke check** in a real Firefox (`npm run start`) with a real LLM, before a release. It follows the desktop README's checklist, adapted, plus: the toolbar button and command focus the latest tutor tab; both web page menu entries; page mode on a few real sites (a plain `<textarea>`, a `contenteditable` editor, a site with a strict CSP); the host permission prompt and Grant access; a notification when the tab is in the background; Save As's dialog; reload keeps the text; light and dark; a narrow window.
 - Definition of done is in CLAUDE.md: prettier, `tsc`, eslint, vitest, build, `web-ext lint`, and the screenshots.
 
 ## 12. Milestones
@@ -502,4 +563,6 @@ docs/IMPLEMENTATION.md lists the steps the extension is built in, with the spec 
 - **Statistics do not follow files.** Without file paths, opening the same file again starts a new source and can count its mistakes again. Saving to the library is the way to keep one identity.
 - **Two tabs, one document.** The last save to the library wins. There is no lock or merge in v1.
 - **No data export.** Uninstalling the extension deletes the library and the statistics. Export and import (JSON) are candidates for later.
-- **Not decided yet:** checking text in web page fields (a content-script mode, the obvious next feature after v1), the explanation language, and whether the category colours become configurable.
+- **Page mode sends what the user types on websites to the LLM.** It is off by default, it can be turned off per site, it skips password, payment and code fields, and it reads only text boxes the user focuses. A cloud LLM still receives that text; the options page says so.
+- **Page mode and complex editors.** Mirrors follow the computed styles of plain text boxes well. Sites that restyle or re-render their editors on every key (rich `contenteditable` editors) can make underlines lag or drift for a frame. Canvas-based editors are not supported. Sites whose Content Security Policy blocks the frame get `PageFrameBlocked`.
+- **Not decided yet:** applying a correction inside a web page's text box, the explanation language, and whether the category colours become configurable.

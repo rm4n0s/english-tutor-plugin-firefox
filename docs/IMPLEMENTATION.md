@@ -58,6 +58,8 @@ Steps for building English Tutor for Firefox as described in [SPEC.md](SPEC.md).
 
 ## Steps
 
+Steps 13 to 15 add page mode (SPEC §4.11). Steps 6 to 12 already build the issues list, the explanation panel, the issue state and the per-text check controller as components that do not depend on the tutor page (`src/ui/`, `src/core/issues/`), so that `page-ui.html` and the content script can reuse them.
+
 ### Step 1: Spec and plan (`feat/docs`)
 - CLAUDE.md, docs/SPEC.md, docs/IMPLEMENTATION.md, docs/IMPLEMENTED.md.
 - Done by the manager. There is no code, so only the review of the documents applies.
@@ -131,3 +133,23 @@ Steps for building English Tutor for Firefox as described in [SPEC.md](SPEC.md).
 - README: what it does, install from source (`npm ci`, `npm run build`, `npm run start`, or `about:debugging`), first steps per provider including `OLLAMA_ORIGINS`, keyboard shortcuts, privacy, development commands, and the manual smoke checklist of SPEC §11.
 - `npm run package` produces the zip.
 - Screenshots: `handoff-check.png` (tutor tab opened from a web page selection, checking), `handoff-alternatives.png`, `handoff-expired.png`, `fonts.png` (custom fonts and sizes), `narrow.png` (800 px wide), `narrow-dark.png`.
+
+### Step 13: Page mode: text boxes, frame and badge (`feat/page-mode`)
+- Spec: §4.11 (turning it on, which text boxes, checking, badge, how it is built), §3.2, §4.7 (General section), §9 (settings), §10 (`PageFrameBlocked`, `PageModePermissionDenied`).
+- Manifest: `scripting`, the `<all_urls>` optional host permission, `web_accessible_resources` for `page-ui.*`. The build gets two more entry points: `content` (`page.js`) and `page-ui`.
+- Options: the page-mode box with its privacy note and permission request, the list of hosts it is off on. Background: registration and unregistration of the content script, keeping it in step with the setting and the permission at startup and on `permissions.onRemoved`, the toolbar menu's Turn off / Turn on on <host>, and `page-mode-off`.
+- Content script: the text box rules, focus tracking, the per-box text state and edit detection, the shadow-root host, the hidden `page-ui.html` frame with the `runtime.connect` port, the 5-second `PageFrameBlocked` fallback, automatic checks (on focus and after the typing pause) run by the frame, and the badge with all its states, following the box.
+- The screenshot harness serves test pages from the fake LLM server (`/pages/textarea.html`, `/pages/input.html`, `/pages/contenteditable.html`, `/pages/excluded.html` with password, email and `spellcheck="false"` fields, `/pages/strict-csp.html` with `frame-src 'none'`). It turns page mode on through the options page (the optional-permission pref grants `<all_urls>`), then opens the test pages in normal tabs.
+- Screenshots: `options-page-mode.png`, `badge-checking.png`, `badge-count.png`, `badge-none.png`, `badge-no-llm.png`, `badge-blocked.png` (strict CSP), `excluded-fields.png` (no badge on excluded fields), `toolbar-menu-site.png` (if the harness can capture the menu; otherwise the options page's host list after turning a site off).
+
+### Step 14: Page mode: underlines and the explanation popover (`feat/page-underlines`)
+- Spec: §4.11 (underlines, explanation popover), §4.3 (styles), §4.5 (panel states), §5.5 (edits).
+- The mirror overlay for `<textarea>` and `<input>` (styles, size and scroll kept in step), the `Range` rectangles for `contenteditable` (text model with mapping back to text nodes), redraw per animation frame, edits that move or remove underlines at once, and the selected-issue background.
+- The popover in `page-ui.html`, opened by a click inside an issue, placed below or above the underline, with the shared explanation panel, Not an error, Regenerate / Retry and All issues, switching on caret moves, and closing on `Escape`, an outside click or typing.
+- Screenshots: `underlines-textarea.png`, `underlines-textarea-dark.png` (a dark test page), `underlines-input.png`, `underlines-contenteditable.png`, `underlines-scrolled.png` (a long textarea scrolled halfway), `underlines-after-edit.png`, `popover-loading.png`, `popover-ready.png`, `popover-above.png` (issue near the bottom of the viewport).
+
+### Step 15: Page mode: issues dialog (`feat/page-dialog`)
+- Spec: §4.11 (issues dialog), §4.4, §4.5, §5.7 (recording from the dialog's Check), §4.1 (hand-off).
+- The dialog in `page-ui.html` with the shared issues list and explanation panel, placement inside the viewport next to the box, row selection highlighting the issue in the box, Check / Cancel (recorded under the box's source), Not an error, Open in English Tutor (hand-off), Close, and the no-LLM state.
+- README: a page-mode section (turning it on, what is sent and what is skipped, turning it off per site).
+- Screenshots: `dialog-issues.png`, `dialog-explanation.png`, `dialog-dark.png`, `dialog-checking.png`, `dialog-no-llm.png`, `dialog-open-in-tutor.png` (the tutor tab opened from the dialog with the box's text).
