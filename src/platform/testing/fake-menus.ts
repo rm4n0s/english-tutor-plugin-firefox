@@ -4,13 +4,21 @@ import type { CurrentTab } from "../tabs";
 /** A tab id, for tests of pages that learn theirs from `tabs.getCurrent()`. */
 export class FakeCurrentTab implements CurrentTab {
   tabId: number | undefined;
+  windowId: number;
 
-  constructor(tabId?: number) {
+  constructor(tabId?: number, windowId = 1) {
     this.tabId = tabId;
+    this.windowId = windowId;
   }
 
   id(): Promise<number | undefined> {
     return Promise.resolve(this.tabId);
+  }
+
+  info(): Promise<{ tabId: number; windowId: number } | undefined> {
+    return Promise.resolve(
+      this.tabId === undefined ? undefined : { tabId: this.tabId, windowId: this.windowId },
+    );
   }
 }
 

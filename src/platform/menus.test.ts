@@ -190,6 +190,17 @@ describe("BrowserCurrentTab", () => {
     } as unknown as typeof browser;
     expect(await new BrowserCurrentTab(api).id()).toBe(expected);
   });
+
+  it.each([
+    { name: "a tab", current: { id: 12, windowId: 3 }, expected: { tabId: 12, windowId: 3 } },
+    { name: "a tab without a window", current: { id: 12 }, expected: undefined },
+    { name: "no tab", current: undefined, expected: undefined },
+  ])("gives the tab and window ids for $name", async ({ current, expected }) => {
+    const api = {
+      tabs: { getCurrent: () => Promise.resolve(current) },
+    } as unknown as typeof browser;
+    expect(await new BrowserCurrentTab(api).info()).toEqual(expected);
+  });
 });
 
 describe("FakeContextMenus", () => {
