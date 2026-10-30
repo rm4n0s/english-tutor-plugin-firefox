@@ -3,6 +3,8 @@ import {
   CATEGORIES,
   Explainer,
   modelFromConfig,
+  Suggester,
+  trimSpace,
   type AnalysisModel,
   type UsageRecorder,
 } from "../core/analysis";
@@ -30,10 +32,15 @@ import { LoadingLayer } from "../ui/loading-layer";
 import { StatsDialog } from "../ui/stats-dialog";
 import { EditorMirror } from "../ui/mirror";
 import { IssueTooltip } from "../ui/tooltip";
+import { AlternativesFlow } from "./alternatives-flow";
 import type { TutorDeps } from "./deps";
+import { EditorMenu } from "./editor-menu";
 import { LLMSelector } from "./llm-selector";
 import { RowMenu } from "./row-menu";
 import { StatusBar } from "./status-bar";
+
+/** The banner text when an edit touched the checked selection (SPEC section 5.1). */
+export const TEXT_CHANGED_WHILE_CHECKING = "The text changed while checking.";
 
 export interface TutorPage {
   /** Resolves when the LLM list has been read from the store. */
@@ -190,6 +197,41 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       canRegenerate: () => selector.selected !== undefined,
     },
   });
+  // Alternatives for the selection (SPEC section 4.6), asked from the editor's context menu.
+  const alternatives = new AlternativesFlow(doc, editorBox, {
+    editor,
+    suggester: new Suggester({
+      random: deps.random,
+      usage,
+      logger: deps.log,
+      clock: deps.clock,
+    }),
+    getModel: currentModel,
+    clipboard: deps.clipboard,
+    log: deps.log,
+  });
+  const editorMenu = new EditorMenu({
+    menus: deps.menus,
+    currentTab: deps.currentTab,
+    pageUrl: deps.pageUrl,
+    log: deps.log,
+    actions: {
+      alternatives: () => {
+        alternatives.ask();
+      },
+      checkSelection: () => {
+        checkSelection();
+      },
+      // Not while the loading layer is up, and not for white space (SPEC section 4.3).
+      available: () =>
+        !(state.pending?.manual === true) && trimSpace(alternatives.selection().text) !== "",
+      canCheck: () => selector.selected !== undefined,
+    },
+  });
+  const onEditorContextMenu = (): void => {
+    editorMenu.open();
+  };
+  editor.addEventListener("contextmenu", onEditorContextMenu);
   const issuesList = new IssuesList(doc, requireElement(doc, "issues-pane", HTMLElement), state, {
     onActivate: () => {
       editorSelection.focusSelected();
@@ -221,6 +263,10 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   }
 
   const handleOutcome = (outcome: CheckOutcome, config: LLMConfig | undefined): void => {
+    if (outcome.kind === "stale" && outcome.reason === "selection-edited") {
+      banner.show(TEXT_CHANGED_WHILE_CHECKING);
+      return;
+    }
     if (outcome.kind !== "failed") return;
     const { error } = outcome;
     if (error.tag === "HostPermissionDenied" && config !== undefined) {
@@ -248,11 +294,11 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       .catch(report);
   }
 
-  function runCheck(manual: boolean): void {
+  function runCheck(manual: boolean, selection?: { start: number; end: number }): void {
     const config = selector.selected;
     const sourceKey = source.key;
     controller
-      .check({ manual })
+      .check(selection === undefined ? { manual } : { manual, selection })
       .then((outcome) => {
         handleOutcome(outcome, config);
         if (outcome.kind !== "finished") return undefined;
@@ -320,6 +366,16 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     statsDialog.open().catch(report);
   });
 
+  // The **Check** entry of the editor menu (SPEC sections 4.3 and 5.1): only the selection is sent.
+  // The selection is read now, when the entry is chosen.
+  function checkSelection(): void {
+    const { start, end, text } = alternatives.selection();
+    if (selector.selected === undefined || trimSpace(text) === "") return;
+    if (state.pending?.manual === true) return;
+    banner.hide();
+    runCheck(true, { start, end });
+  }
+
   function toggleCheck(): void {
     if (state.pending !== null) {
       controller.cancel();
@@ -379,7 +435,9 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   }
 
   const onKeydown = (event: KeyboardEvent): void => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+    if (event.key === "Escape" && alternatives.panel.isOpen && !event.defaultPrevented) {
+      alternatives.close();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
       event.preventDefault();
       toggleCheck();
     } else if (event.key === "F7" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -428,6 +486,9 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   rowMenu.start().catch((err: unknown) => {
     deps.log.warn("the row menu is not available", { err });
   });
+  editorMenu.start().catch((err: unknown) => {
+    deps.log.warn("the editor menu is not available", { err });
+  });
   const ready = Promise.all([selector.load(), loadAutoCheck()]).then(() => undefined, report);
   updateCheckButton();
 
@@ -456,6 +517,9 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       header.destroy();
       counts.destroy();
       rowMenu.destroy();
+      editor.removeEventListener("contextmenu", onEditorContextMenu);
+      editorMenu.destroy();
+      alternatives.destroy();
       statsDialog.destroy();
     },
   };

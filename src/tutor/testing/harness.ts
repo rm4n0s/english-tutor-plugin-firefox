@@ -10,6 +10,7 @@ import type { FakeClock } from "../../core/testing/fake-clock";
 import { FakeScheduler } from "../../core/testing/fake-clock";
 import { SessionIgnoreSet } from "../../platform/ignore-set";
 import { FakeChannelBus, type FakeChangeChannel } from "../../platform/testing/fake-channel";
+import { FakeClipboard } from "../../platform/testing/fake-clipboard";
 import { FakeLinkOpener } from "../../platform/testing/fake-link-opener";
 import { FakeContextMenus, FakeCurrentTab } from "../../platform/testing/fake-menus";
 import { FakePermissions } from "../../platform/testing/fake-permissions";
@@ -71,6 +72,7 @@ export interface TutorHarness {
   /** Another page on the same channel (the options page, or another tab). */
   other: { received: string[]; channel: FakeChangeChannel };
   logged: { level: string; message: string; fields: unknown }[];
+  clipboard: FakeClipboard;
   /** The addresses the page opened in new tabs. */
   links: FakeLinkOpener;
   /** How many times the page asked to open the options page. */
@@ -127,11 +129,13 @@ export async function mountForTest(
   };
   const opened = { options: 0 };
   const links = new FakeLinkOpener();
+  const clipboard = new FakeClipboard();
   const channel = bus.connect();
   const deps: TutorDeps = {
     store,
     stats,
     menus,
+    clipboard,
     currentTab: new FakeCurrentTab(TAB_ID),
     pageUrl: PAGE_URL,
     channel,
@@ -168,6 +172,7 @@ export async function mountForTest(
     channel,
     other: { received, channel: otherChannel },
     logged,
+    clipboard,
     links,
     opened,
   };

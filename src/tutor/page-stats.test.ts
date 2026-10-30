@@ -447,9 +447,9 @@ describe("the row's context menu (SPEC section 4.4)", () => {
   it("makes its entries for this tab on the tutor page, invisible until a row's menu is shown", async () => {
     const h = await mount({ script });
     await settle(() => {
-      expect(h.menus.entries.size).toBe(2);
+      expect(h.menus.entries.size).toBe(4); // the row's two and the editor's two
     });
-    expect([...h.menus.entries.keys()]).toEqual([NOT, REGEN]);
+    expect([...h.menus.entries.keys()].filter((id) => id.startsWith("row-"))).toEqual([NOT, REGEN]);
     expect(h.menus.entries.get(NOT)).toMatchObject({
       title: "Not an error",
       visible: false,
@@ -462,7 +462,7 @@ describe("the row's context menu (SPEC section 4.4)", () => {
     const h = await mount({ script });
     await checkedAndCounted(h);
     await settle(() => {
-      expect(h.menus.entries.size).toBe(2);
+      expect(h.menus.entries.size).toBe(4); // the row's two and the editor's two
     });
     byId("issues").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
     expect(h.menus.overridden).toBe(0);
@@ -474,7 +474,7 @@ describe("the row's context menu (SPEC section 4.4)", () => {
     const h = await mount({ script });
     await checkedAndCounted(h);
     await settle(() => {
-      expect(h.menus.entries.size).toBe(2);
+      expect(h.menus.entries.size).toBe(4); // the row's two and the editor's two
     });
     rowClick(0);
     contextMenu(2);
@@ -499,7 +499,7 @@ describe("the row's context menu (SPEC section 4.4)", () => {
     const h = await mount({ script });
     await checkedAndCounted(h);
     await settle(() => {
-      expect(h.menus.entries.size).toBe(2);
+      expect(h.menus.entries.size).toBe(4); // the row's two and the editor's two
     });
     contextMenu(1);
     h.menus.show(TAB_ID);
@@ -540,7 +540,7 @@ describe("the row's context menu (SPEC section 4.4)", () => {
     const h = await mount({ script });
     await checkedAndCounted(h);
     await settle(() => {
-      expect(h.menus.entries.size).toBe(2);
+      expect(h.menus.entries.size).toBe(4); // the row's two and the editor's two
     });
     contextMenu(0);
     h.menus.choose(NOT, TAB_ID + 1);

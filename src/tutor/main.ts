@@ -4,6 +4,7 @@ import { Logger } from "../core/log";
 import { CryptoRandom } from "../core/random";
 import { openDatabase, Stats, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
+import { BrowserClipboard } from "../platform/clipboard";
 import { SessionIgnoreSet } from "../platform/ignore-set";
 import { BrowserLinkOpener } from "../platform/links";
 import { BrowserContextMenus } from "../platform/menus";
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
   const page = mountTutor(document, {
     store,
     stats,
+    clipboard: new BrowserClipboard(navigator),
     menus: new BrowserContextMenus(browser),
     currentTab: new BrowserCurrentTab(browser),
     pageUrl: browser.runtime.getURL("tutor.html"),

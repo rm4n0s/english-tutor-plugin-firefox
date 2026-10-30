@@ -3,6 +3,7 @@ import type { Logger } from "../core/log";
 import type { Random } from "../core/random";
 import type { Stats, Store } from "../core/store";
 import type { ChangeChannel } from "../platform/channel";
+import type { Clipboard } from "../platform/clipboard";
 import type { LinkOpener } from "../platform/links";
 import type { ContextMenus } from "../platform/menus";
 import type { HostPermissions } from "../platform/permissions";
@@ -24,7 +25,9 @@ export interface TutorDeps {
   log: Logger;
   /** Opens a link of an explanation in a new tab next to this one. */
   links: LinkOpener;
-  /** The context menus of the row of the issues list (and, from step 10, of the editor). */
+  /** Copy in the Alternatives panel. */
+  clipboard: Clipboard;
+  /** The context menus of the row of the issues list and of the editor. */
   menus: ContextMenus;
   /** The tab this page is in, to tell menu events for this tab from the others. */
   currentTab: CurrentTab;
