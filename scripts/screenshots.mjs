@@ -1780,7 +1780,9 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-13-page-mode",
     async run(ctx) {
-      // Turning page mode off and on again, as a user does it on the options page.
+      // Turning the switch off and on again, as a user does it on the options page. The switch
+      // only stores the setting and tells the open pages (step 19): the access to websites and the
+      // content script of the manifest stay as they are.
       ctx.llm.setReplies(CHECK_REPLY);
       await ctx.configureFakeLLM({ name: "Fake LLM" });
       await ctx.turnOnPageMode();
@@ -1792,22 +1794,31 @@ const SCENARIOS = {
 
       await ctx.driver.switchTo().window(options);
       await ctx.click("page-mode");
-      await ctx.waitForRegisteredScripts(0);
-      if (await ctx.hasAllUrlsPermission()) throw new Error("the <all_urls> permission was kept");
+      await ctx.waitForSetting("page_mode", false);
+      if (!(await ctx.hasAllUrlsPermission()))
+        throw new Error("the access to websites was removed");
+      if ((await ctx.registeredScripts()) !== 0) throw new Error("a script was registered");
       // The open page removed its badge and everything else at once.
       await ctx.driver.switchTo().window(page);
       await ctx.waitForNoPageModeHost();
       await ctx.expectNoBadge();
 
-      // On again: the box asks for the permission, the script is registered, a new page works.
+      // A new load of the page: the script of the manifest runs, is told `off`, and does nothing.
+      const checked = ctx.llmRequests();
+      await ctx.driver.navigate().refresh();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await ctx.focusBox();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await ctx.waitForNoPageModeHost();
+      await ctx.expectNoBadge();
+      if (ctx.llmRequests() !== checked) throw new Error("text was checked with the switch off");
+
+      // On again: the open page asks again, and works without a reload.
       await ctx.driver.switchTo().window(options);
       await ctx.click("page-mode");
-      await ctx.waitForRegisteredScripts(1);
-      if (!(await ctx.hasAllUrlsPermission()))
-        throw new Error("the <all_urls> permission is missing");
+      await ctx.waitForSetting("page_mode", true);
       await ctx.driver.switchTo().window(page);
-      await ctx.driver.navigate().refresh();
-      await ctx.waitForPageModeHost();
+      await ctx.driver.executeScript("document.activeElement.blur()");
       await ctx.focusBox();
       await ctx.waitForBadge("grammar");
     },
@@ -2251,9 +2262,11 @@ const SCENARIOS = {
       // The fragment goes at once, so that a reload does not show the block again.
       await ctx.expectCleanAddress();
       await ctx.expectText("welcome", "Welcome to English Tutor");
-      await ctx.expectText("welcome-offer", "reads nothing on a site until you say yes");
-      await ctx.expectHidden("welcome-error");
-      await ctx.expectHidden("welcome-allowed");
+      await ctx.expectText("welcome-page-mode", "click the grey English Tutor icon in a text box");
+      await ctx.expectText("welcome-page-mode", "reads nothing on a site until you do");
+      // Nothing to allow: Firefox granted the access at the installation.
+      await ctx.expectNoElement("welcome-allow");
+      await ctx.expectNoElement("welcome-later");
       await ctx.expectTheme();
       await ctx.stabilise();
       await new Promise((resolve) => setTimeout(resolve, 800));
@@ -2278,8 +2291,7 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-14-page-mode-sites",
     async run(ctx) {
-      // No PNG: what the buttons of the Welcome block do.
-      // A reload does not show the block again.
+      // No PNG: what the Welcome block does. A reload does not show the block again.
       await ctx.open("options.html#welcome");
       await ctx.waitForVisible("welcome");
       await ctx.driver.navigate().refresh();
@@ -2294,22 +2306,16 @@ const SCENARIOS = {
       await ctx.click("welcome-add-llm");
       await ctx.waitForVisible("llm-form");
       await ctx.waitForVisible("welcome");
-      // Not now closes the block and changes nothing.
-      await ctx.click("welcome-later");
-      await ctx.waitForCount("#welcome", 0);
-      if (await ctx.hasAllUrlsPermission()) throw new Error("Not now asked for the permission");
-      await ctx.waitForRegisteredScripts(0);
-      // Allow asks for access to all websites once (the preference grants it without a prompt),
-      // ticks the box of the General section, and the background script registers the script.
-      await ctx.open("options.html#welcome");
-      await ctx.waitForVisible("welcome");
-      await ctx.click("welcome-allow");
-      await ctx.waitForVisible("welcome-allowed");
-      await ctx.waitForRegisteredScripts(1);
-      if (!(await ctx.hasAllUrlsPermission())) throw new Error("the permission was not granted");
+      // The only button is Add an LLM; opening the page changed nothing (step 19).
+      const buttons = await ctx.driver.executeScript(
+        "return [...document.querySelectorAll('#welcome button')].map((b) => b.textContent)",
+      );
+      if (canonicalJson(buttons) !== canonicalJson(["Add an LLM"])) {
+        throw new Error(`the Welcome block has the buttons ${JSON.stringify(buttons)}`);
+      }
       await ctx.expectChecked("page-mode");
-      await ctx.expectHidden("welcome-error");
-      await ctx.expectHidden("welcome-offer");
+      await ctx.expectHidden("page-mode-access");
+      if ((await ctx.registeredScripts()) !== 0) throw new Error("a script was registered");
     },
   },
   "site-prompt": {
@@ -2505,7 +2511,9 @@ const SCENARIOS = {
       await ctx.driver.executeAsyncScript(
         `const done = arguments[arguments.length - 1];
          browser.storage.session.set({ ["page-mode-later:" + arguments[0]]: true })
-           .then(() => browser.runtime.sendMessage({ type: "page-mode-apply" }))
+           .then(() => browser.tabs.query({}))
+           .then((tabs) => Promise.all(tabs.map((t) =>
+             browser.tabs.sendMessage(t.id, { type: "settings-changed" }).catch(() => undefined))))
            .then(() => done());`,
         TEST_HOST,
       );
@@ -2996,6 +3004,274 @@ const SCENARIOS = {
       if (ctx.llmRequests() !== 0) throw new Error("text was sent");
     },
   },
+  // Step 19: page mode works like LanguageTool (SPEC sections 3.2 and 4.11). The manifest declares
+  // the content script and `<all_urls>`, which Firefox grants at the installation.
+  "install-welcome": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // The page that installing the add-on opens: what English Tutor does, Add an LLM, and how
+      // page mode works. There is nothing to allow: the access came with the installation.
+      await expectInstallWelcome(ctx);
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      await ctx.expectCleanAddress();
+      await ctx.expectText("welcome-page-mode", "click the grey English Tutor icon in a text box");
+      await ctx.expectNoElement("welcome-allow");
+      if (!(await ctx.hasAllUrlsPermission())) {
+        throw new Error("the installation did not grant access to all websites");
+      }
+      if ((await ctx.registeredScripts()) !== 0) throw new Error("a script was registered");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "options-page-mode-switch": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    file: "options-page-mode",
+    async run(ctx) {
+      // The global switch, on by default, with its new label and no notice about access.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.expectChecked("page-mode");
+      await ctx.expectText(
+        "page-mode-sites-empty",
+        "a grey icon appears on a text box you click into",
+      );
+      await ctx.expectText("page-mode-note", "asks on each site before it reads anything there");
+      const label = await ctx.driver.executeScript(
+        "return document.getElementById('page-mode').closest('label').textContent.trim()",
+      );
+      if (label !== "Show the English Tutor icon in text boxes on websites") {
+        throw new Error(`the switch is labelled "${label}"`);
+      }
+      await ctx.expectHidden("page-mode-access");
+      await ctx.expectHidden("page-mode-error");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "options-permission-withdrawn": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // The user took the access to all websites away: the options page says so at once (no
+      // reload) and offers a button that asks for it again. The switch stays as it was.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.expectHidden("page-mode-access");
+      await ctx.withdrawAccess();
+      await ctx.waitForVisible("page-mode-access");
+      await ctx.expectText("page-mode-access", "does not have access to all websites any more");
+      await ctx.expectText("page-mode-access-button", "Allow access to all websites");
+      await ctx.expectChecked("page-mode");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "access-withdrawn": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // No PNG. With the access to websites withdrawn nothing runs: a page that is open stops at
+      // once (the background script answers `off` for a site it cannot reach), a new page gets
+      // no script, and no text is sent. The options page says so. Giving access to one site only
+      // starts the script there and nowhere else, and the button of the options page gives all of
+      // it back: the page that was loaded meanwhile starts without a reload.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "on", [OTHER_HOST]: "on" } });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openPageModePage("textarea.html");
+      const open = await ctx.driver.getWindowHandle();
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+
+      await ctx.driver.switchTo().window(options);
+      await ctx.withdrawAccess();
+      await ctx.waitForVisible("page-mode-access");
+      // The page that was open stops: no overlay, no badge, no more checks.
+      await ctx.driver.switchTo().window(open);
+      await ctx.waitForNoPageModeHost();
+      await ctx.expectNoBadge();
+      const checked = ctx.llmRequests();
+
+      // A new page gets no content script, whatever the site's choice is.
+      const none = async (host) => {
+        await ctx.openWebPage("textarea.html", { host });
+        await ctx.focusBox();
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        if (await ctx.pageModeHostPresent()) throw new Error(`page mode ran on ${host}`);
+        await ctx.expectNoBadge();
+        if (ctx.llmRequests() !== checked) throw new Error(`text was checked on ${host}`);
+        return ctx.driver.getWindowHandle();
+      };
+      await none(TEST_HOST);
+      await ctx.driver.switchTo().window(options);
+      await ctx.seedSites({});
+      await none(TEST_HOST);
+
+      // Access to one site only: the script runs there, not on the other.
+      await ctx.grantSiteOnly(`http://${TEST_HOST}/*`);
+      await ctx.openWebPage("textarea.html", { host: TEST_HOST });
+      await ctx.focusUntilBadge();
+      const withoutAccess = await none(OTHER_HOST);
+      await ctx.driver.switchTo().window(options);
+      await ctx.waitForVisible("page-mode-access");
+
+      // The button asks for all of it again (a real click: Firefox wants a user gesture).
+      await ctx.click("page-mode-access-button");
+      await ctx.waitForHidden("page-mode-access");
+      if (!(await ctx.hasAllUrlsPermission())) throw new Error("the access was not given back");
+      // The page loaded while the access was gone has the script now, without a reload.
+      await ctx.driver.switchTo().window(withoutAccess);
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusUntilBadge();
+    },
+  },
+  "options-page-auto-check": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // The box under the switch, unticked: automatic checks in text boxes on websites are off.
+      // The pause field follows (neither the editor's Auto-check nor this box is on).
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.expectChecked("page-mode-auto-check");
+      await ctx.click("page-mode-auto-check");
+      await ctx.waitForSetting("page_mode_auto_check", false);
+      const label = await ctx.driver.executeScript(
+        "return document.getElementById('page-mode-auto-check').closest('label').textContent.trim()",
+      );
+      if (label !== "Check automatically while typing in text boxes on websites") {
+        throw new Error(`the box is labelled "${label}"`);
+      }
+      if (await ctx.driver.findElement(By.id("page-mode-auto-check")).isSelected()) {
+        throw new Error("the box is still ticked");
+      }
+      await ctx.expectDisabled("auto-check-delay");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "badge-not-checked": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // A site that is on, automatic checks off: the focused box has its text and the icon badge,
+      // no underlines, and nothing was sent.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.click("page-mode-auto-check");
+      await ctx.waitForSetting("page_mode_auto_check", false);
+      await ctx.openPageModePage("textarea-still.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("icon");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await ctx.waitForBadge("icon");
+      if (ctx.llmRequests() !== 0) throw new Error("text was checked by itself");
+      await ctx.expectNoUnderlines("box", { ignoreBadge: true });
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "auto-check-off": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // No PNG. With automatic checks off, focusing and typing send nothing; the dialog's Check
+      // does, and is recorded; edits after it move the underlines and start no check; and a change
+      // of the setting applies on the next focus, with no reload.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.click("page-mode-auto-check");
+      await ctx.waitForSetting("page_mode_auto_check", false);
+      await ctx.openPageModePage("textarea-still.html");
+      const tab = await ctx.driver.getWindowHandle();
+      const quiet = async (what) => {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        if (ctx.llmRequests() !== 0) throw new Error(`text was sent ${what}`);
+      };
+      await ctx.focusBox();
+      await quiet("on focus");
+      await ctx.typeInBox(" and some more words to write");
+      await quiet("after the typing pause");
+      await ctx.waitForBadge("icon");
+      // The badge opens the dialog; Check there is a manual check.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const { x, y } = await ctx.badgeCenter();
+      await ctx.clickAt(x, y);
+      const bounds = await ctx.waitForPageDialog();
+      if (ctx.llmRequests() !== 0) throw new Error("opening the dialog sent text");
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(1);
+      await ctx.waitForBadge("grammar");
+      if ((await recordedIn(ctx, options, tab)).length === 0) {
+        throw new Error("the dialog's Check was not recorded");
+      }
+      // An edit starts no check.
+      await ctx.typeInBox(" again");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (ctx.llmRequests() !== 1) throw new Error("an edit started a check");
+      // The setting is read on the next focus: ticked again, the next edit is checked by itself.
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode-auto-check");
+      await ctx.waitForSetting("page_mode_auto_check", true);
+      await ctx.driver.switchTo().window(tab);
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusBox();
+      await ctx.typeInBox(" once more");
+      await ctx.waitForLLMRequests(2);
+    },
+  },
+  "switch-off-nothing": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // No PNG. With the switch off the content script of the manifest runs and does nothing,
+      // anywhere: on a site that is on, on a site with no choice, and in an iframe. No badge, no
+      // frame, no request.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "on" } });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.click("page-mode");
+      await ctx.waitForSetting("page_mode", false);
+      await ctx.watchFrameRegistrations();
+      for (const sites of [{ [TEST_HOST]: "on" }, {}]) {
+        await ctx.driver.switchTo().window(options);
+        await ctx.seedSites(sites);
+        await ctx.openWebPage("textarea.html");
+        await ctx.focusBox();
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        if (await ctx.pageModeHostPresent()) throw new Error("page mode showed something");
+        await ctx.expectNoBadge();
+        if (ctx.llmRequests() !== 0) throw new Error("text was sent with the switch off");
+      }
+      await ctx.openWebPage("iframes.html");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (await ctx.pageModeHostPresent()) throw new Error("page mode showed something in a frame");
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0) throw new Error("a frame was made");
+      await ctx.expectSiteConfig(TEST_HOST, { state: "off" });
+    },
+  },
   "dimmed-badge-blur": {
     theme: "light",
     dir: "step-18-page-icon",
@@ -3070,9 +3346,12 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-18-page-icon",
     async run(ctx) {
-      // No PNG. A page that was open before page mode was allowed works without a reload: the
-      // background script runs the content script in the open tabs when it registers it. It runs
-      // once, whether the page was reloaded or not.
+      // No PNG. The content script runs once per page frame, whichever way it got there: the
+      // manifest's copy runs in every page that loads, and the background script runs the file
+      // once more in the tabs that are open when the extension is installed or updated, or when
+      // access comes back (`badge-dimmed-open-tab` and `access-withdrawn` show that a page with no
+      // script gets one without a reload). A second run in a page that has the script stops at
+      // once (`claimPageSlot`).
       await ctx.configureFakeLLM({ name: "Fake LLM" });
       const options = await ctx.driver.getWindowHandle();
       await ctx.openWebPage("textarea.html");
@@ -3082,13 +3361,13 @@ const SCENARIOS = {
       await ctx.driver.switchTo().window(page);
       await ctx.focusUntilBadge();
       if ((await ctx.pageModeHostCount()) !== 1) throw new Error("page mode started twice");
-      // After a reload the registered script starts, and still only one.
+      // After a reload the manifest's script starts, and still only one.
       await ctx.driver.navigate().refresh();
       await ctx.focusUntilBadge();
       await new Promise((resolve) => setTimeout(resolve, 1000));
       if ((await ctx.pageModeHostCount()) !== 1) throw new Error("page mode started twice");
       // The script is run in the page once more, as the background script does for the open tabs
-      // (here the registered copy is running already): the second copy stops at once.
+      // (here the manifest's copy is running already): the second copy stops at once.
       await ctx.driver.switchTo().window(options);
       await ctx.driver.executeAsyncScript(
         `const done = arguments[arguments.length - 1];
@@ -3216,6 +3495,51 @@ const SCENARIOS = {
             throw new Error(`only ${n} ${category} underline pixels in the ${frame} frame`);
         }
       }
+      await ctx.screenshot();
+    },
+  },
+  "badge-dimmed-open-tab": {
+    theme: "light",
+    dir: "step-19-like-languagetool",
+    async run(ctx) {
+      // A tab that was open before the add-on was installed gets the icon without a reload: the
+      // background script runs the content script in the tabs that are open (the manifest's script
+      // reaches only pages that load afterwards). The add-on is taken out, the page is loaded with
+      // none, and the add-on is installed again.
+      // A tab of the web must be there to keep the window open when the options tab goes.
+      await ctx.openWebPage("textarea-still.html");
+      const page = await ctx.driver.getWindowHandle();
+      await ctx.driver.uninstallAddon(GECKO_ID);
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (await ctx.pageModeHostPresent()) {
+        throw new Error("the page has page mode before the install");
+      }
+      // Uninstalling forgets the add-on's fixed address (the `uuids` preference): it is put back
+      // before the installation, so that the pages of the other scenarios are found again.
+      await ctx.chrome(
+        `Services.prefs.setStringPref("extensions.webextensions.uuids", arguments[0]);`,
+        JSON.stringify({ [GECKO_ID]: EXTENSION_UUID }),
+      );
+      const before = await ctx.driver.getAllWindowHandles();
+      await ctx.driver.installAddon(ctx.driver.zipPath, true);
+      // The installation opens the welcome page in a tab of its own; the page stays as it was.
+      const welcome = await ctx.switchToNewTab(before);
+      await ctx.driver.close();
+      await ctx.driver.switchTo().window(page);
+      ctx.driver.installWelcome = { welcome: true, hash: "" };
+      if ((await ctx.driver.getCurrentUrl()).endsWith("textarea-still.html") === false) {
+        throw new Error(
+          `the page tab is ${await ctx.driver.getCurrentUrl()} (welcome tab ${welcome})`,
+        );
+      }
+      // No reload: the box is clicked, and the dimmed badge shows.
+      await ctx.focusUntilBadge();
+      if (await ctx.promptShowing()) throw new Error("a card opened by itself");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent");
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
       await ctx.screenshot();
     },
   },
@@ -4015,6 +4339,7 @@ async function startBrowser(theme, zipPath, downloadDir) {
     .build();
   try {
     await sizeViewport(driver);
+    driver.zipPath = zipPath;
     await driver.installAddon(zipPath, true);
     // Installing the add-on is an installation (`runtime.onInstalled`, reason `install`, which a
     // temporary add-on reports too), so the background script opens the welcome page in a new tab.
@@ -4202,19 +4527,22 @@ async function resetData(ctx) {
   );
   if (result !== "deleted") throw new Error(`could not reset the database: ${result}`);
   // Page mode starts from a fresh installation too: nothing in `storage.session` (the sites
-  // answered Not now), no registered content script and no access to all websites. The background
-  // script is asked to bring the registration in step with the (now default) settings.
-  const clean = await ctx.driver.executeAsyncScript(
+  // answered Not now), and the access to all websites that Firefox grants at the installation
+  // (`host_permissions`). A scenario that withdrew it gives it back through the options page's
+  // button (a real click: Firefox accepts `permissions.request` only from a user gesture).
+  await ctx.driver.executeAsyncScript(
     `const done = arguments[arguments.length - 1];
-     (async () => {
-       await browser.storage.session.clear();
-       await browser.runtime.sendMessage({ type: "page-mode-apply" });
-       await browser.permissions.remove({ origins: ["<all_urls>"] }).catch(() => false);
-       const left = await browser.scripting.getRegisteredContentScripts();
-       return left.length;
-     })().then(done, (e) => done("failed: " + e));`,
+     browser.storage.session.clear().then(() => done("cleared"), (e) => done("failed: " + e));`,
   );
-  if (clean !== 0) throw new Error(`could not reset page mode: ${clean}`);
+  if (!(await ctx.hasAllUrlsPermission())) {
+    await ctx.waitForVisible("page-mode-access");
+    await ctx.click("page-mode-access-button");
+    await ctx.driver.wait(
+      () => ctx.hasAllUrlsPermission(),
+      PAGE_TIMEOUT_MS,
+      "access to all websites could not be given back",
+    );
+  }
 }
 
 function makeContext(name, scenario, driver, llm, policy, folders) {
@@ -4373,6 +4701,16 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
     async waitForVisible(id) {
       const element = await driver.findElement(By.id(id));
       await driver.wait(until.elementIsVisible(element), PAGE_TIMEOUT_MS, `#${id} never showed`);
+    },
+    /** Waits until the element with this id is not displayed. */
+    async waitForHidden(id) {
+      const element = await driver.findElement(By.id(id));
+      await driver.wait(until.elementIsNotVisible(element), PAGE_TIMEOUT_MS, `#${id} never went`);
+    },
+    async expectNoElement(id) {
+      if ((await driver.findElements(By.id(id))).length !== 0) {
+        throw new Error(`#${id} is on the page`);
+      }
     },
     async expectHidden(id) {
       if (await driver.findElement(By.id(id)).isDisplayed()) throw new Error(`#${id} is shown`);
@@ -5279,40 +5617,51 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
     // Page mode (SPEC section 4.11)
 
     /**
-     * Turns page mode on the way a user does: ticks "Offer to check text boxes on websites" on the
-     * options page (the optional-permission preference grants `<all_urls>` without a prompt), and
-     * waits until the background script has registered the content script. The pause of the
-     * automatic check is set to one second (the shortest) so that scenarios do not wait for three.
+     * Checks that page mode is on the way a fresh installation has it (the switch "Show the
+     * English Tutor icon in text boxes on websites" is ticked, and Firefox granted access to all
+     * websites when the add-on was installed: nothing is clicked or allowed), sets the pause of
+     * the automatic check to one second (the shortest) so that scenarios do not wait for three,
+     * and seeds the site choices.
      *
      * Page mode is off on every site until the user turns a site on (SPEC section 4.11), so the
-     * scenarios that are not about the prompt seed the test site as `on` (`sites`, host to `on` or
+     * scenarios that are not about the icon seed the test site as `on` (`sites`, host to `on` or
      * `off`; `{}` leaves every site to be asked). That is a test-only write of the setting.
      */
     async turnOnPageMode({ delay = 1, sites = { [TEST_HOST]: "on" } } = {}) {
       await driver.wait(until.elementLocated(By.id("page-mode")), PAGE_TIMEOUT_MS);
-      await ctx.click("page-mode");
-      await driver.wait(
-        async () =>
-          (await driver.executeAsyncScript(
-            `const done = arguments[arguments.length - 1];
-             browser.scripting.getRegisteredContentScripts({ ids: ["page-mode"] }).then(
-               (found) => done(found.length), () => done(-1));`,
-          )) === 1,
-        PAGE_TIMEOUT_MS,
-        `the page-mode content script was never registered. Options page: ${await driver
-          .executeScript(
-            `return JSON.stringify({ checked: document.getElementById("page-mode").checked,
-               error: document.getElementById("page-mode-error").textContent,
-               banner: document.getElementById("options-error").textContent })`,
-          )
-          .catch(() => "?")}`,
-      );
-      if (await driver.findElement(By.id("page-mode-error")).isDisplayed()) {
-        throw new Error(`page mode failed: ${await textOf(driver, "page-mode-error")}`);
+      await ctx.expectChecked("page-mode");
+      if (!(await ctx.hasAllUrlsPermission())) {
+        throw new Error("the installation did not grant access to all websites");
       }
-      // The delay is used by page mode, so its field is enabled now.
+      // The delay is used by page mode, so its field is enabled.
       await ctx.fill("auto-check-delay", String(delay), Key.TAB);
       await ctx.seedSites(sites);
+    },
+    /** The stored value of a setting, or undefined when it has none (the default applies). Run on an extension page. */
+    async readSetting(key) {
+      return driver
+        .executeAsyncScript(
+          `const done = arguments[arguments.length - 1];
+         const open = indexedDB.open("english-tutor");
+         open.onsuccess = () => {
+           const get = open.result.transaction("settings").objectStore("settings").get(arguments[0]);
+           get.onsuccess = () => { open.result.close(); done(get.result ? { value: get.result.value } : { value: undefined }); };
+           get.onerror = () => done({ error: true });
+         };`,
+          key,
+        )
+        .then((found) => {
+          if (found.error === true) throw new Error(`could not read the setting ${key}`);
+          return found.value;
+        });
+    },
+    /** Waits until the stored setting has this value. Run on an extension page. */
+    async waitForSetting(key, value) {
+      await driver.wait(
+        async () => canonicalJson(await ctx.readSetting(key)) === canonicalJson(value),
+        PAGE_TIMEOUT_MS,
+        `the setting ${key} never became ${JSON.stringify(value)}`,
+      );
     },
     /** Test only: stores the site choices (`page_mode_sites`) from the options page. */
     async seedSites(sites) {
@@ -5560,7 +5909,7 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       }
     },
     /** Fails if a pixel of the box has the colour of an underline, light or dark (the page has none of them). */
-    async expectNoUnderlines(id = "box") {
+    async expectNoUnderlines(id = "box", { ignoreBadge = false } = {}) {
       const rect = await driver.executeScript(
         `const r = document.getElementById(arguments[0]).getBoundingClientRect();
          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`,
@@ -5569,6 +5918,8 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
       for (let y = Math.round(rect.top); y < Math.round(rect.bottom); y++) {
         for (let x = Math.round(rect.left); x < Math.round(rect.right); x++) {
+          // The badge, in the box's bottom right corner, has the colours of an underline too.
+          if (ignoreBadge && x > rect.right - 34 && y > rect.bottom - 34) continue;
           const pixel = png.pixel(x, y);
           for (const palette of Object.values(UNDERLINE_PALETTE)) {
             for (const color of Object.values(palette)) {
@@ -6080,17 +6431,41 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         "page mode never removed its overlay",
       );
     },
-    /** Waits until the background script has this many registered content scripts. Needs an extension page. */
-    async waitForRegisteredScripts(count) {
-      await driver.wait(
-        async () =>
-          (await driver.executeAsyncScript(
-            `const done = arguments[arguments.length - 1];
-             browser.scripting.getRegisteredContentScripts().then((f) => done(f.length), () => done(-1));`,
-          )) === count,
-        PAGE_TIMEOUT_MS,
-        `there were never ${count} registered content scripts`,
+    /** The content scripts registered with `scripting`: none, as the manifest declares the script. */
+    async registeredScripts() {
+      return driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.scripting.getRegisteredContentScripts().then((f) => done(f.length), () => done(-1));`,
       );
+    },
+    /**
+     * The user withdraws the access to all websites (the extensions panel, about:addons): the
+     * extension removes its own `host_permissions`, which Firefox allows. Run on an extension page.
+     */
+    async withdrawAccess() {
+      const removed = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.permissions.remove({ origins: ["<all_urls>", "http://*/*", "https://*/*"] }).then(done, (e) => done("failed: " + e));`,
+      );
+      if (removed !== true) throw new Error(`the access could not be withdrawn: ${removed}`);
+    },
+    /**
+     * Gives the extension access to one site only (what the user does in the extensions panel for
+     * a site), through the browser's own permission store. Run from anywhere: it uses the chrome
+     * context.
+     */
+    async grantSiteOnly(pattern) {
+      const done = await ctx.chrome(
+        `const { ExtensionPermissions } = ChromeUtils.importESModule(
+           "resource://gre/modules/ExtensionPermissions.sys.mjs");
+         const policy = WebExtensionPolicy.getByID(arguments[0]);
+         await ExtensionPermissions.add(arguments[0], { permissions: [], origins: [arguments[1]] }, policy.extension);
+         return "added";`,
+        GECKO_ID,
+        pattern,
+      );
+      if (done !== "added")
+        throw new Error(`could not give access to ${pattern}: ${JSON.stringify(done)}`);
     },
     async hasAllUrlsPermission() {
       return driver.executeAsyncScript(
@@ -6251,7 +6626,9 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       await driver.executeAsyncScript(
         `const done = arguments[arguments.length - 1];
          browser.storage.session.clear()
-           .then(() => browser.runtime.sendMessage({ type: "page-mode-apply" }))
+           .then(() => browser.tabs.query({}))
+           .then((tabs) => Promise.all(tabs.map((t) =>
+             browser.tabs.sendMessage(t.id, { type: "settings-changed" }).catch(() => undefined))))
            .then(() => done());`,
       );
     },
