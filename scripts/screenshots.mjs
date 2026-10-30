@@ -888,7 +888,7 @@ const SCENARIOS = {
       // and the issues outside it are the very ones as before.
       await ctx.expectUnderlined(["I seen", "He go", "he make", "I very like", "boring"]);
       const idsAfter = await ctx.rowIds();
-      const same = idsAfter.map((id, i) => (idsBefore.includes(id) ? "same" : "new"));
+      const same = idsAfter.map((id) => (idsBefore.includes(id) ? "same" : "new"));
       if (JSON.stringify(same) !== JSON.stringify(["same", "new", "new", "same", "same"])) {
         throw new Error(
           `the rows after the selection check are ${same.join(",")}, ids ${idsBefore} -> ${idsAfter}`,
