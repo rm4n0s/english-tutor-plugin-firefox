@@ -1,6 +1,7 @@
 /*
  * The page-mode frame (SPEC section 4.11). The content script puts this page in an <iframe> over
- * the web page, as a card just below an underline; the issues dialog of step 16 goes here too.
+ * the web page, as a card just below an underline (the popover) or as a panel next to a text box
+ * (the issues dialog). Only one of them is shown at a time.
  */
 html,
 body {
@@ -55,4 +56,87 @@ body {
 .popover-error {
   margin: 0;
   color: var(--danger);
+}
+
+/*
+ * The issues dialog: the iframe is about 440 by 520 CSS pixels and the dialog fills it. The issues
+ * list is on top, the explanation below it, and the buttons at the bottom.
+ */
+.dialog {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100vh;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+  overflow: hidden;
+}
+
+.dialog-issues {
+  display: flex;
+  flex: 1 1 45%;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-issues .issues {
+  font-size: 13px;
+}
+
+.dialog-issues .issues-header {
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.dialog-explanation {
+  display: flex;
+  flex: 1 1 55%;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.dialog-explanation .empty {
+  padding: 0;
+}
+
+.dialog-error {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+  color: var(--danger);
+}
+
+.dialog-footer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.dialog-status {
+  color: var(--fg-muted);
+}
+
+.dialog-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dialog-buttons #dialog-close {
+  margin-left: auto;
 }

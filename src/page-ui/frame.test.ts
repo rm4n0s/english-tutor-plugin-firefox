@@ -7,14 +7,21 @@ import type { FakePort } from "../platform/testing/fake-page-port";
 import { FakeFrameClaim } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { PageFrame, type FrameServices } from "./frame";
+import type { DialogHost } from "./dialog";
 import type { PopoverHost } from "./popover";
-import { FakeRunner, MODEL, settle } from "./testing";
+import { FakeRecorder, FakeRunner, MODEL, settle } from "./testing";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 const TEXT = "Yesterday I seen him. He go home.";
 
-function setup(options: { services?: Promise<FrameServices>; popover?: PopoverHost } = {}) {
+function setup(
+  options: {
+    services?: Promise<FrameServices>;
+    popover?: PopoverHost;
+    dialog?: DialogHost;
+  } = {},
+) {
   const bus = new FakePortBus();
   const runner = new FakeRunner();
   const scheduler = new FakeScheduler();
@@ -24,7 +31,9 @@ function setup(options: { services?: Promise<FrameServices>; popover?: PopoverHo
     scheduler,
     runner,
     settings: { delaySeconds: 3, getModel: () => MODEL, load },
+    recorder: new FakeRecorder(),
     ...(options.popover === undefined ? {} : { popover: options.popover }),
+    ...(options.dialog === undefined ? {} : { dialog: options.dialog }),
   };
   const logged: string[] = [];
   const record = (message: string) => {
@@ -283,6 +292,7 @@ describe("PageFrame: while the store opens", () => {
       scheduler: new FakeScheduler(),
       runner,
       settings: { delaySeconds: 3, getModel: () => MODEL, load: () => Promise.resolve() },
+      recorder: new FakeRecorder(),
     });
     await t.frame.idle();
     expect(t.frame.session(1)?.text).toBe("one two three");
@@ -365,5 +375,113 @@ describe("PageFrame: the explanation popover", () => {
     second.port.post({ type: "popover-open", box: 1, issue: 1, maxHeight: 300 });
     await without.frame.idle();
     expect(second.received.at(-1)).toEqual({ type: "popover-closed", box: 1 });
+  });
+});
+
+describe("PageFrame: the issues dialog", () => {
+  /** A dialog that records what the frame asks of it. */
+  function fakeDialog() {
+    const calls: unknown[] = [];
+    const host: DialogHost = {
+      open: (session, issue, send) => {
+        calls.push(["open", session.id, issue]);
+        send({ type: "dialog-ready", box: session.id });
+      },
+      close: (box) => {
+        calls.push(["close", box]);
+      },
+    };
+    return { host, calls };
+  }
+
+  it("opens the dialog for the box's session, and what the dialog sends goes to the content script", async () => {
+    const dialog = fakeDialog();
+    const t = setup({ dialog: dialog.host });
+    t.runner.answer(resultOf([placed(10, 16)]));
+    const { port, received } = await t.connect();
+    port.post(focus());
+    await t.frame.idle();
+    await settle();
+    port.post({ type: "dialog-open", box: 1, issue: 1 });
+    await t.frame.idle();
+    expect(dialog.calls).toEqual([["open", 1, 1]]);
+    expect(received.at(-1)).toEqual({ type: "dialog-ready", box: 1 });
+  });
+
+  it("reads the settings again first: an LLM may have been set up since the box was focused", async () => {
+    const dialog = fakeDialog();
+    const t = setup({ dialog: dialog.host });
+    const { port } = await t.connect();
+    port.post(focus());
+    await t.frame.idle();
+    const before = t.load.mock.calls.length;
+    port.post({ type: "dialog-open", box: 1, issue: null });
+    await t.frame.idle();
+    expect(t.load.mock.calls.length).toBe(before + 1);
+  });
+
+  it("closes the popover when it opens the dialog, and the dialog when it opens the popover", async () => {
+    const dialog = fakeDialog();
+    const popoverCalls: unknown[] = [];
+    const popover: PopoverHost = {
+      open: (session, issue, maxHeight) => {
+        popoverCalls.push(["open", session.id, issue, maxHeight]);
+      },
+      close: (box) => {
+        popoverCalls.push(["close", box]);
+      },
+    };
+    const t = setup({ dialog: dialog.host, popover });
+    const { port } = await t.connect();
+    port.post(focus());
+    port.post({ type: "dialog-open", box: 1, issue: null });
+    await t.frame.idle();
+    expect(popoverCalls).toEqual([["close", undefined]]);
+    port.post({ type: "popover-open", box: 1, issue: 1, maxHeight: 300 });
+    await t.frame.idle();
+    expect(dialog.calls).toEqual([
+      ["open", 1, null],
+      ["close", undefined],
+    ]);
+    expect(popoverCalls.at(-1)).toEqual(["open", 1, 1, 300]);
+  });
+
+  it("closes the dialog for the box when the content script says so", async () => {
+    const dialog = fakeDialog();
+    const t = setup({ dialog: dialog.host });
+    const { port } = await t.connect();
+    port.post(focus());
+    port.post({ type: "dialog-close", box: 1 });
+    await t.frame.idle();
+    expect(dialog.calls).toEqual([["close", 1]]);
+  });
+
+  it("closes the dialog of a box that leaves the page, and when the page goes away", async () => {
+    const dialog = fakeDialog();
+    const t = setup({ dialog: dialog.host });
+    const { port } = await t.connect();
+    port.post(focus());
+    port.post({ type: "forget", box: 1 });
+    await t.frame.idle();
+    expect(dialog.calls).toEqual([["close", 1]]);
+    port.disconnect();
+    expect(dialog.calls.at(-1)).toEqual(["close", undefined]);
+  });
+
+  it("answers that the dialog is closed for a box it does not know, or with no dialog to draw", async () => {
+    const dialog = fakeDialog();
+    const withDialog = setup({ dialog: dialog.host });
+    const first = await withDialog.connect();
+    first.port.post({ type: "dialog-open", box: 9, issue: null });
+    await withDialog.frame.idle();
+    expect(first.received.at(-1)).toEqual({ type: "dialog-closed", box: 9 });
+    expect(dialog.calls).toEqual([]);
+
+    const without = setup();
+    const second = await without.connect();
+    second.port.post(focus());
+    second.port.post({ type: "dialog-open", box: 1, issue: null });
+    await without.frame.idle();
+    expect(second.received.at(-1)).toEqual({ type: "dialog-closed", box: 1 });
   });
 });

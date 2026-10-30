@@ -6,7 +6,6 @@ import {
   IssueCounts,
   SelectedIssueHeader,
   type CountSource,
-  type ExplanationRunner,
 } from "../core/issues";
 import type { Logger } from "../core/log";
 import type { FrameMessage } from "../core/page-mode/protocol";
@@ -15,6 +14,7 @@ import { el, setText } from "../ui/dom";
 import { ExplanationPanel } from "../ui/explanation-panel";
 import { LinkConfirm } from "../ui/link-confirm";
 import type { BoxSession } from "./box-session";
+import type { BoxExplainers } from "./explainers";
 
 /** What the popover needs of the statistics: `Stats` fits. */
 export interface PopoverStats extends CountSource {
@@ -45,7 +45,9 @@ export interface PopoverDeps {
   scheduler: Scheduler;
   stats: PopoverStats;
   /** One explainer per text box: its cache lives as long as the check result does. */
-  newExplainer(): ExplanationRunner;
+  explainers: Pick<BoxExplainers, "of">;
+  /** The confirmation before a link opens; the popover and the dialog share one. */
+  linkConfirm?: LinkConfirm;
   /** The LLM to explain with, read at the start of each request; undefined when none is set up. */
   getModel(): AnalysisModel | undefined;
   links: LinkOpener;
@@ -88,10 +90,6 @@ export class Popover implements PopoverHost {
   private readonly body: HTMLElement;
   private readonly allIssues: HTMLButtonElement;
   private readonly linkConfirm: LinkConfirm;
-  private readonly explainers = new WeakMap<
-    BoxSession,
-    { explainer: ExplanationRunner; checkId: number }
-  >();
   private current: Current | undefined;
   private panel: ExplanationPanel | undefined;
   private resizeObserver: ResizeObserver | undefined;
@@ -113,7 +111,7 @@ export class Popover implements PopoverHost {
     this.card.setAttribute("aria-label", "Explanation");
     this.card.hidden = true;
     deps.root.append(this.card);
-    this.linkConfirm = new LinkConfirm(doc, deps.root);
+    this.linkConfirm = deps.linkConfirm ?? new LinkConfirm(doc, deps.root);
 
     // A press on a button must not take the focus from the text box (SPEC section 4.11): the
     // click still happens. A press in the explanation's text may focus it, as the user asked.
@@ -187,18 +185,9 @@ export class Popover implements PopoverHost {
       this.deps.log.error("the popover could not read the mistake counts", { err });
     });
     const header = new SelectedIssueHeader(state, counts, panel);
-    let record = this.explainers.get(session);
-    if (record === undefined) {
-      record = { explainer: this.deps.newExplainer(), checkId: state.checkId };
-      this.explainers.set(session, record);
-    } else if (record.checkId !== state.checkId) {
-      // A new check result: the cached explanations are for issues that are gone.
-      record.explainer.reset();
-      record.checkId = state.checkId;
-    }
     const controller = new ExplanationController({
       state,
-      explainer: record.explainer,
+      explainer: this.deps.explainers.of(session),
       view: panel,
       getModel: () => this.deps.getModel(),
       getText: () => session.text,

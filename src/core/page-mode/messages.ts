@@ -18,6 +18,8 @@ export const PAGE_MODE_CONFIG = "page-mode-config";
 export const PAGE_MODE_SITE = "page-mode-site";
 /** The content script hands the text of a text box to a new tutor tab (the blocked badge). */
 export const PAGE_MODE_OPEN_TUTOR = "page-mode-open-tutor";
+/** The page-mode frame asks the background script to open the options page (it has no `runtime.openOptionsPage`). */
+export const PAGE_MODE_OPEN_OPTIONS = "page-mode-open-options";
 /** The background script tells the open pages that page mode was turned off: remove everything. */
 export const PAGE_MODE_OFF = "page-mode-off";
 /** The background script tells the open pages that a setting changed: ask again. */

@@ -7,8 +7,9 @@ import type { SiteConfig } from "../core/page-mode/messages";
 import { frameIdOfFragment, type ContentMessage } from "../core/page-mode/protocol";
 import { FakeClock, FakeScheduler } from "../core/testing/fake-clock";
 import { PageFrame } from "../page-ui/frame";
+import type { DialogHost } from "../page-ui/dialog";
 import type { PopoverHost } from "../page-ui/popover";
-import { FakeRunner, MODEL, settle } from "../page-ui/testing";
+import { FakeRecorder, FakeRunner, MODEL, settle } from "../page-ui/testing";
 import { FakeFrameClaim, FakePageModeRuntime } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { OPEN_IN_TUTOR_LABEL } from "./blocked-card";
@@ -45,6 +46,7 @@ const typeInto = (box: HTMLTextAreaElement | HTMLInputElement, value: string) =>
 
 interface Options {
   popover?: PopoverHost;
+  dialog?: DialogHost;
   html?: string;
   config?: SiteConfig;
   frame?: "ok" | "never";
@@ -100,7 +102,9 @@ async function setup(options: Options = {}) {
           scheduler,
           runner,
           settings: { delaySeconds: 3, getModel: () => MODEL, load: () => Promise.resolve() },
+          recorder: new FakeRecorder(),
           ...(options.popover === undefined ? {} : { popover: options.popover }),
+          ...(options.dialog === undefined ? {} : { dialog: options.dialog }),
         }),
         log,
       });
@@ -497,19 +501,6 @@ describe("PageModeContent: the badge", () => {
     // A new event after the frame asks for the next one.
     window.dispatchEvent(new Event("scroll"));
     expect(queue).toHaveLength(2);
-  });
-
-  it("does not react to a click while the frame works: the dialog of step 15 is behind the seam", async () => {
-    const t = await setup();
-    t.runner.answer(resultOf(ISSUES));
-    await t.focusAndLoad();
-    const clicked = vi.fn();
-    t.content.onBadgeClick = clicked;
-    t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
-    expect(clicked).toHaveBeenCalledTimes(1);
-    expect(clicked).toHaveBeenCalledWith({ box: t.content.boxes[0] });
-    expect(t.content.boxes[0]?.id).toBe(1);
-    expect(t.runtime.opened).toEqual([]);
   });
 });
 
@@ -1330,6 +1321,23 @@ class FakePopover implements PopoverHost {
   }
 }
 
+/** The frame's dialog, as a fake: it answers `dialog-ready` and records what it was asked. */
+class FakeDialog implements DialogHost {
+  readonly opened: { box: number; issue: number | null }[] = [];
+  readonly closed: (number | undefined)[] = [];
+  send: ((message: unknown) => void) | undefined;
+
+  open(session: { id: number }, issue: number | null, send: (message: never) => void): void {
+    this.opened.push({ box: session.id, issue });
+    this.send = send as (message: unknown) => void;
+    send({ type: "dialog-ready", box: session.id } as never);
+  }
+
+  close(box?: number): void {
+    this.closed.push(box);
+  }
+}
+
 /** Where each issue's underline is: issue `n` is the rectangle 60 * n + 100 .. 60 * n + 150, y 110..130. */
 function layOutUnderlines(): void {
   for (const name of ["clientWidth", "clientHeight"] as const) {
@@ -1686,18 +1694,6 @@ describe("PageModeContent: underlines and the explanation popover", () => {
     });
   });
 
-  it("opens the issues dialog's seam when All issues is pressed in the card", async () => {
-    const t = await checked();
-    const pressed = vi.fn<(click: { box: { id: number } }) => void>();
-    t.content.onAllIssues = pressed;
-    await t.clickIssue(1);
-    t.popover.send?.({ type: "all-issues", box: 1 });
-    expect(pressed).toHaveBeenCalledTimes(1);
-    expect(pressed.mock.calls[0]?.[0].box.id).toBe(1);
-    // Nothing else happens in this step: the card stays.
-    expect(t.content.popover?.issue).toBe(1);
-  });
-
   it("closes the card and draws nothing when page mode is turned off", async () => {
     const t = await checked();
     await t.clickIssue(1);
@@ -1728,5 +1724,243 @@ describe("PageModeContent: underlines and the explanation popover", () => {
     mouse("mouseup", t.box, 240, 120);
     await t.getFrame()?.idle();
     expect(popover.opened.map((o) => o.issue)).toEqual([2]);
+  });
+});
+
+describe("PageModeContent: the issues dialog", () => {
+  afterEach(() => {
+    for (const name of ["clientWidth", "clientHeight"] as const) {
+      Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  });
+
+  async function checked(extra: Options = {}) {
+    const popover = new FakePopover();
+    const dialog = new FakeDialog();
+    const t = await setup({ popover, dialog, ...extra });
+    layOutUnderlines();
+    t.runner.answer(resultOf(ISSUES));
+    await t.focusAndLoad();
+    t.clearSent();
+    const spans = () => [...(t.layer()?.querySelectorAll<HTMLElement>("span.issue") ?? [])];
+    const view = () => {
+      const frame = t.iframe();
+      return frame === null
+        ? undefined
+        : {
+            display: frame.style.getPropertyValue("display"),
+            visibility: frame.style.getPropertyValue("visibility"),
+            left: frame.style.getPropertyValue("left"),
+            top: frame.style.getPropertyValue("top"),
+            width: frame.style.getPropertyValue("width"),
+            height: frame.style.getPropertyValue("height"),
+          };
+    };
+    const clickBadge = async () => {
+      t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
+      await t.getFrame()?.idle();
+      await settle();
+    };
+    const clickIssue = async (n: number) => {
+      mouse("mouseup", t.box, 60 * n + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+    };
+    return { ...t, popover, dialog, spans, view, clickBadge, clickIssue };
+  }
+
+  it("opens when the badge is clicked: the frame is asked, and shown next to the box once it has drawn the dialog", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    expect(t.sent()).toEqual([{ type: "dialog-open", box: 1, issue: null }]);
+    expect(t.dialog.opened).toEqual([{ box: 1, issue: null }]);
+    // The box is at x 100..400: there is room on its right for a panel of 440 by 520.
+    expect(t.view()).toEqual({
+      display: "block",
+      visibility: "visible",
+      left: "408px",
+      top: "100px",
+      width: "440px",
+      height: "520px",
+    });
+    expect(t.content.dialog?.box.id).toBe(1);
+    expect(t.runtime.opened).toEqual([]);
+  });
+
+  it("stays hidden until the frame has drawn the dialog", async () => {
+    const t = await checked({ dialog: { open: () => undefined, close: () => undefined } });
+    await t.clickBadge();
+    expect(t.view()?.visibility).toBe("hidden");
+    expect(t.view()?.display).toBe("block");
+  });
+
+  it("closes when the badge is clicked again, and tells the frame", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    t.clearSent();
+    await t.clickBadge();
+    expect(t.sent()).toEqual([{ type: "dialog-close", box: 1 }]);
+    expect(t.view()?.display).toBe("none");
+    expect(t.content.dialog).toBeUndefined();
+  });
+
+  it("opens even when there is no LLM or the check failed: the dialog says what is wrong", async () => {
+    const t = await setup({ dialog: new FakeDialog(), popover: new FakePopover() });
+    t.runner.fail(new Error("down"));
+    await t.focusAndLoad();
+    expect(t.kind()).toBe("warning");
+    t.clearSent();
+    t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
+    expect(t.sent()).toEqual([{ type: "dialog-open", box: 1, issue: null }]);
+  });
+
+  it("selects an issue in the box when the frame says so: it has the selected background and is scrolled to", async () => {
+    const t = await checked();
+    const reveal = vi.spyOn(t.content.underlinesOf(t.content.boxes[0] as never) as never, "reveal");
+    await t.clickBadge();
+    t.dialog.send?.({ type: "dialog-select", box: 1, issue: 2 });
+    expect(t.content.dialog?.issue).toBe(2);
+    expect(t.spans()[1]?.style.getPropertyValue("background-color")).toBe("rgba(213, 94, 0, 0.2)");
+    expect(t.spans()[0]?.style.getPropertyValue("background-color")).toBe("");
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(reveal).toHaveBeenCalledWith(2);
+    // The same issue again scrolls nothing; a selection of none takes the background away.
+    t.dialog.send?.({ type: "dialog-select", box: 1, issue: 2 });
+    expect(reveal).toHaveBeenCalledTimes(1);
+    t.dialog.send?.({ type: "dialog-select", box: 1, issue: null });
+    expect(t.spans()[1]?.style.getPropertyValue("background-color")).toBe("");
+    expect(reveal).toHaveBeenCalledTimes(1);
+    // Nothing is ever sent to move the caret or the focus of the box.
+    expect(t.sent().every((m) => m.type === "dialog-open")).toBe(true);
+  });
+
+  it("closes when the frame says so (Close, Escape in the dialog), and gives the box its focus back", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    // The focus is in the dialog: the page's active element is our host.
+    vi.spyOn(document, "activeElement", "get").mockReturnValue(t.host()!);
+    const focus = vi.spyOn(t.box, "focus");
+    t.dialog.send?.({ type: "dialog-closed", box: 1 });
+    expect(t.content.dialog).toBeUndefined();
+    expect(t.view()?.display).toBe("none");
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    // It did not echo the close to the frame.
+    expect(t.dialog.closed).toEqual([]);
+  });
+
+  it("closes on Escape anywhere in the page, and the underline loses its selected background", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    t.dialog.send?.({ type: "dialog-select", box: 1, issue: 1 });
+    t.clearSent();
+    key("keydown", "Escape");
+    expect(t.sent()).toEqual([{ type: "dialog-close", box: 1 }]);
+    expect(t.content.dialog).toBeUndefined();
+    expect(t.spans()[0]?.style.getPropertyValue("background-color")).toBe("");
+  });
+
+  it("ignores an Escape that the page made up", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(t.content.dialog?.box.id).toBe(1);
+  });
+
+  it("stays open while the user types in the box, and follows its issues", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    typeInto(t.box, `Oh! ${TEXT}`);
+    expect(t.content.dialog?.box.id).toBe(1);
+    expect(t.view()?.display).toBe("block");
+  });
+
+  it("follows its box while the page moves", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      () => ({ left: 100, top: 300, right: 400, bottom: 450, width: 300, height: 150 }) as DOMRect,
+    );
+    t.content.reposition();
+    // Moved up to stay inside the window (768 high, 8 px margin): 768 - 520 - 8.
+    expect(t.view()?.top).toBe("240px");
+  });
+
+  describe("and the popover", () => {
+    it("opens the dialog for All issues, with the issue the card showed selected, and closes the card first", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      t.clearSent();
+      t.popover.send?.({ type: "all-issues", box: 1 });
+      expect(t.sent()).toEqual([
+        { type: "popover-close", box: 1 },
+        { type: "dialog-open", box: 1, issue: 1 },
+      ]);
+      expect(t.content.popover).toBeUndefined();
+      expect(t.content.dialog?.box.id).toBe(1);
+      expect(t.view()?.width).toBe("440px");
+    });
+
+    it("closes the dialog when a click in an underline opens the popover", async () => {
+      const t = await checked();
+      await t.clickBadge();
+      t.clearSent();
+      await t.clickIssue(2);
+      expect(t.sent()).toEqual([
+        { type: "dialog-close", box: 1 },
+        { type: "popover-open", box: 1, issue: 2, maxHeight: 340 },
+      ]);
+      expect(t.content.dialog).toBeUndefined();
+      expect(t.content.popover?.issue).toBe(2);
+      expect(t.view()?.width).toBe("360px");
+    });
+
+    it("closes the popover when the badge opens the dialog", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      t.clearSent();
+      await t.clickBadge();
+      expect(t.sent()).toEqual([
+        { type: "popover-close", box: 1 },
+        { type: "dialog-open", box: 1, issue: null },
+      ]);
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("keeps the dialog when a click is not in an underline", async () => {
+      const t = await checked();
+      await t.clickBadge();
+      mouse("mouseup", t.box, 380, 240);
+      await t.getFrame()?.idle();
+      expect(t.content.dialog?.box.id).toBe(1);
+      expect(t.content.popover).toBeUndefined();
+    });
+  });
+
+  it("closes when the box leaves the page", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    t.box.remove();
+    t.content.reposition();
+    expect(t.content.dialog).toBeUndefined();
+    expect(t.view()?.display).toBe("none");
+  });
+
+  it("is gone when page mode is turned off", async () => {
+    const t = await checked();
+    await t.clickBadge();
+    t.runtime.broadcast("page-mode-off");
+    expect(t.host()).toBeUndefined();
+    expect(t.content.dialog).toBeUndefined();
+  });
+
+  it("does not open for a box whose frame is blocked: the badge offers only Open in English Tutor", async () => {
+    const t = await setup({ frame: "never" });
+    focusIn(t.box);
+    await settle();
+    t.scheduler.advance(FRAME_TIMEOUT_MS);
+    t.clearSent();
+    t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
+    expect(t.content.dialog).toBeUndefined();
+    expect(t.sent()).toEqual([]);
   });
 });

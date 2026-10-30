@@ -25,6 +25,7 @@ export class FrameSettings {
   private config: LLMConfig | undefined;
   private model: AnalysisModel | undefined;
   private loads = 0;
+  private readonly listeners = new Set<() => void>();
   private readonly stop: () => void;
 
   constructor(deps: FrameSettingsDeps) {
@@ -51,6 +52,15 @@ export class FrameSettings {
     const config = configs.find((c) => c.id === id);
     if (config !== this.config) this.model = undefined;
     this.config = config;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  /** Called after each read of the settings (the dialog follows the LLM it has). Returns the remover. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   get delaySeconds(): number {
@@ -68,6 +78,7 @@ export class FrameSettings {
   }
 
   destroy(): void {
+    this.listeners.clear();
     this.stop();
   }
 }

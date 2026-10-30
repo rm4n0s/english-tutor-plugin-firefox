@@ -1,13 +1,16 @@
 import { countWords, type AnalysisModel } from "../core/analysis";
 import type { Clock, Scheduler } from "../core/clock";
+import { AppError } from "../core/errors";
 import type { Logger } from "../core/log";
 import {
   AutoCheck,
   CheckController,
   IssueState,
   TrackedText,
+  type CheckOutcome,
   type CheckRunner,
 } from "../core/issues";
+import type { MistakeInput } from "../core/store";
 import {
   applyEditMessage,
   MAX_WORDS,
@@ -15,6 +18,22 @@ import {
   type BoxStatus,
   type FrameMessage,
 } from "../core/page-mode/protocol";
+
+/** What a manual check records (SPEC section 5.7): `Stats` and the channel fit. */
+export interface MistakeRecorder {
+  /** Records the mistakes of a manual check under `source`; resolves with how many were new. */
+  record(source: string, llmName: string, mistakes: MistakeInput[]): Promise<{ inserted: number }>;
+  /** Announces `stats-changed` to the other pages. */
+  changed(): void;
+}
+
+/** How a manual check ended, for the dialog: only what the box's own status does not say. */
+export interface ManualEnd {
+  /** The mistakes could not be recorded (`ErrorEventSaveFailed`); the issues are shown anyway. */
+  recordError?: AppError;
+  /** The text is over the limit: nothing was sent. */
+  tooLong?: boolean;
+}
 
 export const NO_LLM_MESSAGE = "No LLM is configured. Add one in Preferences to start checking.";
 export const TOO_LONG_MESSAGE = "This text has more than 10,000 words, so it is not checked.";
@@ -28,6 +47,8 @@ export interface BoxSessionDeps {
   log: Logger;
   /** Sends a message to the content script. */
   send(message: FrameMessage): void;
+  /** Records the mistakes of the dialog's manual checks. Automatic checks are never recorded. */
+  recorder: MistakeRecorder;
 }
 
 /** What the frame holds for one text box of the page (SPEC section 4.11). */
@@ -71,7 +92,7 @@ export class BoxSession {
       busy: () => this.state.pending !== null,
       canCheck: () => countWords(this.tracked.text) >= MIN_WORDS,
       start: () => {
-        void this.run();
+        void this.run(false);
       },
     });
     // Whatever changes the state, the content script hears about it once per turn.
@@ -110,7 +131,7 @@ export class BoxSession {
       this.sendState();
       return;
     }
-    if (countWords(this.tracked.text) >= MIN_WORDS) void this.run();
+    if (countWords(this.tracked.text) >= MIN_WORDS) void this.run(false);
     else this.sendState();
   }
 
@@ -162,18 +183,22 @@ export class BoxSession {
     this.deps.send({ type: "resync", box: this.id });
   }
 
-  /** An automatic check of the text now (never recorded, SPEC section 4.11). */
-  private async run(): Promise<void> {
-    const words = countWords(this.tracked.text);
-    if (words > MAX_WORDS) {
-      this.problem = { status: "too-long", message: TOO_LONG_MESSAGE };
-      this.sendState();
-      return;
-    }
-    if (words < MIN_WORDS) return;
-    this.problem = undefined;
-    const outcome = await this.controller.check({ manual: false });
-    if (this.disposed) return;
+  /**
+   * The dialog's Check (SPEC section 4.11): a manual check of the whole text. It replaces a check
+   * that runs (an automatic one), and records the placed issues of its result under the box's
+   * source (SPEC section 5.7). Resolves when the check and its recording are over.
+   */
+  async checkManually(): Promise<ManualEnd> {
+    return this.run(true);
+  }
+
+  /** Cancels the running check, whichever kind (the dialog's Cancel). */
+  cancelCheck(): void {
+    this.controller.cancel();
+  }
+
+  /** The state a check that ended with `outcome` leaves the badge in. */
+  private settle(outcome: CheckOutcome): void {
     switch (outcome.kind) {
       case "failed":
         this.problem = { status: "failed", message: outcome.error.message };
@@ -187,7 +212,61 @@ export class BoxSession {
       case "busy":
         break;
     }
+  }
+
+  /** A check of the text now. An automatic one is never recorded (SPEC section 4.11). */
+  private async run(manual: boolean): Promise<ManualEnd> {
+    const words = countWords(this.tracked.text);
+    if (words > MAX_WORDS) {
+      this.problem = { status: "too-long", message: TOO_LONG_MESSAGE };
+      this.sendState();
+      return { tooLong: true };
+    }
+    if (words < MIN_WORDS && !manual) return {};
+    this.problem = undefined;
+    // The LLM's name as it is when the check starts, as the tutor page does.
+    let llmName = "";
+    try {
+      llmName = this.deps.settings.getModel()?.name ?? "";
+    } catch {
+      // The check reports a model that cannot be made.
+    }
+    const outcome = await this.controller.check({ manual });
+    if (this.disposed) return {};
+    this.settle(outcome);
+    let end: ManualEnd = {};
+    if (manual && outcome.kind === "finished") {
+      end = await this.record(outcome, llmName);
+      if (this.isGone()) return end;
+    }
     this.sendState();
+    return end;
+  }
+
+  private async record(
+    outcome: Extract<CheckOutcome, { kind: "finished" }>,
+    llmName: string,
+  ): Promise<ManualEnd> {
+    const mistakes = outcome.result.placed.map<MistakeInput>((p) => ({
+      error_type: p.issue.type.id,
+      category: p.issue.type.category,
+      snippet: outcome.text.slice(p.start, p.end),
+      fingerprint: p.fingerprint,
+    }));
+    try {
+      const recorded = await this.deps.recorder.record(this.source, llmName, mistakes);
+      if (recorded.inserted > 0) this.deps.recorder.changed();
+      return {};
+    } catch (err) {
+      const recordError = AppError.wrap("ErrorEventSaveFailed", err).via("BoxSession.record");
+      this.deps.log.error("the mistakes could not be recorded", { err: recordError });
+      return { recordError };
+    }
+  }
+
+  /** Whether the session was disposed (read again after an `await`, which narrowing does not follow). */
+  private isGone(): boolean {
+    return this.disposed;
   }
 
   private queueState(): void {

@@ -978,6 +978,28 @@ describe("page mode", () => {
     });
   });
 
+  describe("the options link of the issues dialog", () => {
+    it("opens the options page for the frame of a tab", async () => {
+      const s = setup();
+      const reply = await s.messageBus.send(
+        { type: "page-mode-open-options" },
+        { tab: { id: 7, windowId: 4, index: 2 } },
+      );
+      expect(reply.answer).toEqual({ ok: true });
+      expect(s.options.opened).toBe(1);
+    });
+
+    it.each([
+      { name: "a message from no tab", sender: {} },
+      { name: "a sender that is not the extension's own code", sender: { ownExtension: false } },
+    ])("ignores $name", async ({ sender }) => {
+      const s = setup();
+      const reply = await s.messageBus.send({ type: "page-mode-open-options" }, sender);
+      expect(reply.answered).toBe(false);
+      expect(s.options.opened).toBe(0);
+    });
+  });
+
   describe("the ignore set for the page-mode frame", () => {
     const inTab = { tab: { id: 5, windowId: 1, index: 0 } };
     const ask = (s: ReturnType<typeof setup>, message: object, sender: object = inTab) =>

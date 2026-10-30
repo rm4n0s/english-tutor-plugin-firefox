@@ -9,6 +9,7 @@ import type { FrameMessage } from "../core/page-mode/protocol";
 import { FakeScheduler } from "../core/testing/fake-clock";
 import { FakeLinkOpener } from "../platform/testing/fake-link-opener";
 import { BoxSession } from "./box-session";
+import { BoxExplainers } from "./explainers";
 import { Popover } from "./popover";
 import { MODEL, sessionDeps, settle } from "./testing";
 
@@ -75,11 +76,11 @@ async function setup(options: { model?: boolean; stats?: Partial<StatsFake> } = 
     root: document.body,
     scheduler,
     stats,
-    newExplainer: () => {
+    explainers: new BoxExplainers(() => {
       const explainer = new FakeExplainer();
       explainers.push(explainer);
       return explainer;
-    },
+    }),
     getModel: () => (options.model === false ? undefined : MODEL),
     links,
     statsChanged: changed,

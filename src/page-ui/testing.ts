@@ -5,7 +5,8 @@ import { deferred } from "../core/issues/testing/helpers";
 import type { FrameMessage } from "../core/page-mode/protocol";
 import { FakeClock, FakeScheduler } from "../core/testing/fake-clock";
 import { Logger } from "../core/log";
-import type { BoxSessionDeps } from "./box-session";
+import type { MistakeInput } from "../core/store";
+import type { BoxSessionDeps, MistakeRecorder } from "./box-session";
 
 /** A model the fake runner never looks at. */
 export const MODEL = { name: "Fake LLM" } as unknown as AnalysisModel;
@@ -46,6 +47,25 @@ export class FakeRunner implements CheckRunner {
   }
 }
 
+/** A recorder that keeps what a manual check recorded. */
+export class FakeRecorder implements MistakeRecorder {
+  readonly recorded: { source: string; llmName: string; mistakes: MistakeInput[] }[] = [];
+  announced = 0;
+  /** How many of the next batch were new; the whole batch when undefined. */
+  inserted: number | undefined;
+  fails: Error | undefined;
+
+  record(source: string, llmName: string, mistakes: MistakeInput[]): Promise<{ inserted: number }> {
+    if (this.fails !== undefined) return Promise.reject(this.fails);
+    this.recorded.push({ source, llmName, mistakes });
+    return Promise.resolve({ inserted: this.inserted ?? mistakes.length });
+  }
+
+  changed(): void {
+    this.announced++;
+  }
+}
+
 /** Everything a `BoxSession` needs, with the messages it sends collected. */
 export function sessionDeps(overrides: Partial<BoxSessionDeps> = {}) {
   const sent: FrameMessage[] = [];
@@ -63,6 +83,7 @@ export function sessionDeps(overrides: Partial<BoxSessionDeps> = {}) {
   const record = (message: string) => {
     logged.push(message);
   };
+  const recorder = new FakeRecorder();
   const deps: BoxSessionDeps = {
     clock,
     scheduler,
@@ -72,9 +93,10 @@ export function sessionDeps(overrides: Partial<BoxSessionDeps> = {}) {
     send: (message) => {
       sent.push(message);
     },
+    recorder,
     ...overrides,
   };
-  return { deps, sent, clock, scheduler, runner, settings, logged };
+  return { deps, sent, clock, scheduler, runner, settings, logged, recorder };
 }
 
 /** Lets the promises of a check settle. */

@@ -343,3 +343,181 @@ describe("BoxSession: leaving", () => {
     expect(t.scheduler.pending).toBe(0);
   });
 });
+
+describe("BoxSession: the dialog's manual check", () => {
+  /** A box that has been checked once, automatically. */
+  async function checked() {
+    const t = make();
+    t.runner.answer(resultOf(ISSUES));
+    t.session.focus(0, TEXT);
+    await settle();
+    return t;
+  }
+
+  it("records the placed issues under the box's source, with the LLM's name, and announces it", async () => {
+    const t = await checked();
+    // The automatic check recorded nothing.
+    expect(t.recorder.recorded).toEqual([]);
+    expect(t.recorder.announced).toBe(0);
+    t.runner.answer(resultOf(ISSUES));
+    const end = await t.session.checkManually();
+    expect(end).toEqual({});
+    expect(t.recorder.recorded).toEqual([
+      {
+        source: "session:s",
+        llmName: "Fake LLM",
+        mistakes: [
+          {
+            error_type: "verb_form",
+            category: "grammar",
+            snippet: "I seen",
+            fingerprint: "fp-10-16",
+          },
+          {
+            error_type: "subject_verb_agreement",
+            category: "grammar",
+            snippet: "He go",
+            fingerprint: "fp-22-27",
+          },
+        ],
+      },
+    ]);
+    expect(t.recorder.announced).toBe(1);
+    // The issues are the manual check's: they get the counts of SPEC section 4.4.
+    expect(t.session.state.issues.every((issue) => issue.manual)).toBe(true);
+    expect(states(t.sent).at(-1)?.status).toBe("checked");
+  });
+
+  it("announces nothing when every mistake was recorded before", async () => {
+    const t = await checked();
+    t.recorder.inserted = 0;
+    t.runner.answer(resultOf(ISSUES));
+    await t.session.checkManually();
+    expect(t.recorder.recorded).toHaveLength(1);
+    expect(t.recorder.announced).toBe(0);
+  });
+
+  it("checks a text with fewer than 3 words, which the automatic check would not", async () => {
+    const t = make("Hello there");
+    t.runner.answer(resultOf([]));
+    await t.session.checkManually();
+    expect(t.runner.asked.map((a) => a.text)).toEqual(["Hello there"]);
+  });
+
+  it("replaces a running automatic check, which ends without touching the state", async () => {
+    const t = make();
+    const finishAuto = t.runner.hold();
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(t.session.state.pending?.manual).toBe(false);
+    t.runner.answer(resultOf([ISSUES[0]!]));
+    await t.session.checkManually();
+    finishAuto(resultOf(ISSUES));
+    await settle();
+    expect(t.session.state.issues).toHaveLength(1);
+    expect(t.recorder.recorded).toHaveLength(1);
+    expect(t.recorder.recorded[0]?.mistakes).toHaveLength(1);
+  });
+
+  it("cancels: the issues and the recorded mistakes stay as they were", async () => {
+    const t = await checked();
+    const finish = t.runner.hold();
+    const running = t.session.checkManually();
+    await settle();
+    expect(t.session.state.pending?.manual).toBe(true);
+    t.session.cancelCheck();
+    finish(resultOf([]));
+    await running;
+    expect(t.session.state.pending).toBeNull();
+    expect(t.session.state.issues).toHaveLength(2);
+    expect(t.recorder.recorded).toEqual([]);
+    expect(states(t.sent).at(-1)?.status).toBe("checked");
+  });
+
+  it("does not record a check that a newer manual check replaced", async () => {
+    const t = make();
+    const finishFirst = t.runner.hold();
+    const first = t.session.checkManually();
+    await settle();
+    t.runner.answer(resultOf(ISSUES));
+    await t.session.checkManually();
+    finishFirst(resultOf([ISSUES[0]!]));
+    await first;
+    expect(t.recorder.recorded).toHaveLength(1);
+    expect(t.recorder.recorded[0]?.mistakes).toHaveLength(2);
+  });
+
+  it("records under the source of the box, whatever happened to the text meanwhile", async () => {
+    const t = make();
+    const finish = t.runner.hold();
+    const running = t.session.checkManually();
+    await settle();
+    t.session.edit({ revision: 1, start: 0, removed: 0, inserted: "Oh, " });
+    finish(resultOf(ISSUES));
+    await running;
+    // Recorded as checked (the text sent), even though an edit moved the issues since.
+    expect(t.recorder.recorded[0]?.mistakes.map((m) => m.snippet)).toEqual(["I seen", "He go"]);
+  });
+
+  it("shows the failure and records nothing when the check fails", async () => {
+    const t = await checked();
+    t.runner.fail(new AppError("LLMCallFailed", "The server said no"));
+    await t.session.checkManually();
+    expect(states(t.sent).at(-1)).toMatchObject({
+      status: "failed",
+      message: "The server said no",
+    });
+    expect(t.session.state.issues).toHaveLength(2);
+    expect(t.recorder.recorded).toEqual([]);
+  });
+
+  it("says no-llm when there is none, and calls nothing", async () => {
+    const t = make();
+    t.settings.model = undefined;
+    await t.session.checkManually();
+    expect(t.runner.asked).toEqual([]);
+    expect(states(t.sent).at(-1)).toMatchObject({ status: "no-llm", message: NO_LLM_MESSAGE });
+  });
+
+  it("refuses a text over 10,000 words without sending it", async () => {
+    const text = Array.from({ length: 10_001 }, () => "w").join(" ");
+    const t = make(text);
+    const end = await t.session.checkManually();
+    expect(end).toEqual({ tooLong: true });
+    expect(t.runner.asked).toEqual([]);
+    expect(states(t.sent).at(-1)).toMatchObject({ status: "too-long", message: TOO_LONG_MESSAGE });
+  });
+
+  it("keeps the issues and reports a failed recording, with the route of the tag", async () => {
+    const t = await checked();
+    t.recorder.fails = new AppError("ErrorEventSaveFailed", "The mistakes could not be saved");
+    t.runner.answer(resultOf(ISSUES));
+    const end = await t.session.checkManually();
+    expect(end.recordError).toBeInstanceOf(AppError);
+    expect(end.recordError?.hasRoute("BoxSession.record->ErrorEventSaveFailed")).toBe(true);
+    expect(t.session.state.issues).toHaveLength(2);
+    expect(t.recorder.announced).toBe(0);
+    expect(states(t.sent).at(-1)?.status).toBe("checked");
+  });
+
+  it("wraps a recording failure that is not an AppError", async () => {
+    const t = await checked();
+    t.recorder.fails = new Error("disk");
+    t.runner.answer(resultOf(ISSUES));
+    const end = await t.session.checkManually();
+    expect(end.recordError?.hasRoute("BoxSession.record->ErrorEventSaveFailed")).toBe(true);
+  });
+
+  it("sends nothing after the session is disposed", async () => {
+    const t = make();
+    const finish = t.runner.hold();
+    const running = t.session.checkManually();
+    await settle();
+    t.session.dispose();
+    const before = t.sent.length;
+    finish(resultOf(ISSUES));
+    await running;
+    expect(t.sent).toHaveLength(before);
+    expect(t.recorder.recorded).toEqual([]);
+  });
+});

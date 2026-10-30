@@ -71,7 +71,14 @@ export type ContentMessage =
    */
   | { type: "popover-open"; box: number; issue: number; maxHeight: number }
   /** The popover was closed by the page (Escape, a click elsewhere, typing): drop the selection. */
-  | { type: "popover-close"; box: number };
+  | { type: "popover-close"; box: number }
+  /**
+   * Show the issues dialog for this box (SPEC section 4.11). `issue` is the issue to select in it
+   * (the one the popover showed when All issues was pressed), or null.
+   */
+  | { type: "dialog-open"; box: number; issue: number | null }
+  /** The dialog was closed by the page (Escape, another box's dialog, the popover): drop the selection. */
+  | { type: "dialog-close"; box: number };
 
 export type BoxStatus = "idle" | "checking" | "checked" | "failed" | "no-llm" | "too-long";
 
@@ -104,8 +111,14 @@ export type FrameMessage =
   | { type: "popover-size"; box: number; issue: number; height: number }
   /** The frame closed the popover (Escape in the card, Not an error, an issue that is gone). */
   | { type: "popover-closed"; box: number }
-  /** All issues was pressed in the popover (the issues dialog, step 16). */
-  | { type: "all-issues"; box: number };
+  /** All issues was pressed in the popover: the content script opens the issues dialog. */
+  | { type: "all-issues"; box: number }
+  /** The dialog is drawn for this box: the content script may show the frame as the dialog. */
+  | { type: "dialog-ready"; box: number }
+  /** The issue selected in the dialog's list changed (null: none): highlight it and scroll to it. */
+  | { type: "dialog-select"; box: number; issue: number | null }
+  /** The frame closed the dialog (Close, Escape in the dialog, a box that is gone). */
+  | { type: "dialog-closed"; box: number };
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -170,6 +183,13 @@ export function parseContentMessage(data: unknown): ContentMessage | undefined {
     }
     case "popover-close":
       return { type: "popover-close", box };
+    case "dialog-open": {
+      const issue = m.issue === null || m.issue === undefined ? null : uint(m.issue);
+      if (issue === undefined) return undefined;
+      return { type: "dialog-open", box, issue };
+    }
+    case "dialog-close":
+      return { type: "dialog-close", box };
     default:
       return undefined;
   }
@@ -203,6 +223,13 @@ export function parseFrameMessage(data: unknown): FrameMessage | undefined {
   if (m.type === "resync") return { type: "resync", box };
   if (m.type === "popover-closed") return { type: "popover-closed", box };
   if (m.type === "all-issues") return { type: "all-issues", box };
+  if (m.type === "dialog-ready") return { type: "dialog-ready", box };
+  if (m.type === "dialog-closed") return { type: "dialog-closed", box };
+  if (m.type === "dialog-select") {
+    const issue = m.issue === null ? null : uint(m.issue);
+    if (issue === undefined) return undefined;
+    return { type: "dialog-select", box, issue };
+  }
   if (m.type === "popover-size") {
     const issue = uint(m.issue);
     const height = uint(m.height);

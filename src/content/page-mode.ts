@@ -16,6 +16,7 @@ import { Badge, BADGE_SIZE } from "./badge";
 import { badgeViewOf } from "./badge-view";
 import { BlockedCard } from "./blocked-card";
 import { BoxState } from "./box-state";
+import { DialogController } from "./dialog";
 import { FrameLink } from "./frame-link";
 import { issueAt } from "../core/issues/navigation";
 import { OverlayHost } from "./overlay-host";
@@ -37,11 +38,6 @@ export interface PageModeContentDeps {
   /** `open` lets a test look inside the shadow root; the extension always uses `closed`. */
   overlayMode?: "closed" | "open";
   frameTimeoutMs?: number;
-}
-
-/** A text box the badge or the popover's All issues was clicked on: where step 16 opens the issues dialog. */
-export interface BadgeClick {
-  box: BoxState;
 }
 
 /** Space between the badge and the box's inner corner. */
@@ -80,11 +76,6 @@ export class PageModeContent {
   private promptShown = false;
   private stopListening: (() => void) | undefined;
   private asks = 0;
-  /** Called when a badge is clicked and the frame is working: step 16 opens the dialog here. */
-  onBadgeClick: (click: BadgeClick) => void = () => undefined;
-  /** Called when All issues is pressed in the popover: step 16 opens the dialog here (a stub for now). */
-  onAllIssues: (click: BadgeClick) => void = () => undefined;
-
   constructor(deps: PageModeContentDeps) {
     this.deps = deps;
     this.win = deps.win;
@@ -124,6 +115,12 @@ export class PageModeContent {
   /** The issue the popover is open for, with its box, or undefined. */
   get popover(): { box: BoxState; issue: number } | undefined {
     const open = this.active?.popover.open;
+    return open === undefined ? undefined : { box: open.target.state, issue: open.issue };
+  }
+
+  /** The issue selected in the issues dialog, with its box, or undefined when the dialog is closed. */
+  get dialog(): { box: BoxState; issue: number | null } | undefined {
+    const open = this.active?.dialog.open;
     return open === undefined ? undefined : { box: open.target.state, issue: open.issue };
   }
 
@@ -251,14 +248,7 @@ export class PageModeContent {
 
   private attach(): void {
     if (this.active !== undefined) return;
-    this.active = new Active(this.deps, this.win, this.doc, {
-      badge: (click) => {
-        this.onBadgeClick(click);
-      },
-      allIssues: (click) => {
-        this.onAllIssues(click);
-      },
-    });
+    this.active = new Active(this.deps, this.win, this.doc);
   }
 
   private dropPrompt(): void {
@@ -289,11 +279,8 @@ class Active {
   private readonly host: OverlayHost;
   private readonly link: FrameLink;
   private readonly card: BlockedCard;
-  private readonly handlers: {
-    badge: (click: BadgeClick) => void;
-    allIssues: (click: BadgeClick) => void;
-  };
   readonly popover: PopoverController;
+  readonly dialog: DialogController;
   private readonly listeners: (() => void)[] = [];
   private focused: Tracked | undefined;
   /** Whether the keyboard focus is inside the popover's frame (the page sees a focus on our host). */
@@ -303,16 +290,10 @@ class Active {
   private resizeObserver: ResizeObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
 
-  constructor(
-    deps: PageModeContentDeps,
-    win: Window & typeof globalThis,
-    doc: Document,
-    handlers: { badge: (click: BadgeClick) => void; allIssues: (click: BadgeClick) => void },
-  ) {
+  constructor(deps: PageModeContentDeps, win: Window & typeof globalThis, doc: Document) {
     this.deps = deps;
     this.win = win;
     this.doc = doc;
-    this.handlers = handlers;
     this.host = new OverlayHost(doc, deps.overlayMode ?? "closed");
     this.card = new BlockedCard(doc, this.host.layer);
     this.link = new FrameLink(
@@ -336,18 +317,27 @@ class Active {
           this.blocked = error;
           this.card.close();
           this.popover.close();
+          this.dialog.close();
           for (const tracked of this.boxes.values()) this.render(tracked);
         },
       },
     );
-    this.popover = new PopoverController({
+    const viewport = (): { width: number; height: number } => ({
+      width: this.doc.documentElement.clientWidth || this.win.innerWidth,
+      height: this.doc.documentElement.clientHeight || this.win.innerHeight,
+    });
+    const redraw = (): void => {
+      for (const tracked of this.boxes.values()) this.drawUnderlines(tracked);
+    };
+    this.popover = new PopoverController({ link: this.link, viewport, onChange: redraw });
+    // The issues dialog (SPEC section 4.11) is drawn by the same frame as the popover, so the page
+    // opens one only after it has closed the other.
+    this.dialog = new DialogController({
       link: this.link,
-      viewport: () => ({
-        width: this.doc.documentElement.clientWidth || this.win.innerWidth,
-        height: this.doc.documentElement.clientHeight || this.win.innerHeight,
-      }),
-      onChange: () => {
-        for (const tracked of this.boxes.values()) this.drawUnderlines(tracked);
+      viewport,
+      onChange: redraw,
+      reveal: (target, issue) => {
+        target.underlines.reveal(issue);
       },
     });
     this.listen();
@@ -386,7 +376,10 @@ class Active {
       if (event.isTrusted) this.onMouseUp(event as MouseEvent);
     });
     on(this.doc, "keydown", (event) => {
-      if (event.isTrusted && (event as KeyboardEvent).key === "Escape") this.closePopover(true);
+      if (event.isTrusted && (event as KeyboardEvent).key === "Escape") {
+        this.closePopover(true);
+        this.closeDialog(true);
+      }
     });
     for (const type of ["keyup", "selectionchange", "select"]) {
       on(this.doc, type, (event) => {
@@ -560,7 +553,11 @@ class Active {
       if (open) this.popover.close();
       return;
     }
-    if (point !== undefined || open) this.popover.show(tracked, id, point);
+    if (point !== undefined || open) {
+      // The dialog and the popover share the frame: the popover opens only after the dialog closed.
+      if (tracked.underlines.rectsOf(id).length > 0) this.closeDialog(false);
+      this.popover.show(tracked, id, point);
+    }
   }
 
   /** The offset of the caret (the start of the selection) in the box's text. */
@@ -582,6 +579,21 @@ class Active {
     if (open === undefined) return;
     this.popover.close();
     if (restoreFocus) this.restoreFocus(open.target.state.element);
+  }
+
+  /** Closes the issues dialog; after Escape the box gets the focus back if it was in the dialog. */
+  private closeDialog(restoreFocus: boolean): void {
+    const open = this.dialog.open;
+    if (open === undefined) return;
+    this.dialog.close();
+    if (restoreFocus) this.restoreFocus(open.target.state.element);
+  }
+
+  /** Opens the issues dialog for a box, with `issue` selected in it (All issues in the popover). */
+  private openDialog(tracked: Tracked, issue: number | null): void {
+    if (this.blocked !== undefined) return;
+    this.popover.close();
+    this.dialog.show(tracked, issue);
   }
 
   private restoreFocus(element: HTMLElement): void {
@@ -629,6 +641,7 @@ class Active {
     this.resizeObserver?.unobserve(tracked.state.element);
     if (this.focused === tracked) this.focused = undefined;
     this.popover.forget(tracked);
+    this.dialog.forget(tracked);
     this.link.post({ type: "forget", box: tracked.state.id });
     tracked.underlines.remove();
     tracked.badge.remove();
@@ -653,7 +666,18 @@ class Active {
       }
     } else if (message.type === "all-issues") {
       const tracked = this.byId.get(message.box);
-      if (tracked !== undefined) this.handlers.allIssues({ box: tracked.state });
+      if (tracked === undefined) return;
+      const shown = this.popover.isOpenFor(tracked) ? this.popover.open?.issue : undefined;
+      this.openDialog(tracked, shown ?? null);
+    } else if (message.type === "dialog-ready") {
+      this.dialog.drawn(message.box);
+    } else if (message.type === "dialog-select") {
+      this.dialog.selected(message.box, message.issue);
+    } else if (message.type === "dialog-closed") {
+      const target = this.dialog.open?.target;
+      if (this.dialog.closedByFrame(message.box) && target !== undefined) {
+        this.restoreFocus(target.state.element);
+      }
     } else if (message.type === "resync") {
       const tracked = this.byId.get(message.box);
       if (tracked === undefined) return;
@@ -683,8 +707,11 @@ class Active {
       });
       return;
     }
-    // The dialog of step 16 opens here.
-    this.handlers.badge({ box: state });
+    // The issues dialog (SPEC section 4.11): the badge opens it, and closes it again.
+    const tracked = this.byId.get(state.id);
+    if (tracked === undefined) return;
+    if (this.dialog.isOpenFor(tracked)) this.closeDialog(false);
+    else this.openDialog(tracked, null);
   }
 
   private render(tracked: Tracked): void {
@@ -708,11 +735,15 @@ class Active {
   position(): void {
     for (const tracked of [...this.boxes.values()]) this.place(tracked);
     this.popover.place();
+    this.dialog.place();
   }
 
-  /** Draws the underlines of a box; the issue the popover shows has the 20% background. */
+  /** Draws the underlines of a box; the issue the popover or the dialog selects has the 20% background. */
   private drawUnderlines(tracked: PopoverTarget, visible = true): void {
-    tracked.underlines.draw(this.popover.selectedIn(tracked), visible);
+    tracked.underlines.draw(
+      this.popover.selectedIn(tracked) ?? this.dialog.selectedIn(tracked),
+      visible,
+    );
   }
 
   /**

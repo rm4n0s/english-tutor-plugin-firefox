@@ -6,6 +6,7 @@ import {
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_IGNORE,
+  PAGE_MODE_OPEN_OPTIONS,
   PAGE_MODE_OPEN_TUTOR,
   PAGE_MODE_SITE,
   messageType,
@@ -263,6 +264,11 @@ export function startBackground(deps: BackgroundDeps): void {
         return ignore.add(request.source, request.fingerprint).then(() => ({ ok: true }));
       }
       return ignore.has(request.source, request.fingerprint).then((has) => ({ has }));
+    }
+    if (type === PAGE_MODE_OPEN_OPTIONS) {
+      // The no-LLM link of the issues dialog: the frame has no `runtime.openOptionsPage`.
+      if (sender.tab === undefined) return undefined;
+      return options.open().then(() => ({ ok: true }));
     }
     if (type === PAGE_MODE_OPEN_TUTOR) {
       const request = parseOpenTutorRequest(message);

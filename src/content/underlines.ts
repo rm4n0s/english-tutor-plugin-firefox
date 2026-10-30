@@ -1,6 +1,7 @@
 import type { Category } from "../core/analysis";
 import type { WireIssue } from "../core/page-mode/protocol";
 import { issueBoxes, mirrorNodes, type Box } from "../ui/mirror";
+import { scrollDeltaToReveal } from "../ui/reveal";
 import type { BoxState } from "./box-state";
 import { applyCss, svg, UNDERLINE_COLORS, withAlpha } from "./style";
 
@@ -125,6 +126,9 @@ export class BoxUnderlines {
   private clip: HTMLElement | undefined;
   private inner: HTMLElement | undefined;
   private rects: readonly IssueRects[] = [];
+  /** The issues' rectangles as last drawn without the clip, and the clip itself (for `reveal`). */
+  private full: readonly IssueRects[] = [];
+  private view: Box | undefined;
   private drawn:
     | { text: string; issues: readonly WireIssue[]; selected: number | null; dark: boolean }
     | undefined;
@@ -165,9 +169,49 @@ export class BoxUnderlines {
     else this.drawMirror(selectedId);
   }
 
+  /**
+   * Scrolls the box so that the issue is in view, without moving the caret or the selection
+   * (SPEC section 4.11): the box's own scroll position first (`scrollBy` on a textarea, an input
+   * or an editing host that scrolls), then the page's if the issue is still out of the window.
+   * Uses the rectangles of the last draw, so the issue must have been drawn. Does nothing for an
+   * issue that is not drawn.
+   */
+  reveal(id: number): void {
+    const entry = this.full.find((e) => e.id === id);
+    const view = this.view;
+    if (entry === undefined || view === undefined || entry.rects.length === 0) return;
+    const element = this.box.element;
+    const top = Math.min(...entry.rects.map((r) => r.top));
+    const bottom = Math.max(...entry.rects.map((r) => r.bottom));
+    const left = Math.min(...entry.rects.map((r) => r.left));
+    const right = Math.max(...entry.rects.map((r) => r.right));
+    const dy = scrollDeltaToReveal(top - view.top, bottom - view.top, view.bottom - view.top, {
+      margin: 4,
+      center: true,
+    });
+    // Only a box that does not wrap scrolls sideways (a line wraps inside the box's width).
+    const dx =
+      this.box.kind === "input"
+        ? scrollDeltaToReveal(left - view.left, right - view.left, view.right - view.left, {
+            margin: 4,
+            center: true,
+          })
+        : 0;
+    const before = element.scrollTop;
+    if (dx !== 0 || dy !== 0) element.scrollBy({ left: dx, top: dy, behavior: "instant" });
+    const moved = element.scrollTop - before;
+    // What is still out of the window is the page's to scroll: the box may be a tall editing host.
+    const page = scrollDeltaToReveal(top - moved, bottom - moved, this.win.innerHeight, {
+      margin: 8,
+    });
+    if (page !== 0) this.win.scrollBy({ top: page, behavior: "instant" });
+  }
+
   /** Takes the underlines away (the issues are gone, or the box is out of sight). */
   clear(): void {
     this.rects = [];
+    this.full = [];
+    this.view = undefined;
     this.drawn = undefined;
     this.inner = undefined;
     this.clip?.remove();
@@ -245,8 +289,13 @@ export class BoxUnderlines {
       right: rect.left + borderLeft + (rtl ? bar : 0) + element.clientWidth,
       bottom: rect.top + borderTop + element.clientHeight,
     };
-    this.rects = issueBoxes(inner).flatMap(({ id, boxes }) => {
-      const kept = boxes.flatMap((box) => clipTo(box, clipBox) ?? []);
+    const boxes = issueBoxes(inner);
+    this.view = clipBox;
+    this.full = boxes.flatMap(({ id, boxes: all }) =>
+      all.length === 0 ? [] : [{ id, rects: all }],
+    );
+    this.rects = boxes.flatMap(({ id, boxes: all }) => {
+      const kept = all.flatMap((box) => clipTo(box, clipBox) ?? []);
       return kept.length === 0 ? [] : [{ id, rects: kept }];
     });
   }
@@ -359,10 +408,12 @@ export class BoxUnderlines {
 
     const parts: Element[] = [];
     const found: IssueRects[] = [];
+    const everything: IssueRects[] = [];
     for (const issue of this.box.issues) {
       const range = model.rangeFor(this.doc, issue.start, issue.end);
       if (range === undefined) continue;
       const kept = [...range.getClientRects()].flatMap((r) => (hasArea(r) ? [r] : []));
+      if (kept.length > 0) everything.push({ id: issue.id, rects: kept });
       const visible = kept.flatMap((r) => clipTo(r, clipBox) ?? []);
       if (visible.length === 0) continue;
       found.push({ id: issue.id, rects: visible });
@@ -390,6 +441,8 @@ export class BoxUnderlines {
     }
     clip.replaceChildren(...parts);
     this.rects = found;
+    this.full = everything;
+    this.view = clipBox;
     this.drawn = undefined;
     this.inner = undefined;
   }

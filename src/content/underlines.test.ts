@@ -33,7 +33,13 @@ function textarea(html = `<textarea id="box">${TEXT}</textarea>`) {
   Object.defineProperty(box, "offsetHeight", { value: 150, configurable: true });
   const layer = document.createElement("div");
   document.documentElement.append(layer);
-  const state = new BoxState(1, box, "textarea", "session:x", window);
+  const state = new BoxState(
+    1,
+    box,
+    box.tagName === "INPUT" ? "input" : "textarea",
+    "session:x",
+    window,
+  );
   const underlines = new BoxUnderlines(document, layer, state, window);
   const show = (issues: readonly WireIssue[]) =>
     state.apply({ revision: 0, status: "checked", issues });
@@ -281,6 +287,130 @@ describe("BoxUnderlines for a textarea", () => {
     expect(t.underlines.rectsOf(3)).toEqual([]);
     expect(t.underlines.rectsOf(2)).toHaveLength(2);
     expect(t.underlines.issueAt(30, 20)).toBeUndefined();
+  });
+});
+
+describe("BoxUnderlines.reveal", () => {
+  /** The box's view is (100, 100) to (380, 230); the issues' rectangles are set by the test. */
+  function withRects(
+    rects: Record<string, DOMRect[]>,
+    html = `<textarea id="box">${TEXT}</textarea>`,
+  ) {
+    const t = textarea(html);
+    t.show(ISSUES);
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (this: Element) {
+      return (rects[(this as HTMLElement).dataset.issueId ?? ""] ?? []) as unknown as DOMRectList;
+    });
+    const boxScroll = vi.fn();
+    Object.assign(t.box, { scrollBy: boxScroll });
+    const pageScroll = vi.spyOn(window, "scrollBy").mockImplementation(() => undefined);
+    t.underlines.draw(null);
+    return { ...t, boxScroll, pageScroll };
+  }
+
+  it.each([
+    {
+      name: "an issue inside the box scrolls nothing",
+      rects: [rect(150, 120, 200, 140)],
+      box: undefined,
+      page: undefined,
+    },
+    {
+      name: "an issue below the box's edge is centred in it",
+      // 300 below the top of the view, 20 high: 300 - (130 - 20) / 2.
+      rects: [rect(150, 400, 200, 420)],
+      box: { left: 0, top: 245, behavior: "instant" },
+      page: undefined,
+    },
+    {
+      name: "an issue above the box's top is centred in it",
+      rects: [rect(150, 20, 200, 40)],
+      box: { left: 0, top: -135, behavior: "instant" },
+      page: undefined,
+    },
+    {
+      name: "an issue that wraps is lined up from its first line to its last",
+      rects: [rect(350, 400, 380, 420), rect(110, 420, 160, 440)],
+      // The two lines are 40 high together: 300 - (130 - 40) / 2.
+      box: { left: 0, top: 255, behavior: "instant" },
+      page: undefined,
+    },
+    {
+      name: "an issue below the window is brought into it by the page too",
+      rects: [rect(150, 900, 200, 920)],
+      box: { left: 0, top: 745, behavior: "instant" },
+      // The mock box does not move, so the page is asked for the whole way, just into view with
+      // 8 px to spare: 920 - (768 - 8).
+      page: { top: 160, behavior: "instant" },
+    },
+  ])("scrolls for $name", ({ rects, box, page }) => {
+    const t = withRects({ "1": rects });
+    t.underlines.reveal(1);
+    if (box === undefined) expect(t.boxScroll).not.toHaveBeenCalled();
+    else expect(t.boxScroll).toHaveBeenCalledWith(box);
+    if (page === undefined) expect(t.pageScroll).not.toHaveBeenCalled();
+    else expect(t.pageScroll).toHaveBeenCalledWith(page);
+  });
+
+  it("never moves the caret or the selection of the box", () => {
+    const t = withRects({ "1": [rect(150, 400, 200, 420)] });
+    t.box.setSelectionRange(3, 7);
+    t.underlines.reveal(1);
+    expect([t.box.selectionStart, t.box.selectionEnd]).toEqual([3, 7]);
+    expect(t.box.value).toBe(TEXT);
+  });
+
+  it("scrolls an input sideways to the issue", () => {
+    const t = withRects(
+      { "1": [rect(500, 110, 560, 130)] },
+      `<input id="box" type="text" value="${TEXT}" />`,
+    );
+    t.underlines.reveal(1);
+    // 400 right of the view's left edge, 60 wide, in a view 280 wide: 400 - (280 - 60) / 2.
+    expect(t.boxScroll).toHaveBeenCalledWith({ left: 290, top: 0, behavior: "instant" });
+  });
+
+  it.each([
+    { name: "an issue that is not drawn", id: 3 },
+    { name: "an issue that does not exist", id: 99 },
+  ])("does nothing for $name", ({ id }) => {
+    const t = withRects({ "1": [rect(150, 400, 200, 420)] });
+    t.underlines.reveal(id);
+    expect(t.boxScroll).not.toHaveBeenCalled();
+    expect(t.pageScroll).not.toHaveBeenCalled();
+  });
+
+  it("does nothing before anything is drawn, or after the underlines were cleared", () => {
+    const t = withRects({ "1": [rect(150, 400, 200, 420)] });
+    t.underlines.clear();
+    t.underlines.reveal(1);
+    expect(t.boxScroll).not.toHaveBeenCalled();
+  });
+
+  it("scrolls editable content from the rectangles of a Range", () => {
+    const box = setBody(
+      document,
+      `<div id="box" contenteditable="true"><p>Yesterday I seen him.</p><p>He go home.</p></div>`,
+    );
+    vi.spyOn(box, "getBoundingClientRect").mockReturnValue(rect(100, 100, 400, 250));
+    Object.defineProperty(box, "clientWidth", { value: 298, configurable: true });
+    Object.defineProperty(box, "clientHeight", { value: 148, configurable: true });
+    const layer = document.createElement("div");
+    document.documentElement.append(layer);
+    const state = new BoxState(1, box, "editable", "session:x", window);
+    const underlines = new BoxUnderlines(document, layer, state, window);
+    state.apply({ revision: 0, status: "checked", issues: [issue(1, 10, 16)] });
+    vi.spyOn(Range.prototype, "getClientRects").mockImplementation(
+      () => [rect(150, 400, 200, 420)] as unknown as DOMRectList,
+    );
+    const boxScroll = vi.fn();
+    Object.assign(box, { scrollBy: boxScroll });
+    vi.spyOn(window, "scrollBy").mockImplementation(() => undefined);
+    underlines.draw(null);
+    // Out of the box's view, so it has no underline, but it is known for scrolling: 300 - (148 - 20) / 2.
+    expect(underlines.rectsOf(1)).toEqual([]);
+    underlines.reveal(1);
+    expect(boxScroll).toHaveBeenCalledWith({ left: 0, top: 236, behavior: "instant" });
   });
 });
 

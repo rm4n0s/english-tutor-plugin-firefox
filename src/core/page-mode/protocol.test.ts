@@ -52,6 +52,9 @@ describe("messages from the content script", () => {
     { type: "forget", box: 6 },
     { type: "popover-open", box: 2, issue: 7, maxHeight: 340 },
     { type: "popover-close", box: 2 },
+    { type: "dialog-open", box: 2, issue: 7 },
+    { type: "dialog-open", box: 2, issue: null },
+    { type: "dialog-close", box: 2 },
   ])("accepts $type $box", (message) => {
     expect(parseContentMessage(message)).toEqual(message);
   });
@@ -94,6 +97,10 @@ describe("messages from the content script", () => {
       name: "a popover whose issue is a string",
       data: { type: "popover-open", box: 1, issue: "1", maxHeight: 9 },
     },
+    { name: "a dialog without a box", data: { type: "dialog-open", issue: null } },
+    { name: "a dialog whose issue is a string", data: { type: "dialog-open", box: 1, issue: "1" } },
+    { name: "a dialog with a negative issue", data: { type: "dialog-open", box: 1, issue: -1 } },
+    { name: "a dialog close without a box", data: { type: "dialog-close" } },
   ])("refuses $name", ({ data }) => {
     expect(parseContentMessage(data)).toBeUndefined();
   });
@@ -108,6 +115,10 @@ describe("messages from the frame", () => {
     { type: "popover-size", box: 2, issue: 4, height: 180 },
     { type: "popover-closed", box: 2 },
     { type: "all-issues", box: 2 },
+    { type: "dialog-ready", box: 2 },
+    { type: "dialog-select", box: 2, issue: 5 },
+    { type: "dialog-select", box: 2, issue: null },
+    { type: "dialog-closed", box: 2 },
     { type: "state", box: 1, revision: 3, status: "idle", issues: [] },
     { type: "state", box: 1, revision: 3, status: "checking", issues: [issue] },
     {
@@ -134,6 +145,10 @@ describe("messages from the frame", () => {
     },
     { name: "a popover size without an issue", data: { type: "popover-size", box: 1, height: 9 } },
     { name: "a popover closed without a box", data: { type: "popover-closed" } },
+    { name: "a dialog ready without a box", data: { type: "dialog-ready" } },
+    { name: "a dialog closed without a box", data: { type: "dialog-closed" } },
+    { name: "a dialog select without an issue", data: { type: "dialog-select", box: 1 } },
+    { name: "a dialog select with a string", data: { type: "dialog-select", box: 1, issue: "2" } },
     {
       name: "a state without a box",
       data: { type: "state", revision: 0, status: "idle", issues: [] },

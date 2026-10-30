@@ -9,7 +9,8 @@ import {
 } from "../core/page-mode/protocol";
 import type { FrameClaim } from "../platform/page-mode";
 import type { PagePort, PagePortServer } from "../platform/page-port";
-import { BoxSession } from "./box-session";
+import { BoxSession, type MistakeRecorder } from "./box-session";
+import type { DialogHost } from "./dialog";
 import type { PopoverHost } from "./popover";
 
 /** What the frame needs once the store is open. */
@@ -22,8 +23,12 @@ export interface FrameServices {
     getModel(): AnalysisModel | undefined;
     load(): Promise<void>;
   };
+  /** Records the mistakes of the dialog's manual checks (SPEC sections 4.11 and 5.7). */
+  recorder: MistakeRecorder;
   /** The explanation popover's card (SPEC section 4.11); missing in tests that do not draw it. */
   popover?: PopoverHost;
+  /** The issues dialog (SPEC section 4.11); missing in tests that do not draw it. */
+  dialog?: DialogHost;
 }
 
 export interface PageFrameDeps {
@@ -122,6 +127,7 @@ export class PageFrame {
     port.onDisconnect(() => {
       // The page went away: nothing is left to check for.
       this.services?.popover?.close();
+      this.services?.dialog?.close();
       for (const session of this.sessions.values()) session.dispose();
       this.sessions.clear();
       this.port = undefined;
@@ -152,6 +158,7 @@ export class PageFrame {
               send: (reply) => {
                 this.port?.post(reply);
               },
+              recorder: services.recorder,
             },
             message.box,
             message.source,
@@ -175,6 +182,7 @@ export class PageFrame {
       case "forget": {
         const session = this.sessions.get(message.box);
         services.popover?.close(message.box);
+        services.dialog?.close(message.box);
         session?.dispose();
         this.sessions.delete(message.box);
         return;
@@ -186,6 +194,8 @@ export class PageFrame {
           port.post({ type: "popover-closed", box: message.box } satisfies FrameMessage);
           return;
         }
+        // The popover and the dialog share the frame: opening one closes the other.
+        services.dialog?.close();
         services.popover.open(session, message.issue, message.maxHeight, (reply) => {
           this.port?.post(reply);
         });
@@ -193,6 +203,26 @@ export class PageFrame {
       }
       case "popover-close":
         services.popover?.close(message.box);
+        return;
+      case "dialog-open": {
+        const session = this.sessions.get(message.box);
+        if (session === undefined || services.dialog === undefined) {
+          // Nothing to show: the content script closes its side.
+          port.post({ type: "dialog-closed", box: message.box } satisfies FrameMessage);
+          return;
+        }
+        // The LLM may have been set up or changed since the box was focused.
+        await services.settings.load().catch((err: unknown) => {
+          this.deps.log.warn("the page-mode frame could not read the settings", { err });
+        });
+        services.popover?.close();
+        services.dialog.open(session, message.issue, (reply) => {
+          this.port?.post(reply);
+        });
+        return;
+      }
+      case "dialog-close":
+        services.dialog?.close(message.box);
         return;
     }
   }

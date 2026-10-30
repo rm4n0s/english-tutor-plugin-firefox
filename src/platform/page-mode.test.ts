@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { AppError } from "../core/errors";
 import {
   ALL_URLS,
   BrowserBackgroundMessages,
+  BrowserFrameActions,
   BrowserFrameClaim,
   BrowserContentScripts,
   BrowserPageModeBackendLink,
@@ -357,5 +359,72 @@ describe("BrowserPageModeRuntime", () => {
     expect(answers.every((answer) => answer === undefined)).toBe(true);
     stop();
     expect(t.messages.listeners.size).toBe(0);
+  });
+});
+
+describe("BrowserFrameActions", () => {
+  function fakeApi(reply: () => Promise<unknown>) {
+    const sent: unknown[] = [];
+    const api = {
+      runtime: {
+        sendMessage: (message: unknown) => {
+          sent.push(message);
+          return reply();
+        },
+      },
+    } as unknown as typeof browser;
+    return { api, sent };
+  }
+
+  it.each([
+    {
+      name: "openInTutor",
+      call: (a: BrowserFrameActions) => a.openInTutor("Some text"),
+      message: { type: "page-mode-open-tutor", text: "Some text" },
+    },
+    {
+      name: "openOptions",
+      call: (a: BrowserFrameActions) => a.openOptions(),
+      message: { type: "page-mode-open-options" },
+    },
+  ])("$name sends one message and resolves on { ok: true }", async ({ call, message }) => {
+    const { api, sent } = fakeApi(() => Promise.resolve({ ok: true }));
+    await call(new BrowserFrameActions(api));
+    expect(sent).toEqual([message]);
+  });
+
+  it.each([
+    {
+      name: "openInTutor",
+      call: (a: BrowserFrameActions) => a.openInTutor("Some text"),
+      route: "BrowserFrameActions.openInTutor->PageDialogActionFailed",
+    },
+    {
+      name: "openOptions",
+      call: (a: BrowserFrameActions) => a.openOptions(),
+      route: "BrowserFrameActions.openOptions->PageDialogActionFailed",
+    },
+  ])(
+    "$name fails with PageDialogActionFailed when the message is refused",
+    async ({ call, route }) => {
+      const { api } = fakeApi(() => Promise.reject(new Error("no receiver")));
+      const err = await call(new BrowserFrameActions(api)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AppError);
+      expect((err as AppError).hasRoute(route)).toBe(true);
+    },
+  );
+
+  it.each([
+    { name: "no answer", answer: undefined },
+    { name: "{ ok: false }", answer: { ok: false } },
+    { name: "a string", answer: "ok" },
+    { name: "null", answer: null },
+  ])("fails with PageDialogActionFailed on $name", async ({ answer }) => {
+    const { api } = fakeApi(() => Promise.resolve(answer));
+    const err = await new BrowserFrameActions(api).openInTutor("x").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect(
+      (err as AppError).hasRoute("BrowserFrameActions.openInTutor->PageDialogActionFailed"),
+    ).toBe(true);
   });
 });

@@ -1,8 +1,10 @@
+import { AppError } from "../core/errors";
 import {
   PAGE_FRAME_CLAIM,
   PAGE_FRAME_REGISTER,
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
+  PAGE_MODE_OPEN_OPTIONS,
   PAGE_MODE_OPEN_TUTOR,
   PAGE_MODE_SITE,
   parseBroadcast,
@@ -272,5 +274,48 @@ export class BrowserFrameClaim implements FrameClaim {
       answer !== null &&
       (answer as { granted?: unknown }).granted === true
     );
+  }
+}
+
+/**
+ * What the issues dialog asks of the background script (SPEC section 4.11). The frame has no
+ * `tabs` and no `runtime.openOptionsPage`, so both go through `runtime` messages. A failure is
+ * `PageDialogActionFailed`.
+ */
+export interface FrameActions {
+  /** Opens a new tutor tab, after the page's tab, with the text (the hand-off of SPEC section 4.1). */
+  openInTutor(text: string): Promise<void>;
+  /** Opens the options page. */
+  openOptions(): Promise<void>;
+}
+
+export class BrowserFrameActions implements FrameActions {
+  private readonly api: typeof browser;
+
+  constructor(api: typeof browser) {
+    this.api = api;
+  }
+
+  openInTutor(text: string): Promise<void> {
+    return this.send({ type: PAGE_MODE_OPEN_TUTOR, text }, "BrowserFrameActions.openInTutor");
+  }
+
+  openOptions(): Promise<void> {
+    return this.send({ type: PAGE_MODE_OPEN_OPTIONS }, "BrowserFrameActions.openOptions");
+  }
+
+  /** The background script answers `{ ok: true }` when it did what was asked. */
+  private async send(message: { type: string; text?: string }, where: string): Promise<void> {
+    let answer: unknown;
+    try {
+      answer = await this.api.runtime.sendMessage(message);
+    } catch (err) {
+      throw AppError.wrap("PageDialogActionFailed", err, { type: message.type }).via(where);
+    }
+    if (typeof answer !== "object" || answer === null || (answer as { ok?: unknown }).ok !== true) {
+      throw new AppError("PageDialogActionFailed", "English Tutor could not be opened from here.", {
+        type: message.type,
+      }).via(where);
+    }
   }
 }
