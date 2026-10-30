@@ -171,10 +171,11 @@ export class IssuesList {
   /** Shows `x7` on the rows that have a count, in place, so that nothing else redraws. */
   private updateBadges(): void {
     const counts = this.options.counts;
+    const issues = new Map(this.state.issues.map((i) => [i.id, i]));
     for (const row of this.list.querySelectorAll<HTMLElement>(".issue-row")) {
       const badge = row.querySelector<HTMLElement>(".count-badge");
       if (badge === null) continue;
-      const issue = this.state.issues.find((i) => i.id === Number(row.dataset.id));
+      const issue = issues.get(Number(row.dataset.id));
       const count = issue === undefined ? undefined : counts?.badge(issue);
       badge.hidden = count === undefined;
       if (count === undefined) {
