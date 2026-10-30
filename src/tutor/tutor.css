@@ -86,22 +86,7 @@ label.inline {
   flex: 0 0 var(--editor-share);
   min-width: 0;
   display: flex;
-}
-
-#editor {
-  flex: 1;
-  width: 100%;
-  resize: none;
-  border: 0;
-  padding: 12px;
-  background: var(--bg);
-  font-family: system-ui, sans-serif;
-  font-size: 13pt;
-  line-height: 1.6;
-}
-
-#editor:focus-visible {
-  outline: none;
+  flex-direction: column;
 }
 
 .side {
@@ -126,27 +111,6 @@ label.inline {
   overflow: auto;
   padding: 10px 12px;
   font-size: 11pt;
-}
-
-h2 {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 11pt;
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-}
-
-.issues {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 6px 12px;
-  font-size: 11pt;
-}
-
-.empty {
-  margin: 0;
-  color: var(--fg-muted);
 }
 
 .divider {

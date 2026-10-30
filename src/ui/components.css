@@ -1,0 +1,264 @@
+/* Styles of the components in src/ui/, shared by the tutor page and the page-mode frame. */
+
+/* The editor text: the textarea and its mirror must look the same (SPEC section 4.3). */
+.editor-text {
+  margin: 0;
+  border: 0;
+  padding: 12px;
+  font-family: var(--editor-font-family, system-ui, sans-serif);
+  font-size: var(--editor-font-size, 13pt);
+  line-height: 1.6;
+  letter-spacing: normal;
+  word-spacing: normal;
+  word-break: normal;
+  tab-size: 8;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.editor-box {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+  /* The room a scroll bar takes from the textarea's text (set by the mirror's script). */
+  padding-right: calc(12px + var(--scrollbar-width, 0px));
+}
+
+.editor-box textarea.editor-text {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  background: transparent;
+  color: var(--fg);
+}
+
+.editor-box textarea:focus-visible {
+  outline: none;
+}
+
+/* One colour and one line style per category (SPEC section 4.3). */
+.issue-grammar,
+.marker-grammar,
+.issue-row[data-category="grammar"] {
+  --cat: var(--grammar);
+}
+
+.issue-vocabulary,
+.marker-vocabulary,
+.issue-row[data-category="vocabulary"] {
+  --cat: var(--vocabulary);
+}
+
+.issue-syntax,
+.marker-syntax,
+.issue-row[data-category="syntax"] {
+  --cat: var(--syntax);
+}
+
+.issue {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+  text-decoration-color: var(--cat);
+}
+
+.issue-grammar {
+  text-decoration-style: wavy;
+}
+
+.issue-vocabulary {
+  text-decoration-style: dashed;
+}
+
+.issue-syntax {
+  text-decoration-style: dotted;
+}
+
+.issue-selected {
+  background: color-mix(in srgb, var(--cat) 20%, transparent);
+}
+
+/* The loading layer over the editor. */
+.loading-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+
+.loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.loading-box p {
+  margin: 0;
+}
+
+.loading-notice {
+  color: var(--fg-muted);
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The banner above the editor (SPEC section 4.9). */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+  color: var(--danger);
+}
+
+.banner-text {
+  flex: 1;
+}
+
+.banner-dismiss {
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+/* The issues list (SPEC section 4.4). */
+.issues-header {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 11pt;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.issues {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+  font-family: var(--results-font-family, inherit);
+  font-size: var(--results-font-size, 11pt);
+}
+
+.empty {
+  margin: 0;
+  padding: 0 6px;
+  color: var(--fg-muted);
+}
+
+.issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.issue-row:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.issue-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--cat) 22%, var(--bg-alt));
+}
+
+.marker {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--cat);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.marker-syntax {
+  color: #00231a;
+}
+
+.row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-snippet {
+  display: block;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+.count-badge {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .marker {
+    color: #14161a;
+  }
+
+  .marker-syntax {
+    color: #14161a;
+  }
+}
+
+/* The explanation panel (SPEC section 4.5). */
+.explanation {
+  font-family: var(--results-font-family, inherit);
+  font-size: var(--results-font-size, 11pt);
+}
+
+.explanation a {
+  color: var(--accent);
+}

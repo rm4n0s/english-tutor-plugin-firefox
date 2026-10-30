@@ -1,5 +1,13 @@
+import { SystemClock, SystemScheduler } from "../core/clock";
+import { validateConfig } from "../core/llm";
 import { Logger } from "../core/log";
+import { CryptoRandom } from "../core/random";
+import { openDatabase, Store } from "../core/store";
+import { BroadcastChangeChannel } from "../platform/channel";
+import { BrowserOptionsOpener } from "../platform/options-page";
+import { BrowserHostPermissions } from "../platform/permissions";
 import { attachDivider } from "../ui/divider";
+import { mountTutor } from "./page";
 
 const log = new Logger(console);
 
@@ -25,4 +33,40 @@ attachDivider(element("divider-side"), {
   max: 85,
 });
 
-log.debug("tutor page ready");
+async function main(): Promise<void> {
+  const clock = new SystemClock();
+  const db = await openDatabase(indexedDB);
+  const store = new Store(db, clock, { validateConfig });
+  const options = new BrowserOptionsOpener(browser);
+  const page = mountTutor(document, {
+    store,
+    clock,
+    log,
+    channel: new BroadcastChangeChannel(),
+    permissions: new BrowserHostPermissions(browser),
+    // The page's own fetch, called as a method of window.
+    fetch: (input, init) => window.fetch(input, init),
+    scheduler: new SystemScheduler(),
+    random: new CryptoRandom(),
+    openOptions: () => {
+      options.open().catch((err: unknown) => {
+        log.error("could not open the options page", { err });
+      });
+    },
+  });
+  window.addEventListener("pagehide", () => {
+    page.destroy();
+  });
+  await page.ready;
+  element("editor").focus();
+  log.debug("tutor page ready");
+}
+
+main().catch((err: unknown) => {
+  log.error("tutor page failed to start", { err });
+  const banner = document.createElement("p");
+  banner.className = "banner";
+  banner.setAttribute("role", "alert");
+  banner.textContent = "The tutor page could not open its database. Reload the page to try again.";
+  document.querySelector(".editor-pane")?.prepend(banner);
+});

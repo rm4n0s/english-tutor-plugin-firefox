@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Untitled – English Tutor</title>
     <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="components.css" />
     <link rel="stylesheet" href="tutor.css" />
     <script src="tutor.js" defer></script>
   </head>
@@ -23,7 +24,7 @@
             ><input id="auto-check" type="checkbox" disabled /> Auto-check</label
           >
           <button id="stats" type="button" disabled>Stats</button>
-          <button id="prefs" type="button" disabled>Prefs</button>
+          <button id="prefs" type="button">Prefs</button>
         </div>
         <div class="row">
           <button id="new" type="button" disabled>New</button>
@@ -54,11 +55,16 @@
 
       <main id="panes" class="panes">
         <section class="editor-pane" aria-label="Text editor">
-          <textarea
-            id="editor"
-            spellcheck="true"
-            placeholder="Write or paste your English text here."
-          ></textarea>
+          <div id="banner-host"></div>
+          <div id="editor-box" class="editor-box">
+            <div id="mirror" class="mirror editor-text" aria-hidden="true"></div>
+            <textarea
+              id="editor"
+              class="editor-text"
+              spellcheck="true"
+              placeholder="Write or paste your English text here."
+            ></textarea>
+          </div>
         </section>
 
         <div
@@ -74,12 +80,7 @@
         ></div>
 
         <aside id="side" class="side" aria-label="Results">
-          <section class="issues-pane">
-            <h2 id="issues-header">Issues (0)</h2>
-            <div id="issues" class="issues" role="listbox" aria-labelledby="issues-header">
-              <p class="empty">Press Check to find errors</p>
-            </div>
-          </section>
+          <section id="issues-pane" class="issues-pane" aria-label="Issues"></section>
 
           <div
             id="divider-side"
@@ -93,9 +94,11 @@
             tabindex="0"
           ></div>
 
-          <section class="explanation-pane" aria-label="Explanation">
-            <p class="empty">Select an issue to see why it is wrong.</p>
-          </section>
+          <section
+            id="explanation"
+            class="explanation-pane explanation"
+            aria-label="Explanation"
+          ></section>
         </aside>
       </main>
 
@@ -104,7 +107,7 @@
         <span class="sep">|</span>
         <span id="status-words">0 words</span>
         <span class="sep">|</span>
-        <span id="status-tokens">last: none · session: 0 / 0</span>
+        <span id="status-tokens">last: none · session: 0 in / 0 out</span>
       </footer>
     </div>
   </body>

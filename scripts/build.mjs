@@ -20,6 +20,7 @@ const copies = [
   ["options/options.html", "options.html"],
   ["options/options.css", "options.css"],
   ["ui/theme.css", "theme.css"],
+  ["ui/components.css", "components.css"],
   ["icons", "icons"],
 ];
 
