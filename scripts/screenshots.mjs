@@ -3741,7 +3741,9 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
     /** Types into a text box of the page, after its text, as a user does. */
     async typeInBox(text, id = "box") {
       // After the text that is there, wherever the click put the caret.
-      await driver.findElement(By.id(id)).sendKeys(Key.chord(Key.CONTROL, Key.END), text);
+      const field = await driver.findElement(By.id(id));
+      await field.sendKeys(Key.chord(Key.CONTROL, Key.END));
+      await field.sendKeys(text);
     },
     /** Clicks the window coordinates with the mouse (the badge is in a shadow root Selenium cannot reach). */
     async clickAt(x, y) {
