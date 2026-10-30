@@ -163,7 +163,7 @@ describe("the editor's menu entries (SPEC section 4.3)", () => {
   ])("with $name the visible entries are $expected", async ({ selection, expected }) => {
     const h = await mount(replies());
     type(TEXT);
-    select(...selection);
+    select(selection[0], selection[1]);
     expect(await openEditorMenu(h)).toEqual(expected);
     expect(h.menus.lastShowDefaults).toBe(true);
   });
@@ -175,7 +175,7 @@ describe("the editor's menu entries (SPEC section 4.3)", () => {
   ])("shows nothing for a selection of only $name", async ({ value, selection }) => {
     const h = await mount(replies());
     type(value);
-    select(...selection);
+    select(selection[0], selection[1]);
     expect(await openEditorMenu(h)).toEqual([]);
   });
 
