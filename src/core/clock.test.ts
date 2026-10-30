@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SystemClock } from "./clock";
-import { FakeClock } from "./testing/fake-clock";
+import { SystemClock, SystemScheduler } from "./clock";
+import { FakeClock, FakeScheduler } from "./testing/fake-clock";
 
 describe("SystemClock", () => {
   it("returns the current time in milliseconds", () => {
@@ -28,5 +28,46 @@ describe("FakeClock", () => {
     const clock = new FakeClock(5);
     clock.set(99);
     expect(clock.now()).toBe(99);
+  });
+});
+
+describe("SystemScheduler", () => {
+  it("runs the function once after the delay, and not after it was cancelled", async () => {
+    const calls: string[] = [];
+    const scheduler = new SystemScheduler();
+    scheduler.after(5, () => calls.push("ran"));
+    scheduler.after(5, () => calls.push("cancelled"))();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls).toEqual(["ran"]);
+  });
+});
+
+describe("FakeScheduler", () => {
+  it("runs due functions in order when time advances, and not before", () => {
+    const calls: string[] = [];
+    const scheduler = new FakeScheduler();
+    scheduler.after(20, () => calls.push("b"));
+    scheduler.after(10, () => calls.push("a"));
+    scheduler.advance(9);
+    expect(calls).toEqual([]);
+    scheduler.advance(1);
+    expect(calls).toEqual(["a"]);
+    scheduler.advance(100);
+    expect(calls).toEqual(["a", "b"]);
+    expect(scheduler.pending).toBe(0);
+  });
+
+  it("does not run a cancelled function, and runs one scheduled by another from the new time", () => {
+    const calls: string[] = [];
+    const scheduler = new FakeScheduler();
+    scheduler.after(10, () => calls.push("cancelled"))();
+    scheduler.after(10, () => {
+      calls.push("first");
+      scheduler.after(5, () => calls.push("second"));
+    });
+    scheduler.advance(14);
+    expect(calls).toEqual(["first"]);
+    scheduler.advance(1);
+    expect(calls).toEqual(["first", "second"]);
   });
 });

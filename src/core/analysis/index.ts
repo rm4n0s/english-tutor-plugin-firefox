@@ -44,7 +44,7 @@ export {
   type LocateResult,
   type Placed,
 } from "./locate";
-export type { AnalysisModel } from "./model";
+export { modelFromConfig, type AnalysisModel, type ModelConfig } from "./model";
 export {
   parseResponse,
   INVALID_REPLY_MESSAGE,
