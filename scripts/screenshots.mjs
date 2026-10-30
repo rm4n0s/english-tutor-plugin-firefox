@@ -1690,7 +1690,10 @@ const SCENARIOS = {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       if (ctx.llmRequests() !== 0) throw new Error("text of an excluded field was sent");
       for (const id of excluded) await ctx.expectNoBadge(id);
-      await ctx.stabilise({ keepFocus: true });
+      // Blur the last field: its caret blinks, and a screenshot would catch it on or off. The
+      // focus ring fades out of its own accord, so wait until it is gone.
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
       await ctx.screenshot();
       // The control, a plain text box on the same page, is checked: page mode does run here.
       await ctx.focusBox("control");
