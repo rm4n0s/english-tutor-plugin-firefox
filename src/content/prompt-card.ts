@@ -5,9 +5,9 @@ import { applyCss, type Css } from "./style";
 /** Clicks in this many milliseconds after the card appears are ignored (SPEC section 4.11). */
 export const CLICK_GUARD_MS = 500;
 
-export const PROMPT_BUTTONS: readonly { choice: PromptChoice; label: string }[] = [
+/** What the card offers (SPEC section 4.11). "Not now" is gone: the card opens on demand, and the close button dismisses it. */
+export const PROMPT_BUTTONS: readonly { choice: "on" | "off"; label: string }[] = [
   { choice: "on", label: "Turn on" },
-  { choice: "later", label: "Not now" },
   { choice: "off", label: "Never on this site" },
 ];
 
@@ -84,9 +84,8 @@ const BUTTON: Css = {
 };
 
 /** One style per choice, so that the three buttons also differ in colour, not only in text. */
-const BUTTON_STYLE: Readonly<Record<PromptChoice, Css>> = {
+const BUTTON_STYLE: Readonly<Record<"on" | "off", Css>> = {
   on: { border: "1px solid #0b5cad", background: "#0b5cad", color: "#ffffff" },
-  later: { border: "1px solid #b0bccb", background: "#d9e2ec", color: "#1c1e21" },
   off: { border: "1px solid #b3261e", background: "#ffffff", color: "#b3261e" },
 };
 
@@ -114,16 +113,18 @@ export interface PromptCardOptions {
   llm: PromptServer | null;
   /** The user's choice. Called at most once. */
   onChoose: (choice: PromptChoice) => void;
+  /** The close button: the card goes and nothing is chosen. Called at most once. */
+  onClose: () => void;
 }
 
 /**
- * The card that asks, on a site with no choice yet, whether page mode may check what the user
- * writes there (SPEC section 4.11): the host, where the text would go, and Turn on, Not now and
- * Never on this site, and a close button that counts as Not now. It sits in the content script's
- * closed shadow root, just below the focused text box (above it when there is no room). It never
- * takes the focus from the text box (the card's mouse presses are cancelled, so the box keeps its
- * focus and its caret), and typing in the box does not close it. Its buttons ignore events the
- * page dispatched itself (`isTrusted === false`) and clicks in the first 500 ms.
+ * The card that asks, on a site that is not on, whether page mode may check what the user writes
+ * there (SPEC section 4.11): the host, where the text would go, Turn on and Never on this site, and
+ * a close button that chooses nothing. The user opens it with a click on the dimmed badge. It sits
+ * in the content script's closed shadow root, just below the focused text box (above it when there
+ * is no room). It never takes the focus from the text box (the card's mouse presses are cancelled,
+ * so the box keeps its focus and its caret), and typing in the box does not close it. Its buttons
+ * ignore events the page dispatched itself (`isTrusted === false`) and clicks in the first 500 ms.
  */
 export class PromptCard {
   private readonly options: PromptCardOptions;
@@ -162,7 +163,7 @@ export class PromptCard {
     close.setAttribute("aria-label", "Close");
     close.setAttribute("data-choice", "close");
     applyCss(close, CLOSE);
-    this.bind(close, "later");
+    this.bind(close, undefined);
 
     this.card.append(title, note, row, close);
     // A mouse press on the card must not move the focus out of the text box: the box keeps its
@@ -179,13 +180,14 @@ export class PromptCard {
     return this.card.isConnected;
   }
 
-  private bind(button: HTMLElement, choice: PromptChoice): void {
+  private bind(button: HTMLElement, choice: PromptChoice | undefined): void {
     button.addEventListener("click", (event) => {
       if (!event.isTrusted) return;
       if (this.options.clock.now() - this.openedAt < CLICK_GUARD_MS) return;
       if (this.chosen) return;
       this.chosen = true;
-      this.options.onChoose(choice);
+      if (choice === undefined) this.options.onClose();
+      else this.options.onChoose(choice);
     });
   }
 

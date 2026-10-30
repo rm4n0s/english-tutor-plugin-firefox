@@ -5,6 +5,7 @@ import {
   checkableTextBox,
   editingHost,
   findTextBox,
+  inspectTextBox,
   isExcluded,
   isPrivateAutocomplete,
   textBoxKind,
@@ -160,15 +161,111 @@ describe("isExcluded and checkableTextBox: the rules of SPEC section 4.11", () =
     },
     { name: "spellcheck=false", html: '<textarea spellcheck="false"></textarea>', checked: false },
     {
-      name: "spellcheck=false on an editable",
-      html: '<div contenteditable="true" spellcheck="false"></div>',
-      checked: false,
-    },
-    {
       name: "inside spellcheck=false",
       html: '<div spellcheck="false"><textarea></textarea></div>',
       checked: false,
       target: "textarea",
+    },
+    {
+      name: "an input inside spellcheck=false",
+      html: '<form spellcheck="false"><input type="text"></form>',
+      checked: false,
+      target: "input",
+    },
+    // SPEC section 4.11: spellcheck="false" alone no longer excludes an editing host (rich-text
+    // editors set it on prose boxes), but an editor that turns its corrections off too is code.
+    {
+      name: "spellcheck=false on an editable (a prose editor)",
+      html: '<div contenteditable="true" spellcheck="false"></div>',
+      checked: true,
+    },
+    {
+      name: "a Quill editor with spellcheck=false and data-gramm=false",
+      html: '<div class="ql-editor" contenteditable="true" role="textbox" aria-multiline="true" data-gramm="false" spellcheck="false"><p><br></p></div>',
+      checked: true,
+    },
+    {
+      name: "an editable inside a form with spellcheck=false",
+      html: '<form spellcheck="false"><div role="textbox" contenteditable="true"></div></form>',
+      checked: true,
+      target: "div",
+    },
+    {
+      name: "translate=no on a prose editor",
+      html: '<div contenteditable="true" spellcheck="false" translate="no"></div>',
+      checked: true,
+    },
+    {
+      name: "spellcheck=false and autocorrect=off on an editable (CodeMirror 6, Ace)",
+      html: '<div contenteditable="true" spellcheck="false" autocorrect="off"></div>',
+      checked: false,
+    },
+    {
+      name: "spellcheck=false and autocapitalize=off on an editable",
+      html: '<div contenteditable="true" spellcheck="false" autocapitalize="off"></div>',
+      checked: false,
+    },
+    {
+      name: "spellcheck=false and autocapitalize=none on an editable",
+      html: '<div contenteditable="true" spellcheck="false" autocapitalize="none"></div>',
+      checked: false,
+    },
+    {
+      name: "autocorrect=off on an ancestor of a spellcheck=false editable",
+      html: '<div autocorrect="off"><div contenteditable="true" spellcheck="false"></div></div>',
+      checked: false,
+      target: "[contenteditable]",
+    },
+    {
+      name: "autocorrect=off alone on an editable (spellcheck not false)",
+      html: '<div contenteditable="true" autocorrect="off"></div>',
+      checked: true,
+    },
+    {
+      name: "a CodeMirror 6 content element",
+      html: '<div class="cm-editor"><div class="cm-content" contenteditable="true" role="textbox" aria-multiline="true"></div></div>',
+      checked: false,
+      target: ".cm-content",
+    },
+    {
+      name: "the hidden textarea of CodeMirror 5",
+      html: '<div class="CodeMirror"><textarea></textarea></div>',
+      checked: false,
+      target: "textarea",
+    },
+    {
+      name: "the input area of Monaco",
+      html: '<div class="monaco-editor"><textarea class="inputarea"></textarea></div>',
+      checked: false,
+      target: "textarea",
+    },
+    {
+      name: "the text input of Ace",
+      html: '<div class="ace_editor"><textarea class="ace_text-input"></textarea></div>',
+      checked: false,
+      target: "textarea",
+    },
+    {
+      name: "the helper textarea of a terminal",
+      html: '<div class="xterm"><textarea class="xterm-helper-textarea"></textarea></div>',
+      checked: false,
+      target: "textarea",
+    },
+    {
+      name: "an editable pre",
+      html: '<pre contenteditable="true">x = 1</pre>',
+      checked: false,
+    },
+    {
+      name: "an editable inside code",
+      html: '<code><span contenteditable="true"></span></code>',
+      checked: false,
+      target: "span",
+    },
+    {
+      name: "a prose editor that looks a little like CodeMirror by class name",
+      html: '<div class="cm-note" contenteditable="true"></div>',
+      checked: true,
     },
     {
       name: "inside spellcheck=false but true itself",
@@ -391,5 +488,113 @@ describe("findTextBox", () => {
     { name: "an excluded field", target: () => page("<textarea readonly></textarea>") },
   ])("finds nothing for $name", ({ target }) => {
     expect(findTextBox(target(), window)).toBeUndefined();
+  });
+});
+
+describe("inspectTextBox: why a focused element is left alone (SPEC section 4.11, the debug log)", () => {
+  it.each([
+    { name: "a plain textarea", html: "<textarea></textarea>", skip: undefined },
+    {
+      name: "an editor with spellcheck=false",
+      html: '<div contenteditable="true" spellcheck="false"></div>',
+      skip: undefined,
+    },
+    { name: "a read-only textarea", html: "<textarea readonly></textarea>", skip: "read-only" },
+    { name: "a disabled input", html: "<input disabled>", skip: "disabled" },
+    {
+      name: "a password input",
+      html: '<input type="password">',
+      skip: "input type is not text",
+    },
+    {
+      name: "an email input",
+      html: '<input type="email">',
+      skip: "input type is not text",
+    },
+    {
+      name: "a credit card field",
+      html: '<input autocomplete="cc-number">',
+      skip: "private autocomplete",
+    },
+    {
+      name: "a native textarea with spellcheck=false",
+      html: '<textarea spellcheck="false"></textarea>',
+      skip: "spellcheck is off on a native text box",
+    },
+    {
+      name: "an editor with spellcheck=false and autocorrect=off",
+      html: '<div contenteditable="true" spellcheck="false" autocorrect="off"></div>',
+      skip: "spellcheck, autocorrect or autocapitalize are off on an editor",
+    },
+    {
+      name: "CodeMirror 6",
+      html: '<div class="cm-editor"><div contenteditable="true"></div></div>',
+      target: "[contenteditable]",
+      skip: "code editor (.cm-editor)",
+    },
+    {
+      name: "an opt-out",
+      html: '<div data-english-tutor="off"><textarea></textarea></div>',
+      target: "textarea",
+      skip: "opted out by data-english-tutor",
+    },
+    {
+      name: "a role=textbox div that is not editable",
+      html: '<div role="textbox"></div>',
+      skip: "role=textbox but not an editable element",
+    },
+  ])("$name: $skip", ({ html, target, skip }) => {
+    const root = page(html);
+    const element = target === undefined ? root : root.querySelector(target);
+    const result = inspectTextBox(element, window);
+    if (skip === undefined) expect(result).toHaveProperty("found");
+    else expect(result).toEqual({ skip, transient: false });
+  });
+
+  it.each([
+    { name: "a button", html: "<button>Go</button>" },
+    { name: "a paragraph", html: "<p>text</p>" },
+    { name: "a link", html: '<a href="/x">link</a>' },
+    { name: "a div that says nothing", html: '<div class="box"></div>' },
+  ])("says nothing for $name", ({ html }) => {
+    expect(inspectTextBox(page(html), window)).toBeUndefined();
+    expect(inspectTextBox(null, window)).toBeUndefined();
+  });
+
+  it.each([
+    { name: "too small", w: 20, h: 10, skip: "smaller than 40x16" },
+    { name: "narrow", w: 30, h: 80, skip: "smaller than 40x16" },
+  ])("a box that is $name is skipped, and may be looked at again", ({ w, h, skip }) => {
+    layOut(w, h);
+    const box = page("<textarea></textarea>");
+    expect(inspectTextBox(box, window)).toEqual({ skip, transient: true });
+  });
+
+  it.each([
+    { name: "display none", css: "display: none" },
+    { name: "visibility hidden", css: "visibility: hidden" },
+    { name: "opacity 0", css: "opacity: 0" },
+  ])("a box with $name is skipped as not visible, and may be looked at again", ({ css }) => {
+    const box = page(`<div contenteditable="true" style="${css}"></div>`);
+    expect(inspectTextBox(box, window)).toEqual({ skip: "not visible", transient: true });
+  });
+
+  it("takes the body of a document in designMode as the text box (old TinyMCE and CKEditor)", () => {
+    const body = page("<p>text</p>").parentElement!;
+    Object.defineProperty(document, "designMode", { value: "on", configurable: true });
+    try {
+      expect(inspectTextBox(body.firstElementChild, window)).toEqual({
+        found: { element: body, kind: "editable" },
+      });
+    } finally {
+      Reflect.deleteProperty(document, "designMode");
+    }
+  });
+
+  it("never puts the user's text in a reason", () => {
+    const secret = "my secret sentence";
+    const box = page(`<textarea readonly>${secret}</textarea>`);
+    const result = inspectTextBox(box, window);
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });

@@ -506,24 +506,43 @@ describe("page mode", () => {
     ])("when $event", ({ fire }) => {
       it.each([
         {
-          name: "page mode on with the permission registers the script",
+          name: "page mode on with the permission registers the script and starts it in the open tabs",
           on: true,
           granted: true,
           registered: false,
-          expected: ["register"],
+          stale: false,
+          expected: ["register", "inject"],
         },
         {
           name: "an already registered script is left alone",
           on: true,
           granted: true,
           registered: true,
+          stale: false,
           expected: [],
+        },
+        {
+          name: "a script registered by an older version (no matchOriginAsFallback) is registered again, and started in the open tabs (the old copies are dead)",
+          on: true,
+          granted: true,
+          registered: true,
+          stale: true,
+          expected: ["register", "inject"],
         },
         {
           name: "page mode off unregisters a script that is there",
           on: false,
           granted: true,
           registered: true,
+          stale: false,
+          expected: ["unregister"],
+        },
+        {
+          name: "page mode off unregisters an older script too",
+          on: false,
+          granted: true,
+          registered: true,
+          stale: true,
           expected: ["unregister"],
         },
         {
@@ -531,13 +550,15 @@ describe("page mode", () => {
           on: false,
           granted: false,
           registered: false,
+          stale: false,
           expected: [],
         },
-      ])("$name", async ({ on, granted, registered, expected }) => {
+      ])("$name", async ({ on, granted, registered, stale, expected }) => {
         const s = setup();
         await (await settings(s)).setSetting("page_mode", on);
         s.permission.granted = granted;
         s.scripts.registered = registered;
+        s.scripts.stale = stale;
         fire(s);
         await settle();
         await settle();
@@ -588,7 +609,7 @@ describe("page mode", () => {
       await turnedOn(s);
       const reply = await s.messageBus.send({ type: "page-mode-apply" });
       expect(reply).toEqual({ answered: true, answer: { ok: true } });
-      expect(s.scripts.calls).toEqual(["register"]);
+      expect(s.scripts.calls).toEqual(["register", "inject"]);
       expect(s.pageTabs.sent).toEqual(["settings-changed"]);
     });
 
@@ -708,7 +729,7 @@ describe("page mode", () => {
       s.session.values.set("page-mode-later:example.com", true);
       expect(
         (await s.messageBus.send({ type: "page-mode-config", host: "example.com" })).answer,
-      ).toEqual({ state: "later" });
+      ).toEqual({ state: "later", llm: null });
       expect(
         (await s.messageBus.send({ type: "page-mode-config", host: "other.org" })).answer,
       ).toEqual({ state: "ask", llm: null });
@@ -809,12 +830,18 @@ describe("page mode", () => {
     const send = (
       s: ReturnType<typeof setup>,
       choice: unknown,
-      overrides: { host?: string; url?: string | undefined; tab?: typeof TAB | undefined } = {},
+      overrides: {
+        host?: string;
+        url?: string | undefined;
+        origin?: string | undefined;
+        tab?: typeof TAB | undefined;
+      } = {},
     ) =>
       s.messageBus.send(
         { type: "page-mode-site", host: overrides.host ?? "www.example.com", choice },
         {
           url: "url" in overrides ? overrides.url : SITE,
+          origin: overrides.origin,
           tab: "tab" in overrides ? overrides.tab : TAB,
         },
       );
@@ -833,6 +860,54 @@ describe("page mode", () => {
       expect(reply).toEqual({ answered: true, answer: { ok: true } });
       expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual(expected);
       expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+    });
+
+    it.each([
+      {
+        name: "an about:srcdoc frame, by its origin",
+        url: "about:srcdoc",
+        origin: "https://www.example.com",
+      },
+      {
+        name: "an about:blank frame, by its origin",
+        url: "about:blank",
+        origin: "http://www.example.com",
+      },
+      {
+        name: "a blob: frame, by its origin",
+        url: "blob:https://www.example.com/3b4f2c1e-0f6e-4c5d-8d6a-1c2b3a4d5e6f",
+        origin: "https://www.example.com",
+      },
+      {
+        name: "a frame with an address, which wins over its origin",
+        url: SITE,
+        origin: "https://other.org",
+      },
+    ])("takes the host of $name", async ({ url, origin }) => {
+      const s = setup();
+      await offered(s);
+      const reply = await send(s, "on", { url, origin });
+      expect(reply.answer).toEqual({ ok: true });
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({
+        "www.example.com": "on",
+      });
+    });
+
+    it.each([
+      {
+        name: "a frame whose origin is another site",
+        url: "about:srcdoc",
+        origin: "https://evil.org",
+      },
+      { name: "a sandboxed frame (opaque origin)", url: "about:srcdoc", origin: "null" },
+      { name: "an origin that is not http(s)", url: "about:srcdoc", origin: "moz-extension://abc" },
+      { name: "no origin at all", url: "about:blank", origin: undefined },
+    ])("takes nothing for $name", async ({ url, origin }) => {
+      const s = setup();
+      await offered(s);
+      const reply = await send(s, "on", { url, origin });
+      expect(reply.answer).toEqual({ ok: false });
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
     });
 
     it("keeps the other sites' choices", async () => {
@@ -934,7 +1009,7 @@ describe("page mode", () => {
       await offered(s);
       const reply = await s.messageBus.send(
         { type: "page-mode-site", host: "www.example.com", choice: "on" },
-        { ownExtension: false, url: SITE, tab: TAB },
+        { ownExtension: false, url: SITE, origin: undefined, tab: TAB },
       );
       expect(reply.answered).toBe(false);
       expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});

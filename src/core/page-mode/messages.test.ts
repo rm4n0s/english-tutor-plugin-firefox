@@ -70,7 +70,16 @@ describe("the site messages", () => {
   it.each([
     { name: "on", answer: { state: "on" }, expected: { state: "on" } },
     { name: "off", answer: { state: "off" }, expected: { state: "off" } },
-    { name: "later", answer: { state: "later" }, expected: { state: "later" } },
+    {
+      name: "later without an LLM field (it behaves like ask)",
+      answer: { state: "later" },
+      expected: { state: "later", llm: null },
+    },
+    {
+      name: "later with a server",
+      answer: { state: "later", llm: { server: "a.com", local: true } },
+      expected: { state: "later", llm: { server: "a.com", local: true } },
+    },
     {
       name: "on with a server it does not need",
       answer: { state: "on", llm: { server: "a.com", local: false } },

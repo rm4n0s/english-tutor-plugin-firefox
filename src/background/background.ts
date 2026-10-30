@@ -239,7 +239,7 @@ export function startBackground(deps: BackgroundDeps): void {
       // The choice of the prompt, from the content script of a tab; the host must be the page's.
       const request = parseSiteRequest(message);
       if (request === undefined || sender.tab === undefined) return undefined;
-      return pageMode.chooseSite(request, sender.url).then((ok) => ({ ok }));
+      return pageMode.chooseSite(request, sender).then((ok) => ({ ok }));
     }
     if (type === PAGE_FRAME_REGISTER) {
       // From the content script of a tab; the browser says which tab. A message without a tab

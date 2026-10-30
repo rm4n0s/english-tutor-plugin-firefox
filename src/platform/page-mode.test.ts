@@ -85,45 +85,87 @@ describe("BrowserPageModePermission", () => {
 });
 
 describe("BrowserContentScripts", () => {
-  function fakeApi(registered: string[] = []) {
+  interface Fake {
+    registered?: { id: string; matchOriginAsFallback?: boolean }[];
+    /** Registering with `matchOriginAsFallback` is refused (a Firefox that does not know it). */
+    refuseFallback?: boolean;
+    tabs?: { id?: number }[];
+    /** The tab ids `executeScript` fails for. */
+    unreachable?: number[];
+  }
+
+  function fakeApi({
+    registered = [],
+    refuseFallback = false,
+    tabs = [],
+    unreachable = [],
+  }: Fake = {}) {
     const calls: { method: string; arg: unknown }[] = [];
     const api = {
       scripting: {
         getRegisteredContentScripts: (filter: unknown) => {
           calls.push({ method: "get", arg: filter });
-          return Promise.resolve(registered.map((id) => ({ id })));
+          return Promise.resolve(registered);
         },
         registerContentScripts: (scripts: unknown) => {
           calls.push({ method: "register", arg: scripts });
+          const first = (scripts as { matchOriginAsFallback?: boolean }[])[0];
+          if (refuseFallback && first?.matchOriginAsFallback === true) {
+            return Promise.reject(new Error('Unexpected property "matchOriginAsFallback"'));
+          }
           return Promise.resolve();
         },
         unregisterContentScripts: (filter: unknown) => {
           calls.push({ method: "unregister", arg: filter });
           return Promise.resolve();
         },
+        executeScript: (injection: { target: { tabId: number } }) => {
+          calls.push({ method: "execute", arg: injection });
+          return unreachable.includes(injection.target.tabId)
+            ? Promise.reject(new Error("Missing host permission for the tab"))
+            : Promise.resolve([]);
+        },
+      },
+      tabs: {
+        query: (filter: unknown) => {
+          calls.push({ method: "query", arg: filter });
+          return Promise.resolve(tabs);
+        },
       },
     } as unknown as typeof browser;
     return { api, calls };
   }
 
-  it("registers page.js for every web page and every frame, at document_idle", async () => {
+  const SCRIPT = {
+    id: "page-mode",
+    matches: ["<all_urls>"],
+    js: ["page.js"],
+    runAt: "document_idle",
+    allFrames: true,
+  };
+
+  it("registers page.js for every web page and every frame, at document_idle, also in about:blank, about:srcdoc and blob: frames of the same origin", async () => {
     const { api, calls } = fakeApi();
     await new BrowserContentScripts(api).register();
-    expect(calls).toEqual([
-      {
-        method: "register",
-        arg: [
-          {
-            id: "page-mode",
-            matches: ["<all_urls>"],
-            js: ["page.js"],
-            runAt: "document_idle",
-            allFrames: true,
-          },
-        ],
-      },
+    expect(calls.filter((c) => c.method === "register")).toEqual([
+      { method: "register", arg: [{ ...SCRIPT, matchOriginAsFallback: true }] },
     ]);
     expect(PAGE_MODE_SCRIPT_ID).toBe("page-mode");
+  });
+
+  it("registers without matchOriginAsFallback when the browser does not know the property", async () => {
+    const { api, calls } = fakeApi({ refuseFallback: true });
+    await new BrowserContentScripts(api).register();
+    expect(calls.filter((c) => c.method === "register")).toEqual([
+      { method: "register", arg: [{ ...SCRIPT, matchOriginAsFallback: true }] },
+      { method: "register", arg: [SCRIPT] },
+    ]);
+  });
+
+  it("replaces an older registration instead of failing on the id", async () => {
+    const { api, calls } = fakeApi({ registered: [{ id: "page-mode" }] });
+    await new BrowserContentScripts(api).register();
+    expect(calls.map((c) => c.method)).toEqual(["get", "unregister", "register"]);
   });
 
   it("unregisters its script by id", async () => {
@@ -133,12 +175,59 @@ describe("BrowserContentScripts", () => {
   });
 
   it.each([
-    { registered: ["page-mode"], expected: true },
-    { registered: [], expected: false },
-  ])("isRegistered is $expected for $registered", async ({ registered, expected }) => {
-    const { api, calls } = fakeApi(registered);
-    expect(await new BrowserContentScripts(api).isRegistered()).toBe(expected);
+    { name: "nothing registered", registered: [], expected: "none" },
+    {
+      name: "a script of an older version (no matchOriginAsFallback)",
+      registered: [{ id: "page-mode" }],
+      expected: "stale",
+    },
+    {
+      name: "a script with matchOriginAsFallback false",
+      registered: [{ id: "page-mode", matchOriginAsFallback: false }],
+      expected: "stale",
+    },
+    {
+      name: "the current script",
+      registered: [{ id: "page-mode", matchOriginAsFallback: true }],
+      expected: "current",
+    },
+  ])("registration is $expected for $name", async ({ registered, expected }) => {
+    const { api, calls } = fakeApi({ registered });
+    expect(await new BrowserContentScripts(api).registration()).toBe(expected);
     expect(calls[0]?.arg).toEqual({ ids: ["page-mode"] });
+  });
+
+  describe("injectIntoOpenTabs", () => {
+    it("runs page.js in every frame of every http(s) tab that is open", async () => {
+      const { api, calls } = fakeApi({ tabs: [{ id: 3 }, { id: 9 }] });
+      const result = await new BrowserContentScripts(api).injectIntoOpenTabs();
+      expect(result).toEqual({ injected: 2, skipped: 0 });
+      expect(calls[0]).toEqual({
+        method: "query",
+        arg: { url: ["http://*/*", "https://*/*"] },
+      });
+      expect(calls.slice(1)).toEqual([
+        { method: "execute", arg: { target: { tabId: 3, allFrames: true }, files: ["page.js"] } },
+        { method: "execute", arg: { target: { tabId: 9, allFrames: true }, files: ["page.js"] } },
+      ]);
+    });
+
+    it("skips a tab it cannot script and a tab with no id, and goes on", async () => {
+      const { api } = fakeApi({ tabs: [{ id: 1 }, {}, { id: 2 }, { id: 3 }], unreachable: [2] });
+      expect(await new BrowserContentScripts(api).injectIntoOpenTabs()).toEqual({
+        injected: 2,
+        skipped: 2,
+      });
+    });
+
+    it("does nothing when no tab is open", async () => {
+      const { api, calls } = fakeApi();
+      expect(await new BrowserContentScripts(api).injectIntoOpenTabs()).toEqual({
+        injected: 0,
+        skipped: 0,
+      });
+      expect(calls.map((c) => c.method)).toEqual(["query"]);
+    });
   });
 });
 
@@ -297,7 +386,7 @@ describe("BrowserPageModeRuntime", () => {
   it.each([
     { answer: { state: "on" }, expected: { state: "on" } },
     { answer: { state: "off" }, expected: { state: "off" } },
-    { answer: { state: "later" }, expected: { state: "later" } },
+    { answer: { state: "later" }, expected: { state: "later", llm: null } },
     { answer: { state: "ask", llm: null }, expected: { state: "ask", llm: null } },
     // An answer that makes no sense, or an old one, is off: nothing is read.
     { answer: { enabled: true }, expected: { state: "off" } },

@@ -2,7 +2,9 @@ import type { PageBroadcast, PromptChoice, SiteConfig } from "../../core/page-mo
 import type {
   BackgroundMessages,
   ContentScripts,
+  Injection,
   MessageSender,
+  Registration,
   PageModeBackendLink,
   PageModePermission,
   PageModeRuntime,
@@ -49,18 +51,27 @@ export class FakePageModePermission implements PageModePermission {
 
 export class FakeContentScripts implements ContentScripts {
   registered = false;
+  /** Whether the registered script is an older one (without `matchOriginAsFallback`). */
+  stale = false;
   readonly calls: string[] = [];
   failWith: Error | undefined;
+  injection: Injection = { injected: 2, skipped: 1 };
 
-  isRegistered(): Promise<boolean> {
-    return Promise.resolve(this.registered);
+  registration(): Promise<Registration> {
+    return Promise.resolve(!this.registered ? "none" : this.stale ? "stale" : "current");
   }
 
   register(): Promise<void> {
     this.calls.push("register");
     if (this.failWith !== undefined) return Promise.reject(this.failWith);
     this.registered = true;
+    this.stale = false;
     return Promise.resolve();
+  }
+
+  injectIntoOpenTabs(): Promise<Injection> {
+    this.calls.push("inject");
+    return Promise.resolve(this.injection);
   }
 
   unregister(): Promise<void> {
@@ -110,6 +121,7 @@ export class FakeBackgroundMessages implements BackgroundMessages {
     const result = this.handler?.(message, {
       ownExtension: true,
       url: undefined,
+      origin: undefined,
       tab: undefined,
       ...sender,
     });

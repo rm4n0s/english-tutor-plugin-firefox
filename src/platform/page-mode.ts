@@ -65,11 +65,28 @@ export class BrowserPageModePermission implements PageModePermission {
   }
 }
 
+/** What is registered: nothing, a script of an older version (no `matchOriginAsFallback`), or the current one. */
+export type Registration = "none" | "stale" | "current";
+
+/** The tabs a script was run in, and the tabs it could not be run in (pages the extension cannot reach). */
+export interface Injection {
+  injected: number;
+  skipped: number;
+}
+
 /** The registered content script of page mode (SPEC section 4.11). Only `browser.scripting`. */
 export interface ContentScripts {
-  isRegistered(): Promise<boolean>;
+  registration(): Promise<Registration>;
+  /** Registers the script, replacing an older registration. */
   register(): Promise<void>;
   unregister(): Promise<void>;
+  /**
+   * Runs the script once in every `http(s)` tab that is open now, in all its frames: a registered
+   * script reaches only pages that load after it, and the old copy of a script from before an
+   * update is dead. The script starts once per frame (`claimPageSlot`), so a page that has both
+   * runs one.
+   */
+  injectIntoOpenTabs(): Promise<Injection>;
 }
 
 export class BrowserContentScripts implements ContentScripts {
@@ -79,27 +96,57 @@ export class BrowserContentScripts implements ContentScripts {
     this.api = api;
   }
 
-  async isRegistered(): Promise<boolean> {
+  async registration(): Promise<Registration> {
     const found = await this.api.scripting.getRegisteredContentScripts({
       ids: [PAGE_MODE_SCRIPT_ID],
     });
-    return found.length > 0;
+    const script = found[0];
+    if (script === undefined) return "none";
+    return script.matchOriginAsFallback === true ? "current" : "stale";
   }
 
   async register(): Promise<void> {
-    await this.api.scripting.registerContentScripts([
-      {
-        id: PAGE_MODE_SCRIPT_ID,
-        matches: [ALL_URLS],
-        js: [PAGE_MODE_SCRIPT_FILE],
-        runAt: "document_idle",
-        allFrames: true,
-      },
-    ]);
+    if ((await this.registration()) !== "none") await this.unregister();
+    const script: browser.scripting.RegisteredContentScript = {
+      id: PAGE_MODE_SCRIPT_ID,
+      matches: [ALL_URLS],
+      js: [PAGE_MODE_SCRIPT_FILE],
+      runAt: "document_idle",
+      allFrames: true,
+    };
+    try {
+      // The script also runs in `about:blank`, `about:srcdoc` and `blob:` frames whose origin
+      // matches (checked in Firefox 159): where TinyMCE and CKEditor 4 put their editors.
+      await this.api.scripting.registerContentScripts([{ ...script, matchOriginAsFallback: true }]);
+    } catch {
+      // A Firefox that does not know the property still gets the script, without those frames.
+      await this.api.scripting.registerContentScripts([script]);
+    }
   }
 
   async unregister(): Promise<void> {
     await this.api.scripting.unregisterContentScripts({ ids: [PAGE_MODE_SCRIPT_ID] });
+  }
+
+  async injectIntoOpenTabs(): Promise<Injection> {
+    const tabs = await this.api.tabs.query({ url: ["http://*/*", "https://*/*"] });
+    const results = await Promise.all(
+      tabs.map(async (tab): Promise<boolean> => {
+        if (tab.id === undefined) return false;
+        try {
+          await this.api.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            files: [PAGE_MODE_SCRIPT_FILE],
+          });
+          return true;
+        } catch {
+          // A tab the extension cannot script (a discarded tab, a page of the browser): skipped.
+          return false;
+        }
+      }),
+    );
+    const injected = results.filter(Boolean).length;
+    return { injected, skipped: results.length - injected };
   }
 }
 
@@ -157,6 +204,12 @@ export interface MessageSender {
   ownExtension: boolean;
   /** The address of the page or frame the sender runs in (a content script's page), if known. */
   url: string | undefined;
+  /**
+   * The origin of the document the sender runs in, as the browser knows it: for a frame with no
+   * address of its own (`about:blank`, `about:srcdoc`, `blob:`) it is the origin of the page that
+   * made it, which `url` does not say.
+   */
+  origin: string | undefined;
   tab: { id: number; windowId: number; index: number } | undefined;
 }
 
@@ -186,6 +239,7 @@ export class BrowserBackgroundMessages implements BackgroundMessages {
       return handler(message, {
         ownExtension: sender.id === this.api.runtime.id,
         url: sender.url,
+        origin: "origin" in sender && typeof sender.origin === "string" ? sender.origin : undefined,
         tab:
           tab?.id === undefined || tab.windowId === undefined
             ? undefined

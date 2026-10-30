@@ -39,6 +39,8 @@ function background(view: BadgeView): string {
       return "#ffffff";
     case "icon":
       return "#0072b2";
+    case "dimmed":
+      return "#6b7785";
   }
 }
 
@@ -139,9 +141,14 @@ export class Badge {
     this.element.setAttribute("title", view.label);
     this.element.setAttribute("aria-label", view.label);
     this.element.setAttribute("data-kind", view.kind);
-    applyCss(this.element, { background: background(view) });
+    // The dimmed badge of a site that is off is greyed and see-through (SPEC section 4.11).
+    applyCss(this.element, {
+      background: background(view),
+      opacity: view.kind === "dimmed" ? "0.6" : "1",
+    });
     switch (view.kind) {
       case "icon":
+      case "dimmed":
         this.element.replaceChildren(iconSvg(this.doc));
         break;
       case "check":

@@ -93,9 +93,16 @@ export class PageModeBackend {
       log.info("page mode was switched off: the permission for all websites is gone");
     }
     const enabled = wanted && granted;
-    const registered = await scripts.isRegistered();
-    if (enabled && !registered) await scripts.register();
-    else if (!enabled && registered) await scripts.unregister();
+    const registration = await scripts.registration();
+    if (enabled && registration !== "current") {
+      await scripts.register();
+      // The registration reaches only pages that load from now on: the pages that are open (the
+      // user may have allowed page mode on the LinkedIn tab they were using) get the script now.
+      const { injected, skipped } = await scripts.injectIntoOpenTabs();
+      log.debug("page mode was started in the open tabs", { injected, skipped });
+    } else if (!enabled && registration !== "none") {
+      await scripts.unregister();
+    }
     // The open pages are told before the permission can go (the options page removes it after
     // this call), and also when nothing had to change: a page may have missed an earlier message.
     if (options.notify) await tabs.broadcast(enabled ? SETTINGS_CHANGED : PAGE_MODE_OFF);
@@ -117,13 +124,13 @@ export class PageModeBackend {
   }
 
   /**
-   * The answer to the content script's `page-mode-config`: the site's state and, only for `ask`,
-   * the server of the LLM in use (the selected one, or the first by name) for the prompt's note:
-   * its host and port, never a key.
+   * The answer to the content script's `page-mode-config`: the site's state and, for `ask` and
+   * `later` (the sites that get the dimmed badge), the server of the LLM in use (the selected one,
+   * or the first by name) for the prompt's note: its host and port, never a key.
    */
   async config(host: string): Promise<SiteConfig> {
     const state = await this.siteState(host);
-    if (state !== "ask") return { state };
+    if (state !== "ask" && state !== "later") return { state };
     const store = await this.deps.settings();
     const [configs, selected] = await Promise.all([
       store.listConfigs(),
@@ -135,12 +142,16 @@ export class PageModeBackend {
 
   /**
    * The choice made in the prompt of a page (SPEC section 4.11). The host must be the one of the
-   * page the message came from, and page mode must be offered. Turn on and Never are stored;
-   * Not now is kept in `storage.session` until the browser restarts. The other pages are told.
-   * Returns whether the choice was taken.
+   * page the message came from (its address, or, for a frame with no address of its own, its
+   * origin), and page mode must be offered. Turn on and Never are stored; `later` is kept in
+   * `storage.session` until the browser restarts. The other pages are told. Returns whether the
+   * choice was taken.
    */
-  async chooseSite(request: SiteRequest, senderUrl: string | undefined): Promise<boolean> {
-    if (hostOfUrl(senderUrl) !== request.host) return false;
+  async chooseSite(
+    request: SiteRequest,
+    sender: { url: string | undefined; origin: string | undefined },
+  ): Promise<boolean> {
+    if ((hostOfUrl(sender.url) ?? hostOfUrl(sender.origin)) !== request.host) return false;
     const store = await this.deps.settings();
     if (!(await store.getSetting("page_mode"))) return false;
     if (request.choice === "later") {

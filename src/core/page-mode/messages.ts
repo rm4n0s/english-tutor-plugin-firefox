@@ -46,7 +46,10 @@ export interface ConfigRequest {
   host: string;
 }
 
-/** What page mode does on a site (SPEC section 4.11): `later` is "Not now", until the browser restarts. */
+/**
+ * What page mode does on a site (SPEC section 4.11): `later` is the "Not now" of version 0.2.0, kept
+ * until the browser restarts; it behaves like `ask` (the card no longer has that button).
+ */
 export type SiteState = "on" | "off" | "ask" | "later";
 
 /** The server of the LLM in use, for the prompt's note: the host and port only, never a key. */
@@ -57,11 +60,11 @@ export interface PromptServer {
   local: boolean;
 }
 
-/** The background script's answer to `page-mode-config`. */
+/** The background script's answer to `page-mode-config`: the server for the card's note is given for `ask` and `later`. */
 export type SiteConfig =
-  { state: "on" | "off" | "later" } | { state: "ask"; llm: PromptServer | null };
+  { state: "on" | "off" } | { state: "ask" | "later"; llm: PromptServer | null };
 
-/** The choices the prompt offers. */
+/** The choices the background script accepts from a page (the card offers `on` and `off`). */
 export type PromptChoice = "on" | "off" | "later";
 
 export interface SiteRequest {
@@ -105,8 +108,8 @@ export function parseConfigRequest(message: unknown): ConfigRequest | undefined 
 export function parseSiteConfig(answer: unknown): SiteConfig | undefined {
   if (typeof answer !== "object" || answer === null) return undefined;
   const { state, llm } = answer as { state?: unknown; llm?: unknown };
-  if (state === "on" || state === "off" || state === "later") return { state };
-  if (state !== "ask") return undefined;
+  if (state === "on" || state === "off") return { state };
+  if (state !== "ask" && state !== "later") return undefined;
   if (llm === null || llm === undefined) return { state, llm: null };
   if (typeof llm !== "object") return undefined;
   const { server, local } = llm as { server?: unknown; local?: unknown };

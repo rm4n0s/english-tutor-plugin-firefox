@@ -12,7 +12,8 @@ import type { FrameMessage } from "../core/page-mode/protocol";
 import type { Random } from "../core/random";
 import type { PageModeRuntime } from "../platform/page-mode";
 import type { PageConnector } from "../platform/page-port";
-import { Badge, BADGE_SIZE } from "./badge";
+import { Badge } from "./badge";
+import { badgeSpot } from "./badge-place";
 import { badgeViewOf } from "./badge-view";
 import { BlockedCard } from "./blocked-card";
 import { BoxState } from "./box-state";
@@ -21,8 +22,10 @@ import { FrameLink } from "./frame-link";
 import { issueAt } from "../core/issues/navigation";
 import { OverlayHost } from "./overlay-host";
 import { PopoverController, type PopoverTarget } from "./popover";
-import { SitePrompt } from "./site-prompt";
+import { SiteOffer } from "./site-offer";
+import { siteHostOf } from "./site-host";
 import { findTextBox } from "./text-box";
+import { deepActiveElement, TextBoxFinder } from "./text-box-finder";
 import { BoxUnderlines } from "./underlines";
 
 export interface PageModeContentDeps {
@@ -40,9 +43,6 @@ export interface PageModeContentDeps {
   frameTimeoutMs?: number;
 }
 
-/** Space between the badge and the box's inner corner. */
-const BADGE_MARGIN = 4;
-
 interface Tracked {
   state: BoxState;
   badge: Badge;
@@ -57,10 +57,10 @@ interface Tracked {
  *   dispatches itself, `isTrusted === false`, are ignored). It keeps the box's text state, sends
  *   the text and each edit to the frame over the port, and draws the badge from what the frame
  *   answers.
- * - `ask`: it reads no text and makes no frame. The first trusted focus of a text box page mode may
- *   read opens the prompt card, once per page load; Turn on makes the site `on` and checks the
- *   focused box at once.
- * - `off` and `later`: it does nothing at all.
+ * - `ask` and `later`: it reads no text and makes no frame. A text box page mode may read that gets
+ *   the focus gets the dimmed badge; a click on it opens the prompt card; Turn on makes the site
+ *   `on` and checks the focused box at once.
+ * - `off`: it does nothing at all: no badge, no listener, no element.
  *
  * Everything it adds to the page is in an element with a closed shadow root. It never calls an LLM
  * and never sees a key or a setting. `page-mode-off` removes everything; `settings-changed` asks
@@ -70,10 +70,9 @@ export class PageModeContent {
   private readonly deps: PageModeContentDeps;
   private readonly win: Window & typeof globalThis;
   private readonly doc: Document;
+  private readonly finder: TextBoxFinder;
   private active: Active | undefined;
-  private prompt: SitePrompt | undefined;
-  /** The prompt is shown at most once per page load, whatever happens to the site's state. */
-  private promptShown = false;
+  private offer: SiteOffer | undefined;
   private stopListening: (() => void) | undefined;
   private asks = 0;
 
@@ -81,6 +80,17 @@ export class PageModeContent {
     this.deps = deps;
     this.win = deps.win;
     this.doc = deps.win.document;
+    this.finder = new TextBoxFinder({
+      win: deps.win,
+      scheduler: deps.scheduler,
+      log: deps.log,
+      host: siteHostOf(deps.win),
+    });
+  }
+
+  /** The site this frame belongs to (`siteHostOf`). */
+  private get siteHost(): string {
+    return siteHostOf(this.win);
   }
 
   /** Whether page mode is checking text boxes on this page now (the site is `on`). */
@@ -88,14 +98,24 @@ export class PageModeContent {
     return this.active !== undefined;
   }
 
-  /** Whether the prompt is waiting for the user's first focus of a text box, or showing. */
+  /** Whether the site is not on and page mode is waiting for a focus (the dimmed badge). */
   get asking(): boolean {
-    return this.prompt !== undefined;
+    return this.offer !== undefined;
   }
 
   /** Whether the prompt card is showing. */
   get promptOpen(): boolean {
-    return this.prompt?.open === true;
+    return this.offer?.open === true;
+  }
+
+  /** The text box that has the dimmed badge, if any. */
+  get boxWithBadge(): HTMLElement | undefined {
+    return this.offer?.boxWithBadge;
+  }
+
+  /** The dimmed badge of a site that is not on, if one is on the page. */
+  get dimmedBadge(): HTMLElement | undefined {
+    return this.offer?.badgeShown === true ? this.offer.badgeElement : undefined;
   }
 
   /** The text boxes the user has focused, with their state (for tests and for step 14). */
@@ -187,7 +207,7 @@ export class PageModeContent {
     // An answer that cannot be had is `off`: nothing is read.
     let config: SiteConfig = { state: "off" };
     try {
-      config = await this.deps.runtime.configFor(this.win.location.hostname);
+      config = await this.deps.runtime.configFor(this.siteHost);
     } catch (err) {
       this.deps.log.error("page mode could not ask what it does here", { err });
     }
@@ -196,38 +216,46 @@ export class PageModeContent {
   }
 
   private apply(config: SiteConfig): void {
+    const host = this.siteHost;
+    this.deps.log.debug(
+      `page mode is ${config.state} on ${host === "" ? "a frame with no site" : host}`,
+    );
     if (config.state === "on") {
-      this.dropPrompt();
+      this.dropOffer();
+      const first = this.active === undefined;
       this.attach();
-    } else if (config.state === "ask") {
-      // An open card stays: the answer only says the site is still undecided.
-      this.detachActive();
-      this.askOnFocus(config.llm);
-    } else {
+      // A box that is already focused (autofocus, or a script focused it before this began) is
+      // taken up as if it had just been focused, but only if the user is in this document.
+      if (first && this.doc.hasFocus()) this.active?.adopt(deepActiveElement(this.doc));
+    } else if (!("llm" in config)) {
       this.detach();
+    } else {
+      // `ask` or `later`: the dimmed badge. An open card stays: the answer only says the site is
+      // still undecided.
+      this.detachActive();
+      this.offerOnFocus(config.llm);
     }
   }
 
-  /** Waits for the first focus of a text box, to show the prompt (once per page load). */
-  private askOnFocus(llm: PromptServer | null): void {
-    if (this.promptShown) return;
-    if (this.prompt === undefined) {
-      this.prompt = new SitePrompt({
+  /** Starts listening for the focus, to show the dimmed badge (SPEC section 4.11). */
+  private offerOnFocus(llm: PromptServer | null): void {
+    if (this.offer === undefined) {
+      this.offer = new SiteOffer({
         win: this.win,
         clock: this.deps.clock,
-        host: this.win.location.hostname,
+        host: this.siteHost,
+        finder: this.finder,
         ...(this.deps.overlayMode === undefined ? {} : { overlayMode: this.deps.overlayMode }),
-        onShown: () => {
-          this.promptShown = true;
-        },
         onChoose: (choice) => {
-          this.prompt = undefined;
+          this.offer = undefined;
           this.choose(choice);
         },
       });
-      this.prompt.start();
+      this.offer.llm = llm;
+      this.offer.start();
+    } else {
+      this.offer.llm = llm;
     }
-    this.prompt.llm = llm;
   }
 
   /** The user's choice in the prompt: sent to the background script, which stores it. */
@@ -239,22 +267,22 @@ export class PageModeContent {
   }
 
   private async finishChoose(choice: PromptChoice): Promise<void> {
-    await this.deps.runtime.chooseSite(this.win.location.hostname, choice);
+    await this.deps.runtime.chooseSite(this.siteHost, choice);
     if (choice !== "on") return;
     // Turn on: the site is on at once. The box the user is in is checked now, not after the next
     // focus.
     this.attach();
-    this.active?.adopt(this.doc.activeElement);
+    this.active?.adopt(deepActiveElement(this.doc));
   }
 
   private attach(): void {
     if (this.active !== undefined) return;
-    this.active = new Active(this.deps, this.win, this.doc);
+    this.active = new Active(this.deps, this.win, this.doc, this.finder);
   }
 
-  private dropPrompt(): void {
-    this.prompt?.stop();
-    this.prompt = undefined;
+  private dropOffer(): void {
+    this.offer?.stop();
+    this.offer = undefined;
   }
 
   private detachActive(): void {
@@ -265,7 +293,8 @@ export class PageModeContent {
   /** Removes everything page mode has on the page: the checks, the badges and the prompt. */
   private detach(): void {
     this.detachActive();
-    this.dropPrompt();
+    this.dropOffer();
+    this.finder.cancel();
   }
 }
 
@@ -283,6 +312,7 @@ class Active {
   readonly popover: PopoverController;
   readonly dialog: DialogController;
   private readonly listeners: (() => void)[] = [];
+  private readonly finder: TextBoxFinder;
   private focused: Tracked | undefined;
   /** Whether the keyboard focus is inside the popover's frame (the page sees a focus on our host). */
   private cardFocused = false;
@@ -291,10 +321,16 @@ class Active {
   private resizeObserver: ResizeObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
 
-  constructor(deps: PageModeContentDeps, win: Window & typeof globalThis, doc: Document) {
+  constructor(
+    deps: PageModeContentDeps,
+    win: Window & typeof globalThis,
+    doc: Document,
+    finder: TextBoxFinder,
+  ) {
     this.deps = deps;
     this.win = win;
     this.doc = doc;
+    this.finder = finder;
     this.host = new OverlayHost(doc, deps.overlayMode ?? "closed");
     this.card = new BlockedCard(doc, this.host.layer);
     this.link = new FrameLink(
@@ -428,16 +464,26 @@ class Active {
    * the prompt, the box is checked at once, not after the next focus.
    */
   adopt(target: Element | null): void {
-    if (target !== null) this.focusTarget(target, target);
+    if (target === null) return;
+    // The box is already the focused one (the announcement of the choice arrived first).
+    if (this.focused?.state.element === target) return;
+    this.focusTarget(target, target);
   }
 
   private focusTarget(target: EventTarget | null, eventTarget: EventTarget | null): void {
     if (this.host.owns(eventTarget)) return;
-    const found = findTextBox(target, this.win);
-    if (found === undefined) {
+    const inspection = this.finder.find(target);
+    if (inspection === undefined || "skip" in inspection) {
       this.deactivate();
+      // A box that cannot be used yet (a modal that is still fading in) is looked at again.
+      if (inspection?.transient === true) {
+        this.finder.retry(target, () => {
+          this.focusTarget(target, eventTarget);
+        });
+      }
       return;
     }
+    const found = inspection.found;
     if (this.focused?.state.element !== found.element) this.deactivate();
     let tracked = this.boxes.get(found.element);
     if (tracked === undefined) {
@@ -757,29 +803,11 @@ class Active {
       this.forget(tracked);
       return;
     }
-    const rect = state.element.getBoundingClientRect();
-    const style = this.win.getComputedStyle(state.element);
-    const px = (value: string): number => Number.parseFloat(value) || 0;
-    const borderX = px(style.borderLeftWidth) + px(style.borderRightWidth);
-    const borderY = px(style.borderTopWidth) + px(style.borderBottomWidth);
-    // The room of a scroll bar is not part of the text area either.
-    const scrollbarX = Math.max(0, state.element.offsetWidth - state.element.clientWidth - borderX);
-    const scrollbarY = Math.max(
-      0,
-      state.element.offsetHeight - state.element.clientHeight - borderY,
-    );
-    badge.place(
-      rect.right - px(style.borderRightWidth) - scrollbarX - BADGE_SIZE - BADGE_MARGIN,
-      rect.bottom - px(style.borderBottomWidth) - scrollbarY - BADGE_SIZE - BADGE_MARGIN,
-    );
+    const spot = badgeSpot(state.element, this.win);
+    badge.place(spot.left, spot.top);
     // A box scrolled out of the window has no badge to show.
-    const inView =
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < this.win.innerHeight &&
-      rect.left < this.win.innerWidth;
-    badge.setVisible(inView && (state.focused || state.issues.length > 0));
-    this.drawUnderlines(tracked, inView);
+    badge.setVisible(spot.inView && (state.focused || state.issues.length > 0));
+    this.drawUnderlines(tracked, spot.inView);
   }
 
   destroy(): void {

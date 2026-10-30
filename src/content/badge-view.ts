@@ -5,10 +5,16 @@ import type { BoxView } from "./box-state";
 /** What the badge shows (SPEC section 4.11). */
 export type BadgeView =
   | { kind: "icon"; label: string }
+  | { kind: "dimmed"; label: string }
   | { kind: "spinner"; label: string }
   | { kind: "count"; label: string; count: number; category: Category }
   | { kind: "check"; label: string }
   | { kind: "warning"; label: string };
+
+/** The dimmed badge of a site that is not on (SPEC section 4.11): its tooltip and accessible name. */
+export function dimmedView(host: string): BadgeView {
+  return { kind: "dimmed", label: `English Tutor is off on ${host}. Click to turn it on.` };
+}
 
 function issuesText(n: number): string {
   return `${String(n)} ${n === 1 ? "issue" : "issues"}`;

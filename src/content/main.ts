@@ -4,6 +4,7 @@ import { CryptoRandom } from "../core/random";
 import { BrowserPageModeRuntime } from "../platform/page-mode";
 import { WindowPageConnector } from "../platform/page-port";
 import { PageModeContent } from "./page-mode";
+import { claimPageSlot } from "./slot";
 
 // The page-mode content script (SPEC section 4.11). The background script registers it only while
 // page mode is offered. It starts by asking what page mode does on this host: on a site that is on
@@ -11,16 +12,20 @@ import { PageModeContent } from "./page-mode";
 // other it does nothing. It never answers a `runtime` message (tutor pings are for the tutor pages).
 const log = new Logger(console);
 
-const content = new PageModeContent({
-  win: window,
-  runtime: new BrowserPageModeRuntime(browser),
-  connector: new WindowPageConnector(window),
-  scheduler: new SystemScheduler(),
-  clock: new SystemClock(),
-  random: new CryptoRandom(),
-  log,
-});
+// Once per page frame: the background script also runs this file in the tabs that were open when
+// page mode was allowed, and a page can end up with both copies.
+if (claimPageSlot(globalThis)) {
+  const content = new PageModeContent({
+    win: window,
+    runtime: new BrowserPageModeRuntime(browser),
+    connector: new WindowPageConnector(window),
+    scheduler: new SystemScheduler(),
+    clock: new SystemClock(),
+    random: new CryptoRandom(),
+    log,
+  });
 
-content.start().catch((err: unknown) => {
-  log.error("page mode could not start", { err });
-});
+  content.start().catch((err: unknown) => {
+    log.error("page mode could not start", { err });
+  });
+}
