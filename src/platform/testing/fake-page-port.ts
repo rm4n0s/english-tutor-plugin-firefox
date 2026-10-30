@@ -7,18 +7,25 @@ export class FakePort implements PagePort {
   disconnected = false;
   peer: FakePort | undefined;
   private readonly messageHandlers: ((message: unknown) => void)[] = [];
+  /** Messages that arrived before anyone listened, as a `MessagePort` holds them until `start`. */
+  private readonly waiting: unknown[] = [];
   private readonly disconnectHandlers: (() => void)[] = [];
 
   post(message: unknown): void {
     if (this.disconnected) return;
     this.posted.push(message);
     // A copy, as structured cloning does, so that tests cannot share objects.
-    const copy: unknown = structuredClone(message);
-    for (const handler of [...(this.peer?.messageHandlers ?? [])]) handler(copy);
+    this.peer?.deliver(structuredClone(message));
+  }
+
+  private deliver(message: unknown): void {
+    if (this.messageHandlers.length === 0) this.waiting.push(message);
+    else for (const handler of [...this.messageHandlers]) handler(message);
   }
 
   onMessage(handler: (message: unknown) => void): void {
     this.messageHandlers.push(handler);
+    for (const message of this.waiting.splice(0)) handler(message);
   }
 
   onDisconnect(handler: () => void): void {
@@ -37,7 +44,7 @@ export class FakePort implements PagePort {
 
   /** A message as the other side would post it. */
   receive(message: unknown): void {
-    for (const handler of [...this.messageHandlers]) handler(structuredClone(message));
+    this.deliver(structuredClone(message));
   }
 }
 

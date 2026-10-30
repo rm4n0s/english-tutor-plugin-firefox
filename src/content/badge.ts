@@ -154,10 +154,13 @@ export class Badge {
         this.element.replaceChildren(spinner);
         // The Web Animations API: no style sheet is needed, so a strict policy cannot stop it.
         if (typeof spinner.animate === "function") {
-          this.spin = spinner.animate(
+          const spin = spinner.animate(
             [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
             { duration: 900, iterations: Infinity },
           );
+          // Cancelling an animation rejects its `finished` promise; nobody waits for it.
+          spin.finished.catch(() => undefined);
+          this.spin = spin;
         }
         break;
       }

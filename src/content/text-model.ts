@@ -74,18 +74,6 @@ function isBlock(node: Node | null): boolean {
   return node !== null && node.nodeType === 1 && BLOCK_TAGS.has((node as Element).tagName);
 }
 
-/** Whether the `<br>` only holds the end of a line open: the last thing in its block, after text. */
-function isPlaceholderBreak(br: Node): boolean {
-  let next = br.nextSibling;
-  while (next !== null && next.nodeType === 3 && isBlank((next as Text).data))
-    next = next.nextSibling;
-  if (next !== null) return false;
-  const previous = br.previousSibling;
-  if (previous === null) return false;
-  if (previous.nodeType === 1 && (previous as Element).tagName === "BR") return false;
-  return isBlock(br.parentNode);
-}
-
 /** The text of editable content with its mapping back to the text nodes. */
 export class EditableText {
   readonly text: string;
@@ -177,21 +165,28 @@ export class EditableText {
 }
 
 /**
- * Reads the text of an editing host: its text nodes in order, a `\n` for each `<br>` (except one
- * that only ends a line) and between blocks. White space that only formats the markup between
- * blocks is left out unless the host keeps white space (`white-space: pre...`). Text nodes keep
- * their characters as they are, so that every character of the text is a character of a node.
+ * Reads the text of an editing host: its text nodes in order, as lines. A `<br>` ends a line, and
+ * so does the start and the end of a block. A line exists once something is on it (text or a
+ * `<br>`), so `one<br>` is one line, `one<br><br>` is two (the second one empty) and an empty block
+ * with only a `<br>` is an empty line; the lines are joined by `\n`. White space that only formats
+ * the markup between blocks is left out unless the host keeps white space (`white-space: pre...`).
+ * Text nodes keep their characters as they are, so that every character of the text that is not
+ * a line break is a character of a node.
  */
 export function readEditableText(host: Element, view: Window): EditableText {
   const preserve = view.getComputedStyle(host).whiteSpace.startsWith("pre");
   let text = "";
   const segments: TextSegment[] = [];
-  let needBreak = false;
+  let lines = 0;
+  let open = false;
   let nodes = 0;
 
-  const separate = (): void => {
-    if (needBreak && text !== "" && !text.endsWith("\n")) text += "\n";
-    needBreak = false;
+  /** Makes the current line exist: the lines are joined by a line break. */
+  const begin = (): void => {
+    if (open) return;
+    if (lines > 0) text += "\n";
+    lines++;
+    open = true;
   };
 
   const walk = (node: Node): void => {
@@ -205,7 +200,7 @@ export function readEditableText(host: Element, view: Window): EditableText {
         const after = node.nextSibling;
         if (before === null || after === null || isBlock(before) || isBlock(after)) return;
       }
-      separate();
+      begin();
       segments.push({ node: node as Text, start: text.length, end: text.length + data.length });
       text += data;
       return;
@@ -214,15 +209,14 @@ export function readEditableText(host: Element, view: Window): EditableText {
     const element = node as Element;
     if (SKIPPED_TAGS.has(element.tagName)) return;
     if (element.tagName === "BR") {
-      if (isPlaceholderBreak(element)) return;
-      separate();
-      text += "\n";
+      begin();
+      open = false;
       return;
     }
     const block = BLOCK_TAGS.has(element.tagName);
-    if (block) needBreak = true;
+    if (block) open = false;
     for (const child of Array.from(element.childNodes)) walk(child);
-    if (block) needBreak = true;
+    if (block) open = false;
   };
 
   for (const child of Array.from(host.childNodes)) walk(child);

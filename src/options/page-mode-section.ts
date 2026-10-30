@@ -67,6 +67,7 @@ export class PageModeSection {
     this.box.addEventListener("click", () => {
       if (this.box.checked) this.turnOn(this.deps.pageMode.request());
       else this.turnOff();
+      this.onChange();
     });
   }
 
@@ -152,7 +153,6 @@ export class PageModeSection {
       return;
     }
     this.showError(undefined);
-    this.onChange();
     await this.deps.store.setSetting("page_mode", true);
     this.deps.channel.post("settings-changed");
     await this.deps.background.apply();
@@ -171,7 +171,6 @@ export class PageModeSection {
    */
   private async finishTurnOff(): Promise<void> {
     this.showError(undefined);
-    this.onChange();
     await this.deps.store.setSetting("page_mode", false);
     this.deps.channel.post("settings-changed");
     await this.deps.background.apply();

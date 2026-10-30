@@ -77,6 +77,11 @@ export class PageModeContent {
     return this.active === undefined ? [] : [...this.active.boxes.values()].map((t) => t.state);
   }
 
+  /** Puts every badge where its box is now (a test, or a layout change the observers missed). */
+  reposition(): void {
+    this.active?.position();
+  }
+
   /** The badge of a box, if it has one. */
   badgeOf(box: BoxState): Badge | undefined {
     return this.active?.byId.get(box.id)?.badge;
@@ -175,7 +180,7 @@ class Active {
   private readonly listeners: (() => void)[] = [];
   private focused: Tracked | undefined;
   private nextId = 1;
-  private frame = 0;
+  private frame: number | undefined;
   private resizeObserver: ResizeObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
 
@@ -410,9 +415,9 @@ class Active {
   // Following the boxes
 
   private schedulePosition(): void {
-    if (this.frame !== 0) return;
+    if (this.frame !== undefined) return;
     this.frame = this.win.requestAnimationFrame(() => {
-      this.frame = 0;
+      this.frame = undefined;
       this.position();
     });
   }
@@ -460,8 +465,8 @@ class Active {
     for (const remove of this.listeners.splice(0)) remove();
     this.mutationObserver?.disconnect();
     this.resizeObserver?.disconnect();
-    if (this.frame !== 0) this.win.cancelAnimationFrame(this.frame);
-    this.frame = 0;
+    if (this.frame !== undefined) this.win.cancelAnimationFrame(this.frame);
+    this.frame = undefined;
     this.card.close();
     for (const tracked of this.boxes.values()) tracked.badge.remove();
     this.boxes.clear();

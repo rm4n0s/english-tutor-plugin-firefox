@@ -124,8 +124,11 @@ export class FrameLink {
     }
     let port: PagePort;
     try {
+      // `protocol` and `host`, not `origin`: the origin of a moz-extension address is opaque in
+      // some engines, and the port must be addressed to exactly this extension.
+      const url = new URL(this.deps.frameUrl(id));
       port = this.deps.connector.connect(
-        { window: frameWindow, origin: new URL(this.deps.frameUrl(id)).origin },
+        { window: frameWindow, origin: `${url.protocol}//${url.host}` },
         id,
       );
     } catch {
