@@ -50,8 +50,9 @@ Steps for building English Tutor for Firefox as described in [SPEC.md](SPEC.md).
 3. Starts headless Firefox through `selenium-webdriver` (Selenium Manager fetches geckodriver) with a fresh profile and these preferences:
    - `extensions.webextensions.uuids` = `{"english-tutor@rm4n0s.dev": "<fixed uuid>"}`, so the pages have known `moz-extension://` addresses;
    - `extensions.webextOptionalPermissionPrompts` = `false`, so the host permission of the fake server is granted without a prompt;
-   - for dark scenarios, `layout.css.prefers-color-scheme.content-override` = `0`.
-4. Installs the zip as a temporary add-on, sets the window to 1280×800, and runs each scenario: open the page, configure the fake LLM through the options page (or by a test-only `storage` seed shared by all scenarios), drive the UI, and save `driver.takeScreenshot()` to the scenario's file.
+   - for dark scenarios, `layout.css.prefers-color-scheme.content-override` = `0` (verified in Firefox 159: 0 is dark, 1 is light, 2 follows the system). The preference is per profile, so dark scenarios run in their own browser session, and every scenario checks `matchMedia('(prefers-color-scheme: dark)')` so that a wrong scheme fails the run.
+4. Installs the zip as a temporary add-on, sizes the window so that the page area is 1280×800 (the window is larger by the height of the browser's own toolbar), and runs each scenario: open the page, configure the fake LLM through the options page (or by a test-only `storage` seed shared by all scenarios), drive the UI, and save `driver.takeScreenshot()` to the scenario's file.
+   Selenium cannot navigate to a `moz-extension://` address itself (a page that is not web accessible is refused), so the harness starts geckodriver with `--allow-system-access` and opens each page from the browser's chrome context with `gBrowser.addTab(url, { triggeringPrincipal: <system principal> })`, as a click on the toolbar button would. The manifest has no `web_accessible_resources`.
 5. Runs one named scenario with `npm run screenshots -- <name>`, and all of them without arguments. It exits with 1 if any scenario fails, after printing which one and why.
 
 ## Steps
