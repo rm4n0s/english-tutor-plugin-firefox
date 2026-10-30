@@ -420,6 +420,34 @@ describe("IssueState", () => {
     });
   });
 
+  describe("checkId", () => {
+    it("is 0 before a result, the id of the check that produced the issues after one", () => {
+      const { state } = newState();
+      expect(state.checkId).toBe(0);
+      const first = state.beginCheck(true);
+      expect(state.checkId).toBe(0);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      expect(state.checkId).toBe(first.id);
+      const second = state.beginCheck(false);
+      expect(state.checkId).toBe(first.id); // the old result stays until the new one arrives
+      state.endCheck("cancelled");
+      expect(state.checkId).toBe(first.id);
+      state.beginCheck(false);
+      state.finishCheck([], FIVE_TEXT, 0);
+      expect(state.checkId).toBeGreaterThan(second.id);
+    });
+
+    it("does not change with edits, and goes back to 0 for a loaded text", () => {
+      const { state } = newState();
+      const check = state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      state.applyEdit({ start: 0, removed: 0, added: 1 });
+      expect(state.checkId).toBe(check.id);
+      state.reset();
+      expect(state.checkId).toBe(0);
+    });
+  });
+
   it("stops telling a listener that unsubscribed", () => {
     const { state } = newState();
     const changes: IssueChange[] = [];

@@ -17,6 +17,15 @@ export {
   type CheckRunner,
 } from "./check-controller";
 export {
+  ExplanationController,
+  NO_LLM_EXPLANATION_MESSAGE,
+  type ExplanationAction,
+  type ExplanationControllerDeps,
+  type ExplanationRunner,
+  type ExplanationTarget,
+  type ExplanationView,
+} from "./explanation-controller";
+export {
   IssueState,
   type CheckEnd,
   type IssueChange,

@@ -73,6 +73,7 @@ export class IssueState {
   private hasResult = false;
   private nextIssueId = 1;
   private nextCheckId = 1;
+  private resultCheckId = 0;
   private readonly log: EditLog;
 
   /** `editLogLimit` is the most edits kept while a check runs (SPEC section 5.5). */
@@ -130,6 +131,15 @@ export class IssueState {
    */
   get checked(): boolean {
     return this.hasResult;
+  }
+
+  /**
+   * The id of the check whose result the issues are, or 0 when there is none (nothing checked yet,
+   * or a text was loaded). A new result changes it, so that what was keyed by it (the cached
+   * explanations) is known to be out of date (SPEC section 5.4).
+   */
+  get checkId(): number {
+    return this.resultCheckId;
   }
 
   /** Issues the model reported that are not in the text (SPEC section 5.3). */
@@ -216,6 +226,7 @@ export class IssueState {
     edits: readonly Edit[] = [],
   ): void {
     const manual = this.running?.manual ?? true;
+    this.resultCheckId = this.running?.id ?? this.nextCheckId++;
     this.running = null;
     let issues = placed.map((p) => this.toTextIssue(p, text, manual));
     for (const edit of edits) issues = rebaseIssues(issues, edit);
@@ -252,6 +263,7 @@ export class IssueState {
    */
   reset(): void {
     this.bumpRevision();
+    this.resultCheckId = 0;
     const had = this.current.length > 0 || this.end !== "none" || this.hasResult;
     this.current = [];
     this.selection = null;
