@@ -127,12 +127,12 @@ These development dependencies are approved: `typescript`, `esbuild`, `vitest`, 
 ```
 
 - The editor and the right column are separated by a draggable divider; the right column has a second divider between the issues list and the explanation panel. Both positions are remembered (`pane_sizes`, section 9). Below 800 CSS pixels of width the right column moves under the editor.
-- **Toolbar, row 1:** LLM selector (`<select>`), Check button (Cancel while a check runs, section 5.1), Auto-check checkbox (off by default; Check always works), Statistics, Preferences.
+- **Toolbar, row 1:** LLM selector (`<select>`), Check button (Cancel while a check runs, section 5.1; disabled while no LLM is selected or the text is empty or only white space), Auto-check checkbox (off by default; Check always works), Statistics, Preferences (opens the options page).
 - **Toolbar, row 2:** New, Open, Save, Save As, Save to library, Library (section 8).
 - **Legend row:** three category samples (click to hide or show a category, section 4.3), then **Clear** (same as New) and **Copy** (puts the whole text on the clipboard; disabled while the text is empty; the status bar says "Copied").
 - **Keyboard:** `Ctrl+Enter` presses Check (or Cancel), `Ctrl+S` and `Ctrl+Shift+S` press Save and Save As, and `F7` / `Shift+F7` move between issues. `Ctrl+N` and `Ctrl+O` stay with the browser. Button tooltips name their shortcut.
-- The LLM selector lists the configured LLMs by name, and the last selection is remembered (`selected_llm_id`). With no LLM configured, the selector and Check are disabled, and the explanation panel shows a hint with a link that opens the options page.
-- The status bar shows the issue count, the check state (`Ready`, `Checking...`, `Check cancelled`, `Check failed`, `N issues` / `No errors found`, plus ` · N issues could not be placed`), the word count, and the tokens of the last request and of this tab's session (section 5.8).
+- The LLM selector lists the configured LLMs by name, and the last selection is remembered (`selected_llm_id`). When no LLM is selected, or the selected one no longer exists, but some LLMs exist, the page selects the first by name and stores that choice (this is what selects the first LLM that is added on the options page). The page reloads the list on `configs-changed` and the selection on `settings-changed`. With no LLM configured, the selector and Check are disabled, and the explanation panel shows a hint with a link that opens the options page: "No LLM is configured. Add one in Preferences to start checking."
+- The status bar shows the check state (`Ready`, `Checking...`, `Check cancelled`, `Check failed`, `N issues` (`1 issue`) / `No errors found`, plus ` · N issues could not be placed`), the word count (`142 words`, `1 word`), and the tokens of the last request and of this tab's session (section 5.8), for example `last: 812 in / 164 out · session: 5.2k in / 1.1k out`, or `last: none · session: 0 in / 0 out` before the first request. `N` counts all issues, hidden categories included. The state goes back to `Ready` when an edit drops the check's issues.
 - **Tab title**: the text's name and a `*` for unsaved changes, then " – English Tutor". A text without a name shows "Untitled".
 - **Theme**: light or dark follows `prefers-color-scheme`.
 - **Per-tab state.** Each tutor tab has its own text, source, issues, selection, explanation and session token totals. The text, the source key, the name, the library document id, the line ending and the dirty flag are kept in the tab's `sessionStorage`, so reloading the tab, or restoring a closed tab, gives the text back. Issues are not kept: the text has to be checked again, which counts nothing twice (section 5.7).
@@ -150,7 +150,7 @@ These development dependencies are approved: `typescript`, `esbuild`, `vitest`, 
   | vocabulary | `#0072B2` / `#56B4E9` | `dashed` |
   | syntax | `#009E73` / `#2FD3A2` | `dotted` |
 
-  `text-decoration-skip-ink: none`, so descenders do not break the line. The mirror never changes the text or the textarea's undo history.
+  `text-decoration-skip-ink: none`, so descenders do not break the line. The mirror never changes the text or the textarea's undo history. The mirror takes the width the textarea's text really has (the room of a scroll bar is taken off), follows its scroll position and size, and ends with a zero-width space so that a text ending in a line break has the same last, empty line. An issue that does not fit the text any more (past its end, empty, overlapping an earlier one) gets no span. The textarea and the mirror share one CSS class for font, padding and wrapping (`src/ui/components.css`).
 - The selected issue also has a background of its category colour at about 20% opacity.
 - **Selecting an issue from the text.** When the caret moves into an issue's range (click or keys), that issue is selected (section 4.4). The caret is not moved. When the caret moves outside all issues, the selection is cleared and the explanation panel goes idle.
 - **Tooltip.** Hovering an underline shows `<error type label> · <Category>` and, on a second line, the issue's message (for example "Subject-verb agreement · Grammar" / "Use goes."). The character under the mouse is found from the mirror's span rectangles (`getClientRects`). A hidden category has no tooltip.
@@ -165,14 +165,14 @@ These development dependencies are approved: `typescript`, `esbuild`, `vitest`, 
 
 - A list (`role="listbox"`) at the top of the right column, one row per placed issue, in text order.
 - Each row has a category marker in the category colour with a letter (**G**, **V**, **S**). It shows the wrong snippet (cut to about 40 characters) and, on a second line, the error type label and a count badge (`x7`: how often the user made that error type, section 5.7). There is no badge for issues of an auto-check.
-- The header reads "Issues (N)", or "Issues (3 of 5 shown)" when categories are hidden. The legend is the only filter.
+- The header reads "Issues (N)", or "Issues (3 of 5 shown)" when hidden categories have issues. The legend is the only filter. Hiding a category also deselects the selected issue if it belongs to it.
 - **One shared selection.** The editor and the list select the same issue through one state object (`src/core/issues`). Neither one talks to the other directly.
   - Clicking a row, or Up / Down in the list, selects the issue. The editor scrolls to it, highlights it and puts the caret at its start, without moving keyboard focus out of the list.
   - Selecting an issue in the editor, or with `F7`, selects its row and scrolls it into view.
   - Selecting an issue from either place starts its explanation (section 5.4).
 - Double-clicking a row (or `Enter` on it) moves focus to the editor, with the caret at the start of the issue.
 - A row's context menu (through `menus.overrideContext`) has **Not an error** and **Regenerate explanation**.
-- Empty states, as one grey line: "Press Check to find errors" (before the first check), "Checking...", "No errors found".
+- Empty states, as one grey line: "Press Check to find errors" (before the first check, and after a first check that failed or was cancelled), "Checking...", "No errors found", and "All categories are hidden" (issues exist but every category is hidden). During a re-check the old rows stay until the result arrives, unless there were none.
 - Rows go as soon as an edit removes their issue (section 5.5). Issues the locator could not place are not listed; the status bar counts them.
 
 ### 4.5 Explanation panel
@@ -236,7 +236,7 @@ As desktop SPEC §4.6, as a modal `<dialog>` in the tutor page with two tabs:
 
 ### 4.9 Banner
 
-Failures that are not shown in a panel (a failed check, a file that cannot be opened, a save that failed, an expired hand-off) are shown in a dismissible banner above the editor. A failed check's banner is cleared when the next check starts. `HostPermissionDenied` adds a **Grant access** button to the banner. Its click is a user gesture, so it can call `permissions.request` for the LLM's origin.
+Failures that are not shown in a panel (a failed check, a file that cannot be opened, a save that failed, an expired hand-off) are shown in a dismissible banner above the editor. A failed check's banner is cleared when the next check starts. `HostPermissionDenied` adds a **Grant access** button to the banner. Its click is a user gesture, so it can call `permissions.request` for the LLM's origin, synchronously in the click handler. If the request is granted the banner goes; if it is refused the banner says "Access was not granted, so English Tutor cannot reach this LLM." The banner is a component (`src/ui/banner.ts`).
 
 ### 4.10 Check finished notification
 
@@ -313,6 +313,7 @@ The rules of this section are those of desktop SPEC §5, ported to TypeScript in
 - **Cancel:** while a check runs, Check becomes Cancel. A cancelled check leaves the issues and the recorded mistakes as they were, discards chunks that already finished, shows "Check cancelled" without a banner, and creates no error tag. Cancelling is recognised from the `AbortSignal` before a failure is turned into an error. A timeout is not a cancel and gives `LLMCallTimeout`.
 - **Checking a selection:** only the selected text is sent. `Analyzer.check` takes the selection's offset and the whole text; the placed issues' offsets are shifted back into the whole text, and each placed issue carries its fingerprint (section 5.7) computed in the whole text, so it is that of a full check. When the result arrives, issues that overlap the selection are replaced and all others stay. If an edit made during the check touched the selection, the result is discarded ("The text changed while checking"). The not-placed count is the selection's.
 - A failed check shows its message in the banner and keeps the old issues.
+- **Check controller.** One `CheckController` per text (`src/core/issues`, no page dependencies; the tutor page has one, and page mode will have one per text box) takes the snapshot of the text and the revision, runs the check through the analyzer, tells manual from automatic, and puts the result into the text's `IssueState`. It ends as `finished`, `cancelled`, `failed`, `stale` (a newer check replaced this one, or the text changed while checking and the result cannot be applied), `busy` (an auto-check was refused because a check runs) or `no-llm`. A manual check replaces a running one; the older one ends `stale` and does not touch the state. A result applies only if its check is still the pending one and the revision is the snapshot's. Until edits are rebased (section 5.5) an edit drops the issues and moves the revision on, so the result of a check that was running is `stale`.
 
 ### 5.2 Check prompt and reply
 
@@ -381,8 +382,8 @@ As desktop SPEC §5.7:
 
 - Every LLM request (each check chunk with its retry, each explanation, each alternatives request) records input and output tokens. Test connection is excluded. A cancelled or failed request records what it reported, and nothing if it reported nothing: a streamed explanation records the usage it had reported when it stopped, and a check chunk or alternatives request that was cancelled or failed after a first reply records that reply's usage. A check chunk and its retry are one record, as are the two requests of an alternatives retry. The analysis code hands each record (`{ llm, kind, usage }`) to an injected recorder; the store implements it in step 9, and a recorder that fails is logged and never fails the request.
 - Usage is read from each wire format (section 6.3) into `{ inputTokens, outputTokens, estimated }`. If the provider reports none, or only zeros, both are estimated at about 4 characters per token and `estimated` is true. The page marks estimates with `~`.
-- The status bar shows the last request (the whole check, all chunks and retries) and the tab's session totals: `last: 812 in / 164 out · session: 5.2k in / 1.1k out`. Session totals start at zero when the tab is opened.
-- Each request is stored in `llm_usage` (LLM name, kind `check` / `explain` / `alternatives`, tokens, estimated flag, time) for the Token usage tab. No money amounts are shown.
+- The status bar shows the last request (the whole check, all chunks and retries) and the tab's session totals: `last: 812 in / 164 out · session: 5.2k in / 1.1k out`. Counts from 1000 on read `1.2k` and from a million `3.4M`; an estimate has `~` before each number (`~812 in / ~164 out`). Session totals start at zero when the tab is opened. The session total adds every recorded request, whatever its outcome; the last request is the tokens of the last check that ended with a result or was cancelled (a check that failed has no tokens to show, so the previous value stays).
+- Each request is stored in `llm_usage` (LLM name, kind `check` / `explain` / `alternatives`, tokens, estimated flag, time) for the Token usage tab, by `Store.recordUsage` (the `StoreUsageRecorder` is the analyzer's `UsageRecorder`). A write that fails is `UsageSaveFailed` with the route `Store.recordUsage->UsageSaveFailed`; it is logged and the request's result is still shown. No money amounts are shown.
 
 ### 5.9 Untrusted text and output
 

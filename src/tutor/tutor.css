@@ -109,6 +109,7 @@ label.inline {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-color: var(--divider-hover) var(--bg-alt);
   padding: 10px 12px;
   font-size: 11pt;
 }

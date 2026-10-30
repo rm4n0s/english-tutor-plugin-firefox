@@ -56,7 +56,9 @@ const SCENARIOS = {
     async run(ctx) {
       await ctx.open("tutor.html");
       await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "No LLM configured");
       await ctx.expectTheme();
+      await ctx.stabilise();
       await ctx.screenshot();
     },
   },
@@ -66,7 +68,9 @@ const SCENARIOS = {
     async run(ctx) {
       await ctx.open("tutor.html");
       await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "No LLM configured");
       await ctx.expectTheme();
+      await ctx.stabilise();
       await ctx.screenshot();
     },
   },
@@ -208,7 +212,238 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "no-llm": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.fill("editor", SAMPLE_TEXT);
+      await ctx.waitForText("explanation", "No LLM is configured");
+      await ctx.expectDisabled("llm-select");
+      await ctx.expectDisabled("check");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "before-check": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      await openTutorWithText(ctx);
+      await ctx.expectText("issues", "Press Check to find errors");
+      await ctx.expectText("status-state", "Ready");
+      await ctx.expectEnabled("check");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  checking: {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      // The fake server holds the reply, so the page stays in the checking state.
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 30_000 });
+      await openTutorWithText(ctx);
+      await ctx.click("check");
+      await ctx.waitForVisible("loading");
+      await ctx.waitForText("status-state", "Checking...");
+      await ctx.waitForText("check", "Cancel");
+      await ctx.expectReadOnly("editor");
+      await ctx.expectNoText("loading", "We will notify you");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  underlines: {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      await checkedSample(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "underlines-dark": {
+    theme: "dark",
+    dir: "step-06-check",
+    async run(ctx) {
+      await checkedSample(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "underlines-selected": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      await checkedSample(ctx);
+      // The third row is the vocabulary issue "make a photo".
+      await ctx.click("issues", ".issue-row:nth-child(3)");
+      await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "underlines-scrolled": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      // A text that needs a scroll bar, checked, then scrolled by the mouse wheel to its end:
+      // the underlines must stay under their words, with the scroll bar taking room from the text.
+      const filler = Array.from(
+        { length: 24 },
+        (_, i) => `Paragraph ${i + 1} is only here to make the text long. It has no mistakes.`,
+      ).join("\n\n");
+      ctx.llm.setReplies(CHECK_REPLY);
+      await openTutorWithText(ctx, `${filler}\n\n${SAMPLE_TEXT}`);
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.waitForCount("#mirror span.issue", 5);
+      await ctx.wheelScroll("editor", 5000);
+      await ctx.waitForScrolledToEnd("editor");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "legend-hidden": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      await checkedSample(ctx);
+      await ctx.click("legend-vocabulary");
+      await ctx.waitForText("issues-header", "Issues (3 of 5 shown)");
+      await ctx.waitForCount("#mirror span.issue", 3);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "no-errors": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      ctx.llm.setReplies({ ...CHECK_REPLY, content: JSON.stringify({ issues: [] }) });
+      await openTutorWithText(ctx);
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "No errors found");
+      await ctx.waitForText("issues", "No errors found");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "check-failed": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      ctx.llm.setReplies({ status: 401, content: "Incorrect API key provided" });
+      await openTutorWithText(ctx);
+      await ctx.click("check");
+      await ctx.waitForText("banner", "HTTP 401");
+      await ctx.waitForText("status-state", "Check failed");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "check-cancelled": {
+    theme: "light",
+    dir: "step-06-check",
+    async run(ctx) {
+      // A first check finds the issues; a second one is cancelled and leaves them as they were.
+      await checkedSample(ctx);
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 30_000 });
+      await ctx.click("check");
+      await ctx.waitForVisible("loading");
+      await ctx.waitForText("check", "Cancel");
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "Check cancelled");
+      await ctx.expectHidden("banner");
+      await ctx.expectHidden("loading");
+      await ctx.waitForCount("#mirror span.issue", 5);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
 };
+
+/** The text of the Step 6 scenarios, and the issues the fake LLM finds in it (all three categories). */
+const SAMPLE_TEXT =
+  "Yesterday I seen my friend at the market. He go to school every day, and he make a photo " +
+  "of everything. I very like his camera. After lunch I felt boring, so we went home.";
+
+const CHECK_REPLY = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "I seen",
+        error_type: "verb_form",
+        message: "Use the past tense: I saw.",
+        context_before: "Yesterday ",
+        context_after: " my friend",
+      },
+      {
+        text: "He go",
+        error_type: "subject_verb_agreement",
+        message: "Use goes with he.",
+        context_before: "market. ",
+        context_after: " to school",
+      },
+      {
+        text: "make a photo",
+        error_type: "collocation",
+        message: "Say take a photo.",
+        context_before: "and he ",
+        context_after: " of everything",
+      },
+      {
+        text: "boring",
+        error_type: "wrong_word",
+        message: "Say bored: boring describes the thing, not the feeling.",
+        context_before: "I felt ",
+        context_after: ", so we",
+      },
+      {
+        text: "I very like",
+        error_type: "word_order",
+        message: "Put very before the verb: I like it very much.",
+        context_before: "everything. ",
+        context_after: " his camera",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 812, completion_tokens: 164 },
+};
+
+/** Adds the fake LLM, opens the tutor page and types the sample text. */
+async function openTutorWithText(ctx, text = SAMPLE_TEXT) {
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.open("tutor.html");
+  await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+  // The page selects the first LLM by itself.
+  await ctx.waitForText("llm-select", "Fake LLM");
+  await ctx.fill("editor", text);
+  await ctx.expectEnabled("check");
+}
+
+/** The sample text after a finished check (five issues, three categories). */
+async function checkedSample(ctx) {
+  ctx.llm.setReplies(CHECK_REPLY);
+  await openTutorWithText(ctx);
+  await ctx.click("check");
+  await ctx.waitForText("status-state", "5 issues");
+  await ctx.waitForCount("#mirror span.issue", 5);
+  await ctx.waitForText("status-tokens", "last: 812 in / 164 out");
+}
 
 /** A new LLM in the form, filled in, with a non-local server so that the privacy note shows. */
 async function openNewLLMForm(ctx) {
@@ -453,6 +688,62 @@ function makeContext(name, scenario, driver, llm, policy) {
            (_, n, unit) => "(" + (unit === "ms" ? Number(n) / 1000 : Number(n)).toFixed(1) + " s)",
          );`,
         id,
+      );
+    },
+    /** Waits until the element with this id is displayed. */
+    async waitForVisible(id) {
+      const element = await driver.findElement(By.id(id));
+      await driver.wait(until.elementIsVisible(element), PAGE_TIMEOUT_MS, `#${id} never showed`);
+    },
+    async expectHidden(id) {
+      if (await driver.findElement(By.id(id)).isDisplayed()) throw new Error(`#${id} is shown`);
+    },
+    async expectEnabled(id) {
+      if (!(await driver.findElement(By.id(id)).isEnabled())) throw new Error(`#${id} is disabled`);
+    },
+    async expectDisabled(id) {
+      if (await driver.findElement(By.id(id)).isEnabled()) throw new Error(`#${id} is enabled`);
+    },
+    async expectReadOnly(id) {
+      const readOnly = await driver.findElement(By.id(id)).getAttribute("readonly");
+      if (readOnly === null) throw new Error(`#${id} is not read-only`);
+    },
+    /** Waits until exactly `count` elements match the CSS selector. */
+    async waitForCount(selector, count) {
+      await driver.wait(
+        async () => (await driver.findElements(By.css(selector))).length === count,
+        PAGE_TIMEOUT_MS,
+        `${selector} never matched ${count} element(s)`,
+      );
+    },
+    /**
+     * Harness only: removes what changes between runs of the same page. The focus goes (no
+     * blinking caret), and animations (the busy indicator) stop at their first frame.
+     */
+    async stabilise() {
+      await driver.executeScript(
+        `if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+         for (const animation of document.getAnimations()) {
+           animation.pause();
+           animation.currentTime = 0;
+         }`,
+      );
+    },
+    /** Scrolls an element with the mouse wheel, as a user does. */
+    async wheelScroll(id, deltaY) {
+      const element = await driver.findElement(By.id(id));
+      await driver.actions({ async: true }).scroll(0, 0, 0, deltaY, element).perform();
+    },
+    async waitForScrolledToEnd(id) {
+      await driver.wait(
+        () =>
+          driver.executeScript(
+            `const e = document.getElementById(arguments[0]);
+             return e.scrollTop > 0 && e.scrollTop + e.clientHeight >= e.scrollHeight - 1;`,
+            id,
+          ),
+        PAGE_TIMEOUT_MS,
+        `#${id} never scrolled to its end`,
       );
     },
     async scrollTo(id) {

@@ -170,6 +170,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-color: var(--divider-hover) var(--bg-alt);
   padding: 6px;
   font-family: var(--results-font-family, inherit);
   font-size: var(--results-font-size, 11pt);
@@ -185,7 +186,8 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 5px 6px;
+  padding: 3px 6px;
+  line-height: 1.3;
   border-radius: 4px;
   cursor: pointer;
 }
