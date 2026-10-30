@@ -143,14 +143,23 @@ Steps 13 to 15 add page mode (SPEC §4.11). Steps 6 to 12 already build the issu
 - The screenshot harness serves test pages from the fake LLM server (`/pages/textarea.html`, `/pages/input.html`, `/pages/contenteditable.html`, `/pages/excluded.html` with password, email and `spellcheck="false"` fields, `/pages/strict-csp.html` with `frame-src 'none'`, which Firefox 159 does not apply to the extension's frame, so page mode works there, and `/pages/blocked-frame.html` with `Content-Security-Policy: sandbox`, which does keep the frame from answering). It turns page mode on through the options page (the optional-permission pref grants `<all_urls>`), then opens the test pages in normal tabs.
 - Screenshots: `options-page-mode.png`, `badge-checking.png`, `badge-count.png`, `badge-none.png`, `badge-no-llm.png`, `badge-blocked.png` (`blocked-frame.html`, with the card of Open in English Tutor), `excluded-fields.png` (no badge on excluded fields), `toolbar-menu-site.png` (if the harness can capture the menu; otherwise the options page's host list after turning a site off).
 
-### Step 14: Page mode: underlines and the explanation popover (`feat/page-underlines`)
+### Step 14: Page mode: ask on each site (`feat/page-mode-sites`)
+- Spec: §4.11 (turning it on: access asked once, sites, the prompt, changing a choice later), §4.7 (General section, Welcome block), §7 (background), §9 (`page_mode_sites`), §13.
+- Replaces Step 13's single switch and its list of hosts it is off on: `page_mode` now means "offered", and each site is `on`, `off` or `ask`. `page_mode_off_hosts` is dropped (no release has shipped it) in favour of `page_mode_sites`; "Not now" is a `storage.session` entry.
+- Background: opens `options.html#welcome` on install only; answers `page-mode-config` with the site's state (and the LLM server for the prompt's note); stores `page-mode-site` choices and tells the open pages; the toolbar menu's Turn on / Turn off on <host> follows the three states.
+- Options: the Welcome block (Add an LLM, Allow, Not now) through the same page-mode section code, the box renamed, the note, and the list of sites with their state and Remove.
+- Content script: on an `ask` site it reads nothing and makes no frame; the first focus on an eligible text box opens the prompt card (closed shadow root, no focus taken, trusted events only, clicks in the first 500 ms ignored); Turn on starts checking the focused box at once.
+- The harness copes with the welcome tab that installing the add-on now opens (it is also a scenario). Step 13's scenarios turn sites on through the prompt or the toolbar menu, and their PNGs are regenerated only where what they show changed.
+- Screenshots: `welcome.png` (the options page opened on install), `welcome-dark.png`, `site-prompt.png` (the card under a focused text box, remote server note), `site-prompt-local.png` (a server on this computer), `site-prompt-no-llm.png`, `site-turned-on.png` (the badge after Turn on), `options-sites.png` (a site on and a site off, with Remove), `toolbar-menu-site.png` regenerated for the three states if needed. A scenario without a PNG checks that an `off` site and a `later` site get no prompt and send nothing, and that an excluded field never opens the prompt.
+
+### Step 15: Page mode: underlines and the explanation popover (`feat/page-underlines`)
 - Spec: §4.11 (underlines, explanation popover), §4.3 (styles), §4.5 (panel states), §5.5 (edits).
 - The mirror overlay for `<textarea>` and `<input>` (styles, size and scroll kept in step), the `Range` rectangles for `contenteditable` (text model with mapping back to text nodes), redraw per animation frame, edits that move or remove underlines at once, and the selected-issue background.
 - The popover in `page-ui.html`, opened by a click inside an issue, placed below or above the underline, with the shared explanation panel, Not an error, Regenerate / Retry and All issues, switching on caret moves, and closing on `Escape`, an outside click or typing.
 - Screenshots: `underlines-textarea.png`, `underlines-textarea-dark.png` (a dark test page), `underlines-input.png`, `underlines-contenteditable.png`, `underlines-scrolled.png` (a long textarea scrolled halfway), `underlines-after-edit.png`, `popover-loading.png`, `popover-ready.png`, `popover-above.png` (issue near the bottom of the viewport).
 
-### Step 15: Page mode: issues dialog (`feat/page-dialog`)
+### Step 16: Page mode: issues dialog (`feat/page-dialog`)
 - Spec: §4.11 (issues dialog), §4.4, §4.5, §5.7 (recording from the dialog's Check), §4.1 (hand-off).
 - The dialog in `page-ui.html` with the shared issues list and explanation panel, placement inside the viewport next to the box, row selection highlighting the issue in the box, Check / Cancel (recorded under the box's source), Not an error, Open in English Tutor (hand-off), Close, and the no-LLM state.
-- README: a page-mode section (turning it on, what is sent and what is skipped, turning it off per site).
+- README: a page-mode section (allowing it, the prompt on each site, what is sent and what is skipped, changing a site's choice).
 - Screenshots: `dialog-issues.png`, `dialog-explanation.png`, `dialog-dark.png`, `dialog-checking.png`, `dialog-no-llm.png`, `dialog-open-in-tutor.png` (the tutor tab opened from the dialog with the box's text).
