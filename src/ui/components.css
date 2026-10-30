@@ -800,3 +800,167 @@ button.danger {
   align-items: center;
   gap: 8px;
 }
+
+/* The small modal dialogs: unsaved changes, the title of a document, the Library (SPEC section 8). */
+.modal {
+  width: min(480px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-toolbar);
+  color: var(--fg);
+  box-shadow: 0 8px 32px color-mix(in srgb, #000000 45%, transparent);
+}
+
+.modal::backdrop {
+  background: color-mix(in srgb, #000000 38%, transparent);
+}
+
+.modal-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.15em;
+}
+
+.modal-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.modal-hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.modal-problem {
+  margin: 0;
+  color: var(--danger);
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-field input {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.library-dialog {
+  width: min(720px, calc(100vw - 48px));
+}
+
+.library-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 6px;
+}
+
+.library-head h2 {
+  margin: 0;
+  font-size: 1.2em;
+}
+
+.library-dialog .banner {
+  margin: 4px 16px 0;
+  border-radius: 4px;
+  border: 1px solid var(--danger);
+}
+
+.library-dialog .confirm-bar {
+  margin: 8px 16px 0;
+}
+
+.confirm-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg));
+}
+
+.confirm-text {
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+}
+
+.library-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 16px 16px;
+}
+
+.library-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.library-list:empty {
+  display: none;
+}
+
+.library-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.library-row:last-child {
+  border-bottom: 0;
+}
+
+.library-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.library-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-meta {
+  color: var(--fg-muted);
+}
+
+.library-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}

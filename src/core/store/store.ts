@@ -416,5 +416,5 @@ function configNotFound(id: number): AppError {
 }
 
 function documentNotFound(id: number): AppError {
-  return new AppError("DocumentNotFound", "no document with this id", { id });
+  return new AppError("DocumentNotFound", "The library document no longer exists.", { id });
 }

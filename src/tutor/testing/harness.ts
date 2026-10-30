@@ -4,17 +4,19 @@ import { CountingRandom } from "../../core/analysis/testing/helpers";
 import { validateConfig } from "../../core/llm";
 import { FakeFetch, type FakeScript } from "../../core/llm/testing/fake-fetch";
 import { Logger } from "../../core/log";
-import { Stats, type LLMConfigInput } from "../../core/store";
+import { Stats, type DocumentInput, type LLMConfigInput } from "../../core/store";
 import { freshStore } from "../../core/store/testing/db";
 import type { FakeClock } from "../../core/testing/fake-clock";
 import { FakeScheduler } from "../../core/testing/fake-clock";
 import { SessionIgnoreSet } from "../../platform/ignore-set";
 import { FakeChannelBus, type FakeChangeChannel } from "../../platform/testing/fake-channel";
 import { FakeClipboard } from "../../platform/testing/fake-clipboard";
+import { FakeDownloads } from "../../platform/testing/fake-downloads";
 import { FakeLinkOpener } from "../../platform/testing/fake-link-opener";
 import { FakeContextMenus, FakeCurrentTab } from "../../platform/testing/fake-menus";
 import { FakePermissions } from "../../platform/testing/fake-permissions";
 import { FakeSessionStorage } from "../../platform/testing/fake-session-storage";
+import { FakeTabStorage } from "../../platform/testing/fake-tab-storage";
 import type { TutorDeps } from "../deps";
 import { mountTutor, type TutorPage } from "../page";
 
@@ -73,6 +75,10 @@ export interface TutorHarness {
   other: { received: string[]; channel: FakeChangeChannel };
   logged: { level: string; message: string; fields: unknown }[];
   clipboard: FakeClipboard;
+  /** Save and Save As write here instead of to disk. */
+  downloads: FakeDownloads;
+  /** The tab's `sessionStorage`. */
+  tabStorage: FakeTabStorage;
   /** The addresses the page opened in new tabs. */
   links: FakeLinkOpener;
   /** How many times the page asked to open the options page. */
@@ -89,6 +95,10 @@ export interface HarnessOptions {
   script?: FakeScript;
   /** Whether the host permission of `ORIGIN` is granted; default true. */
   granted?: boolean;
+  /** What the tab's `sessionStorage` holds before the page opens (a reloaded tab). */
+  tabState?: string;
+  /** Documents stored in the library before the page opens. */
+  documents?: DocumentInput[];
 }
 
 /** Mounts the tutor page on a fresh database with fakes. */
@@ -111,6 +121,7 @@ export async function mountForTest(
   if (options.settings?.auto_check_delay_s !== undefined) {
     await store.setSetting("auto_check_delay_s", options.settings.auto_check_delay_s);
   }
+  for (const document of options.documents ?? []) await store.createDocument(document);
   const bus = new FakeChannelBus();
   const received: string[] = [];
   const otherChannel = bus.connect();
@@ -130,12 +141,16 @@ export async function mountForTest(
   const opened = { options: 0 };
   const links = new FakeLinkOpener();
   const clipboard = new FakeClipboard();
+  const downloads = new FakeDownloads();
+  const tabStorage = new FakeTabStorage(options.tabState ?? null);
   const channel = bus.connect();
   const deps: TutorDeps = {
     store,
     stats,
     menus,
     clipboard,
+    downloads,
+    tabStorage,
     currentTab: new FakeCurrentTab(TAB_ID),
     pageUrl: PAGE_URL,
     channel,
@@ -173,6 +188,8 @@ export async function mountForTest(
     other: { received, channel: otherChannel },
     logged,
     clipboard,
+    downloads,
+    tabStorage,
     links,
     opened,
   };

@@ -5,8 +5,10 @@ import type { Stats, Store } from "../core/store";
 import type { ChangeChannel } from "../platform/channel";
 import type { Clipboard } from "../platform/clipboard";
 import type { LinkOpener } from "../platform/links";
+import type { Downloads } from "../platform/downloads";
 import type { ContextMenus } from "../platform/menus";
 import type { HostPermissions } from "../platform/permissions";
+import type { TabStorage } from "../platform/tab-storage";
 import type { CurrentTab } from "../platform/tabs";
 
 /** Everything the tutor page needs from outside, so tests can pass fakes. */
@@ -27,6 +29,10 @@ export interface TutorDeps {
   links: LinkOpener;
   /** Copy in the Alternatives panel. */
   clipboard: Clipboard;
+  /** Save and Save As write the text to a file by downloading it (SPEC section 8). */
+  downloads: Downloads;
+  /** The tab's `sessionStorage`, where the text and its state are kept for a reload. */
+  tabStorage: TabStorage;
   /** The context menus of the row of the issues list and of the editor. */
   menus: ContextMenus;
   /** The tab this page is in, to tell menu events for this tab from the others. */

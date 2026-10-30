@@ -5,12 +5,14 @@ import { CryptoRandom } from "../core/random";
 import { openDatabase, Stats, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
 import { BrowserClipboard } from "../platform/clipboard";
+import { BrowserDownloads } from "../platform/downloads";
 import { SessionIgnoreSet } from "../platform/ignore-set";
 import { BrowserLinkOpener } from "../platform/links";
 import { BrowserContextMenus } from "../platform/menus";
 import { BrowserOptionsOpener } from "../platform/options-page";
 import { BrowserHostPermissions } from "../platform/permissions";
 import { BrowserSessionStorage } from "../platform/session-storage";
+import { SessionTabStorage } from "../platform/tab-storage";
 import { BrowserCurrentTab } from "../platform/tabs";
 import { attachDivider } from "../ui/divider";
 import { mountTutor } from "./page";
@@ -49,6 +51,13 @@ async function main(): Promise<void> {
     store,
     stats,
     clipboard: new BrowserClipboard(navigator),
+    downloads: new BrowserDownloads(browser, {
+      createObjectURL: (blob) => URL.createObjectURL(blob),
+      revokeObjectURL: (url) => {
+        URL.revokeObjectURL(url);
+      },
+    }),
+    tabStorage: new SessionTabStorage(sessionStorage),
     menus: new BrowserContextMenus(browser),
     currentTab: new BrowserCurrentTab(browser),
     pageUrl: browser.runtime.getURL("tutor.html"),

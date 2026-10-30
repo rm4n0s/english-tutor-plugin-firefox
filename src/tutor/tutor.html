@@ -25,14 +25,28 @@
           <button id="prefs" type="button">Prefs</button>
         </div>
         <div class="row">
-          <button id="new" type="button" disabled>New</button>
-          <button id="open" type="button" disabled>Open</button>
-          <button id="save" type="button" disabled title="Save (Ctrl+S)">Save</button>
-          <button id="save-as" type="button" disabled title="Save As (Ctrl+Shift+S)">
+          <button id="new" type="button" title="Start a new, empty text">New</button>
+          <button id="open" type="button" title="Open a text file">Open</button>
+          <button id="save" type="button" disabled title="Save as a file (Ctrl+S)">Save</button>
+          <button
+            id="save-as"
+            type="button"
+            disabled
+            title="Save as a file under a new name (Ctrl+Shift+S)"
+          >
             Save As
           </button>
-          <button id="save-to-library" type="button" disabled>Save to library</button>
-          <button id="library" type="button" disabled>Library</button>
+          <button id="save-to-library" type="button" disabled title="Keep this text in the library">
+            Save to library
+          </button>
+          <button id="library" type="button" title="Open a text from the library">Library</button>
+          <input
+            id="file-input"
+            type="file"
+            accept=".txt,.md,text/plain,text/markdown"
+            hidden
+            tabindex="-1"
+          />
         </div>
         <div class="row legend">
           <span class="legend-label">Legend:</span>
@@ -64,8 +78,8 @@
             <span class="sample sample-syntax">syntax</span>
           </button>
           <span class="spacer"></span>
-          <button id="clear" type="button" disabled>Clear</button>
-          <button id="copy" type="button" disabled>Copy</button>
+          <button id="clear" type="button" title="Clear the text (same as New)">Clear</button>
+          <button id="copy" type="button" disabled title="Copy the whole text">Copy</button>
         </div>
       </header>
 
@@ -78,6 +92,7 @@
               id="editor"
               class="editor-text"
               spellcheck="true"
+              autocomplete="off"
               placeholder="Write or paste your English text here."
             ></textarea>
           </div>

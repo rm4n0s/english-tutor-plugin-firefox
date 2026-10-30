@@ -368,7 +368,8 @@ describe("the loading layer", () => {
     expect(text("status-state")).toBe("Checking...");
     expect(text("issues")).toBe("Checking...");
     expect(checkButton().textContent).toBe("Cancel");
-    expect(h.scheduler.pending).toBe(1);
+    // The layer's 10-second line, and the write of the tab's text to its sessionStorage.
+    expect(h.scheduler.pending).toBe(2);
     await settle(() => {
       expect(h.page.state.pending).toBeNull();
     });

@@ -13,7 +13,7 @@ export function isSessionSource(source: string): boolean {
  * The source key of a tab's text (SPEC section 5.7): `session:<uuid>` for a new text, `doc:<id>`
  * once the text is a library document. The UUID comes from the injected random source. The tab
  * makes a new key when it loads and at New and Clear; Save to library moves it to the document
- * (`Stats.moveSource`, step 11).
+ * (`Stats.moveSource`).
  */
 export class TabSource {
   private readonly random: Random;
@@ -36,6 +36,17 @@ export class TabSource {
   renew(): string {
     this.current = TabSource.newSession(this.random);
     return this.current;
+  }
+
+  /** A library document was opened in the tab: its mistakes are recorded under `doc:<id>`. */
+  useDocument(documentId: number): string {
+    this.current = docSource(documentId);
+    return this.current;
+  }
+
+  /** The tab's text was restored with this key (SPEC section 4.2); the caller checked its form. */
+  restore(key: string): void {
+    this.current = key;
   }
 
   /** The text became the library document with this id; returns the old key. */
