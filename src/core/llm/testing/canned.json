@@ -1,0 +1,15 @@
+{
+  "checkReply": {
+    "issues": [
+      {
+        "text": "He go to school",
+        "error_type": "subject_verb_agreement",
+        "message": "Use goes.",
+        "context_before": "",
+        "context_after": " every day."
+      }
+    ]
+  },
+  "testReply": "ok",
+  "usage": { "input": 812, "output": 164 }
+}

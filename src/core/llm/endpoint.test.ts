@@ -1,0 +1,101 @@
+import { describe, expect, it } from "vitest";
+import { effectiveBaseUrl, isLocalHost, parseHttpUrl, privacyNote } from "./endpoint";
+import type { Provider } from "./provider";
+
+describe("effectiveBaseUrl", () => {
+  it.each([
+    {
+      provider: "openai-compatible",
+      base: "https://api.example.com/v1/",
+      expected: "https://api.example.com/v1",
+    },
+    {
+      provider: "openai-compatible",
+      base: "  http://localhost:8080/v1// ",
+      expected: "http://localhost:8080/v1",
+    },
+    { provider: "ollama", base: "http://localhost:11434", expected: "http://localhost:11434" },
+    { provider: "anthropic", base: "", expected: "https://api.anthropic.com" },
+    { provider: "anthropic", base: "  ", expected: "https://api.anthropic.com" },
+    {
+      provider: "anthropic",
+      base: "https://proxy.example.com/",
+      expected: "https://proxy.example.com",
+    },
+    { provider: "openai-compatible", base: "", expected: "" },
+  ] as const)("$provider $base gives $expected", ({ provider, base, expected }) => {
+    expect(effectiveBaseUrl(provider, base)).toBe(expected);
+  });
+});
+
+describe("parseHttpUrl", () => {
+  it.each([
+    { value: "http://localhost:11434", ok: true },
+    { value: "https://api.openai.com/v1", ok: true },
+    { value: " http://[::1]:8080 ", ok: true },
+    { value: "ftp://example.com", ok: false },
+    { value: "localhost:11434", ok: false },
+    { value: "http://", ok: false },
+    { value: "", ok: false },
+    { value: "javascript:alert(1)", ok: false },
+  ])("$value is $ok", ({ value, ok }) => {
+    expect(parseHttpUrl(value) !== undefined).toBe(ok);
+  });
+});
+
+describe("isLocalHost", () => {
+  it.each([
+    { host: "localhost", local: true },
+    { host: "LOCALHOST", local: true },
+    { host: "127.0.0.1", local: true },
+    { host: "127.1.2.3", local: true },
+    { host: "[::1]", local: true },
+    { host: "127.0.0.1.example.com", local: false },
+    { host: "192.168.1.5", local: false },
+    { host: "example.com", local: false },
+    { host: "localhost.example.com", local: false },
+  ])("$host: $local", ({ host, local }) => {
+    expect(isLocalHost(host)).toBe(local);
+  });
+});
+
+describe("privacyNote", () => {
+  it.each([
+    {
+      name: "a remote server",
+      provider: "openai-compatible",
+      base: "https://api.example.com/v1",
+      expected:
+        "The text you write is sent to api.example.com when you check it, ask for an explanation or ask for alternatives.",
+    },
+    {
+      name: "a remote server with a port",
+      provider: "ollama",
+      base: "http://gpu-box:11434",
+      expected:
+        "The text you write is sent to gpu-box:11434 when you check it, ask for an explanation or ask for alternatives.",
+    },
+    {
+      name: "Anthropic without a base URL",
+      provider: "anthropic",
+      base: "",
+      expected:
+        "The text you write is sent to Anthropic's server (api.anthropic.com) when you check it, ask for an explanation or ask for alternatives.",
+    },
+    { name: "localhost", provider: "ollama", base: "http://localhost:11434", expected: null },
+    {
+      name: "127.0.0.1",
+      provider: "openai-compatible",
+      base: "http://127.0.0.1:1234/v1",
+      expected: null,
+    },
+    { name: "[::1]", provider: "openai-compatible", base: "http://[::1]:1234/v1", expected: null },
+    { name: "no address yet", provider: "openai-compatible", base: "", expected: null },
+    { name: "a malformed address", provider: "openai-compatible", base: "api.exa", expected: null },
+  ] as { name: string; provider: Provider; base: string; expected: string | null }[])(
+    "$name",
+    ({ provider, base, expected }) => {
+      expect(privacyNote(provider, base)).toBe(expected);
+    },
+  );
+});

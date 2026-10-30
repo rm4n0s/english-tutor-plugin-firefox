@@ -11,7 +11,7 @@ export interface LLMConfigInput {
   base_url: string;
   /** "" when there is none. Stored as plain text (SPEC section 9). */
   api_key: string;
-  /** null leaves the provider's default. */
+  /** null uses the default of 0.2 (SPEC section 4.7). */
   temperature: number | null;
   /** null (or 0) uses the default timeouts of SPEC section 7. */
   timeout_seconds: number | null;

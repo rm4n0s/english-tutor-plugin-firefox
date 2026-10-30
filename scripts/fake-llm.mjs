@@ -2,21 +2,21 @@
 // "Screenshot harness"). It listens on 127.0.0.1 and answers `POST /v1/chat/completions`, streaming
 // or not, from replies that a scenario chooses. It never talks to the network.
 import { createServer } from "node:http";
+import canned from "../src/core/llm/testing/canned.json" with { type: "json" };
 
-/** What the server answers when a scenario has not chosen anything. A valid check reply (SPEC 5.2). */
+/**
+ * What the server answers when a scenario has not chosen anything: a valid check reply (SPEC 5.2).
+ * The values are shared with the unit tests' fake fetch (src/core/llm/testing/canned.json).
+ */
 export const DEFAULT_REPLY = {
-  content: JSON.stringify({
-    issues: [
-      {
-        text: "He go to school",
-        error_type: "subject_verb_agreement",
-        message: "Use goes.",
-        context_before: "",
-        context_after: " every day.",
-      },
-    ],
-  }),
-  usage: { prompt_tokens: 812, completion_tokens: 164 },
+  content: JSON.stringify(canned.checkReply),
+  usage: { prompt_tokens: canned.usage.input, completion_tokens: canned.usage.output },
+};
+
+/** The reply of Test connection (SPEC 4.7). */
+export const OK_REPLY = {
+  content: canned.testReply,
+  usage: { prompt_tokens: 12, completion_tokens: 1 },
 };
 
 /**
