@@ -286,6 +286,7 @@ const SCENARIOS = {
       // The third row is the vocabulary issue "make a photo".
       await ctx.click("issues", ".issue-row:nth-child(3)");
       await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.waitForExplanation("Collocation");
       await ctx.expectTheme();
       await ctx.stabilise();
       await ctx.screenshot();
@@ -387,6 +388,7 @@ const SCENARIOS = {
       await ctx.expectText("issues", "He go");
       await ctx.expectSelectedRow(2, "He go");
       await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.waitForExplanation("Subject-verb agreement");
       await ctx.expectCaret("editor", offset);
       await ctx.expectTheme();
       await ctx.stabilise();
@@ -404,7 +406,7 @@ const SCENARIOS = {
         { length: 24 },
         (_, i) => `Paragraph ${i + 1} is only here to make the text long. It has no mistakes.`,
       ).join("\n\n");
-      ctx.llm.setReplies(CHECK_REPLY);
+      ctx.llm.setReplies(SAMPLE_REPLIES);
       await openTutorWithText(ctx, `${filler}\n\n${SAMPLE_TEXT}`);
       await ctx.click("check");
       await ctx.waitForText("status-state", "5 issues");
@@ -415,6 +417,7 @@ const SCENARIOS = {
       await ctx.keys("issues", Key.ARROW_DOWN, Key.ARROW_DOWN, Key.ARROW_DOWN);
       await ctx.expectSelectedRow(3, "make a photo");
       await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.waitForExplanation("Collocation");
       await ctx.expectScrolled("editor");
       await ctx.expectFocus("issues");
       await ctx.expectCaret("editor", `${filler}\n\n${SAMPLE_TEXT}`.indexOf("make a photo"));
@@ -476,6 +479,123 @@ const SCENARIOS = {
       await ctx.expectTheme();
       await ctx.stabilise();
       await ctx.screenshot();
+    },
+  },
+  "explain-loading": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      // The fake server holds the explanation, so the panel stays in its loading state.
+      await explainSelected(ctx, { ...EXPLAIN_REPLY, delayMs: 30_000 });
+      await ctx.waitForVisible("explain-progress");
+      await ctx.expectText("explain-header", "Subject-verb agreement");
+      await ctx.expectText("explain-snippet", "He go");
+      await ctx.expectText("explain-category", "Grammar");
+      await ctx.expectText("explain-progress", "Cancel");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "explain-streaming": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      // A slow stream that stops after a fixed word and holds the connection, so that the shot
+      // always shows the same half-written explanation.
+      const words = EXPLAIN_REPLY.content.match(/\S+\s*/g);
+      const stop = words.findIndex((word) => word.startsWith("past.")) + 1;
+      await explainSelected(ctx, { ...EXPLAIN_REPLY, wordDelayMs: 20, stallAfterWords: stop });
+      await ctx.waitForText("explain-body", "past.");
+      await ctx.expectDataState("explain-panel", "loading");
+      await ctx.expectMarkdownRendered({ complete: false });
+      await ctx.expectFollowingEnd("explain-body");
+      await ctx.expectText("explain-progress", "Cancel");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "explain-ready": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      await explainSelected(ctx, EXPLAIN_REPLY);
+      await ctx.waitForVisible("explain-regenerate");
+      await ctx.expectDataState("explain-panel", "ready");
+      await ctx.expectMarkdownRendered();
+      await ctx.expectHidden("explain-progress");
+      await ctx.expectHidden("explain-not-error");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "explain-ready-dark": {
+    theme: "dark",
+    dir: "step-08-explain",
+    async run(ctx) {
+      await explainSelected(ctx, EXPLAIN_REPLY);
+      await ctx.waitForVisible("explain-regenerate");
+      await ctx.expectDataState("explain-panel", "ready");
+      await ctx.expectMarkdownRendered();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "explain-failed": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      await explainSelected(ctx, { status: 500, content: "The model crashed while thinking." });
+      await ctx.waitForVisible("explain-retry");
+      await ctx.expectDataState("explain-panel", "failed");
+      await ctx.expectText("explain-body", "HTTP 500");
+      await ctx.expectHidden("explain-regenerate");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "explain-cancelled": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      await explainSelected(ctx, { ...EXPLAIN_REPLY, delayMs: 30_000 });
+      await ctx.waitForVisible("explain-progress");
+      await ctx.click("explain-cancel");
+      await ctx.waitForVisible("explain-regenerate");
+      await ctx.expectDataState("explain-panel", "cancelled");
+      await ctx.expectText("explain-body", "Explanation cancelled.");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "link-confirm": {
+    theme: "light",
+    dir: "step-08-explain",
+    async run(ctx) {
+      await explainSelected(ctx, EXPLAIN_REPLY);
+      await ctx.waitForVisible("explain-regenerate");
+      await ctx.expectMarkdownRendered();
+      const tutorTab = await ctx.driver.getWindowHandle();
+      const tabs = (await ctx.driver.getAllWindowHandles()).length;
+      await ctx.click("explain-body", "a");
+      await ctx.waitForVisible("link-confirm");
+      await ctx.expectText("link-confirm-url", EXPLAIN_LINK);
+      // Nothing was opened, and the tutor page did not navigate.
+      await ctx.expectTabs(tabs);
+      await ctx.expectTutorPage();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+      // Confirming opens the address in one more tab; the tutor tab stays where it is.
+      await ctx.click("link-confirm-open");
+      await ctx.expectTabs(tabs + 1);
+      await ctx.driver.switchTo().window(tutorTab);
+      await ctx.expectTutorPage();
     },
   },
 };
@@ -542,9 +662,79 @@ async function openTutorWithText(ctx, text = SAMPLE_TEXT) {
   await ctx.expectEnabled("check");
 }
 
+/** The address of the one link in the canned explanation. */
+const EXPLAIN_LINK = "http://example.com/grammar/present-simple";
+
+/**
+ * A canned explanation in the shape the prompt asks for (SPEC section 5.4), with headings, bold,
+ * italic, a list, inline code and one http link.
+ */
+const EXPLAIN_REPLY = {
+  content: [
+    "### What is wrong",
+    "Add **-s** after *he*, *she* and *it*: *He go* should be *He goes*.",
+    "",
+    "### Why",
+    "The present simple adds **-s** for one person or thing. Other subjects keep the base form: `I go`, `they go`.",
+    "",
+    "### Better ways",
+    "- **He goes** to school every day.",
+    "- **He went** to school yesterday, if you mean the past.",
+    "",
+    "### Remember",
+    `Think "he, she, it: the verb gets a hit". See this guide to the [present simple](${EXPLAIN_LINK}).`,
+  ].join("\n"),
+  usage: { prompt_tokens: 240, completion_tokens: 130 },
+};
+
+/** Whether a request to the fake server asks for an explanation (the check prompt does not). */
+function isExplainRequest(request) {
+  return (request.body.messages ?? []).some(
+    (m) => m.role === "system" && String(m.content).includes("patient English teacher"),
+  );
+}
+
+/** Short canned explanations of the other issues of the sample text, by their faulty words. */
+const OTHER_EXPLANATIONS = {
+  "I seen": [
+    "Use the simple past *saw*, or *have seen*.",
+    "Seen needs *have* or *has*; alone, it is wrong.",
+  ],
+  "make a photo": ["Say **take a photo**.", "*Take* goes with *photo*, *picture* and *shower*."],
+  "I very like": ["Put *very much* after the object.", "Say **I like his camera very much**."],
+  boring: ["Say **bored** for a feeling.", "*Boring* describes the thing that causes it."],
+};
+
+/** The canned explanation for the faulty words of an explanation request. */
+function explanationFor(request) {
+  const user = request.body.messages.find((m) => m.role === "user")?.content ?? "";
+  const faulty = /=====BEGIN FAULTY WORDS \S+=====\n([\s\S]*?)\n=====END/.exec(user)?.[1];
+  const lines = OTHER_EXPLANATIONS[faulty];
+  if (lines === undefined) return EXPLAIN_REPLY;
+  return {
+    content: ["### What is wrong", lines[0], "", "### Remember", lines[1]].join("\n"),
+    usage: { prompt_tokens: 180, completion_tokens: 40 },
+  };
+}
+
+/** Answers checks with the sample's issues and explanations with the canned explanation. */
+const SAMPLE_REPLIES = (request) =>
+  isExplainRequest(request) ? explanationFor(request) : CHECK_REPLY;
+
+/**
+ * Checks the sample text, then selects the issue "He go" in the list, which starts its
+ * explanation. The fake server answers the explanation with `explainReply`.
+ */
+async function explainSelected(ctx, explainReply) {
+  await checkedSample(ctx, (request) => (isExplainRequest(request) ? explainReply : CHECK_REPLY));
+  // The second row is the grammar issue "He go".
+  await ctx.click("issues", ".issue-row:nth-child(2)");
+  await ctx.expectSelectedRow(2, "He go");
+}
+
 /** The sample text after a finished check (five issues, three categories). */
-async function checkedSample(ctx) {
-  ctx.llm.setReplies(CHECK_REPLY);
+async function checkedSample(ctx, replies = SAMPLE_REPLIES) {
+  ctx.llm.setReplies(replies);
   await openTutorWithText(ctx);
   await ctx.click("check");
   await ctx.waitForText("status-state", "5 issues");
@@ -938,6 +1128,69 @@ function makeContext(name, scenario, driver, llm, policy) {
         PAGE_TIMEOUT_MS,
         `#${id} never scrolled to its end`,
       );
+    },
+    /** Waits until the explanation panel shows a finished explanation for this error type. */
+    async waitForExplanation(label) {
+      await ctx.waitForText("explain-header", label);
+      await ctx.expectDataState("explain-panel", "ready");
+      await ctx.waitForVisible("explain-regenerate");
+    },
+    async expectDataState(id, state) {
+      await driver.wait(
+        async () => (await driver.findElement(By.id(id)).getAttribute("data-state")) === state,
+        PAGE_TIMEOUT_MS,
+        `#${id} never got the state ${state}`,
+      );
+    },
+    /**
+     * Fails unless the explanation shows rendered markdown (headings, bold, a list, code and the
+     * one link) and no raw markers. `complete: false` is for a half-written text, which has
+     * fewer parts but still no raw markers.
+     */
+    async expectMarkdownRendered({ complete = true } = {}) {
+      const found = await driver.executeScript(
+        `const body = document.getElementById("explain-body");
+         const count = (selector) => body.querySelectorAll(selector).length;
+         return {
+           headings: count("h5"), bold: count("strong"), items: count("li"), code: count("code"),
+           links: count("a"), text: body.textContent,
+           images: count("img, script, iframe"),
+         };`,
+      );
+      const raw = ["**", "###", "](", "`"].filter((marker) => found.text.includes(marker));
+      if (raw.length > 0) throw new Error(`the explanation shows raw markdown: ${raw.join(" ")}`);
+      if (found.headings < 1 || found.bold < 1) throw new Error("no heading or bold text rendered");
+      if (found.images > 0) throw new Error("the explanation has active elements");
+      if (complete && (found.items < 2 || found.code < 1 || found.links !== 1)) {
+        throw new Error(
+          `the explanation lacks parts: ${found.items} items, ${found.code} code, ${found.links} links`,
+        );
+      }
+    },
+    /** Fails unless the element is scrolled to its end (the streaming text is followed). */
+    async expectFollowingEnd(id) {
+      const state = await driver.executeScript(
+        `const e = document.getElementById(arguments[0]);
+         return { top: e.scrollTop, end: e.scrollTop + e.clientHeight >= e.scrollHeight - 2,
+                  overflows: e.scrollHeight > e.clientHeight };`,
+        id,
+      );
+      if (state.overflows && !state.end)
+        throw new Error(`#${id} does not follow the end of the text`);
+    },
+    /** Fails unless the number of open tabs is `count`. */
+    async expectTabs(count) {
+      await driver.wait(
+        async () => (await driver.getAllWindowHandles()).length === count,
+        PAGE_TIMEOUT_MS,
+        `there are never ${count} tab(s)`,
+      );
+      if ((await driver.getAllWindowHandles()).length !== count) throw new Error("wrong tab count");
+    },
+    /** Fails unless the current tab is still the tutor page. */
+    async expectTutorPage() {
+      const url = await driver.getCurrentUrl();
+      if (!url.endsWith("/tutor.html")) throw new Error(`the page navigated to ${url}`);
     },
     async scrollTo(id) {
       await driver.executeScript("document.getElementById(arguments[0]).scrollIntoView()", id);

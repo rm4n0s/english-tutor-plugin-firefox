@@ -20,7 +20,10 @@ export const OK_REPLY = {
 };
 
 /**
- * A reply is `{ content, usage?, status?, delayMs? }`. A reply chooser is a function
+ * A reply is `{ content, usage?, status?, delayMs?, wordDelayMs?, stallAfterWords? }`. A streamed
+ * reply sends one word at a time, `wordDelayMs` apart; with `stallAfterWords` it sends that many
+ * words and then holds the connection open until the client goes away, so that a screenshot can
+ * catch a stream half way, always at the same word. A reply chooser is a function
  * `(request) => reply`, where `request` is `{ path, body }` with the parsed JSON body.
  */
 export class FakeLLMServer {
@@ -125,10 +128,16 @@ export class FakeLLMServer {
         "cache-control": "no-cache",
       });
       const words = reply.content.match(/\S+\s*/g) ?? [];
-      for (const word of words) {
+      for (const [index, word] of words.entries()) {
+        if (reply.stallAfterWords !== undefined && index >= reply.stallAfterWords) {
+          if (!res.closed) await new Promise((resolve) => res.on("close", resolve));
+          return;
+        }
         res.write(
           `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: word } }] })}\n\n`,
         );
+        if (reply.wordDelayMs)
+          await new Promise((resolve) => setTimeout(resolve, reply.wordDelayMs));
       }
       res.write(
         `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
