@@ -693,3 +693,110 @@ button.danger {
   color: var(--bg);
   font-weight: 600;
 }
+
+/* The Alternatives panel (SPEC section 4.6): floating, non-modal, over the bottom of the editor. */
+.alternatives-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-toolbar);
+  color: var(--fg);
+  box-shadow: 0 6px 24px color-mix(in srgb, #000000 35%, transparent);
+}
+
+.alternatives-panel:focus-visible {
+  outline: 2px solid var(--focus);
+}
+
+.alt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.alt-x {
+  border-color: transparent;
+  background: transparent;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.alt-selected {
+  margin: 0;
+  max-height: 6em;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-style: italic;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.alt-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+.alt-error {
+  margin: 0;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.alt-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.alt-list:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.alt-row {
+  padding: 6px 10px;
+  cursor: default;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.alt-row + .alt-row {
+  border-top: 1px solid var(--border);
+}
+
+.alt-row[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.alt-note {
+  margin: 0;
+  color: var(--warn);
+}
+
+.alt-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

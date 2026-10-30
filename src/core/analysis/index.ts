@@ -66,4 +66,4 @@ export {
   type ErrorType,
 } from "./taxonomy";
 export { recordUsage, type UsageKind, type UsageRecord, type UsageRecorder } from "./usage";
-export { countWords, trimSpace } from "./text";
+export { countCodePoints, countWords, takeCodePoints, trimSpace } from "./text";
