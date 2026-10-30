@@ -10,4 +10,7 @@ export type {
   LLMConfig,
   LLMConfigInput,
   Provider,
+  UsageInput,
+  UsageKind,
 } from "./types";
+export { StoreUsageRecorder } from "./usage-recorder";

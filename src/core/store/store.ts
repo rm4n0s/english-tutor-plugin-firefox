@@ -16,6 +16,7 @@ import type {
   LibraryDocument,
   LLMConfig,
   LLMConfigInput,
+  UsageInput,
 } from "./types";
 
 export interface StoreOptions {
@@ -57,7 +58,8 @@ function documentFields(input: DocumentInput): DocumentInput {
  * (`LLMConfigNameTaken`, `LLMConfigNotFound`, `DocumentNotFound`, `SettingInvalid`) or
  * `DatabaseQueryFailed` for any other failing request.
  *
- * The error events and token usage stores exist but have no API here (step 9).
+ * Token usage is written with `recordUsage` (failure: `UsageSaveFailed`). The error events store
+ * and the usage queries come in step 9.
  */
 export class Store {
   private readonly db: IDBDatabase;
@@ -298,6 +300,34 @@ export class Store {
     );
   }
 
+  // Token usage
+
+  /**
+   * Stores the token usage of one request (SPEC section 5.8) with the time from the clock. A
+   * failing write is `UsageSaveFailed`, route `Store.recordUsage->UsageSaveFailed`, which callers
+   * log and otherwise ignore: the request's result is still shown.
+   */
+  recordUsage(input: UsageInput, options: AbortOptions = {}): Promise<void> {
+    return this.run(
+      "Store.recordUsage",
+      STORES.llmUsage,
+      "readwrite",
+      async (tx) => {
+        const record = {
+          llm_name: input.llm_name,
+          kind: input.kind,
+          input_tokens: input.input_tokens,
+          output_tokens: input.output_tokens,
+          estimated: input.estimated,
+          created_at: this.clock.now(),
+        };
+        await requestResult(tx.objectStore(STORES.llmUsage).add(record));
+      },
+      options,
+      "UsageSaveFailed",
+    );
+  }
+
   // Settings
 
   /** One setting: the stored value if it is valid, else the default (SPEC section 9). */
@@ -359,7 +389,8 @@ export class Store {
 
   /**
    * Runs `work` in a transaction. An `AppError` keeps its tag and gets `where`; a cancelled
-   * signal's reason passes through; anything else is `DatabaseQueryFailed`.
+   * signal's reason passes through; anything else is `failureTag` (`DatabaseQueryFailed` unless
+   * the caller has a tag of its own).
    */
   private async run<T>(
     where: string,
@@ -367,6 +398,7 @@ export class Store {
     mode: IDBTransactionMode,
     work: (tx: IDBTransaction) => Promise<T>,
     options: AbortOptions,
+    failureTag = "DatabaseQueryFailed",
   ): Promise<T> {
     try {
       return await transact(this.db, storeName, mode, work, options);
@@ -374,7 +406,7 @@ export class Store {
       if (err instanceof AppError) throw err.via(where);
       if (options.signal?.aborted === true) throw err;
       const metadata: ErrorMetadata = { store: storeName };
-      throw AppError.wrap("DatabaseQueryFailed", err, metadata).via(where);
+      throw AppError.wrap(failureTag, err, metadata).via(where);
     }
   }
 }

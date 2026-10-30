@@ -17,7 +17,6 @@ const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
   "ErrorEventSaveFailed",
   "StatsQueryFailed",
   "StatsResetFailed",
-  "UsageSaveFailed",
   "UsageQueryFailed",
   "FileReadFailed",
   "FileNotUTF8",

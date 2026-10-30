@@ -47,3 +47,17 @@ export interface LibraryDocument extends DocumentInput {
  * nothing about the values itself; the `llm` package supplies the real check (step 4).
  */
 export type ConfigValidator = (input: LLMConfigInput) => void;
+
+/** What a request was for (SPEC section 5.8). */
+export type UsageKind = "check" | "explain" | "alternatives";
+
+/** The token usage of one request, as it is stored in `llm_usage`. */
+export interface UsageInput {
+  /** The display name of the LLM at the time of the request. */
+  llm_name: string;
+  kind: UsageKind;
+  input_tokens: number;
+  output_tokens: number;
+  /** True when the counts are estimates (the provider reported none). */
+  estimated: boolean;
+}
