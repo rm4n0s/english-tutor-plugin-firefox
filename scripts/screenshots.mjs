@@ -1400,13 +1400,41 @@ async function startBrowser(theme, zipPath) {
   return driver;
 }
 
+/**
+ * Waits until the tab shows `page` and has finished loading. A tab that `gBrowser.addTab` opens
+ * starts as `about:blank` and navigates to the page; a script that runs while the document is
+ * being replaced can come back with no result at all (`null`), so nothing measures or reads the
+ * page before this.
+ */
+async function waitForPage(driver, page) {
+  await driver.wait(
+    async () =>
+      (await driver.getCurrentUrl()).endsWith(`/${page}`) &&
+      (await driver.executeScript("return document.readyState")) === "complete",
+    PAGE_TIMEOUT_MS,
+    `${page} never finished loading`,
+  );
+}
+
+/** The page area's size. Asks again if the script came back empty (the page was navigating). */
+async function measureViewport(driver) {
+  let size;
+  await driver.wait(
+    async () => {
+      size = await driver.executeScript("return [window.innerWidth, window.innerHeight]");
+      return Array.isArray(size) && size.length === 2;
+    },
+    PAGE_TIMEOUT_MS,
+    "the window's size could not be read",
+  );
+  return size;
+}
+
 /** Sizes the window so that the page area, which a screenshot captures, is WIDTH x HEIGHT. */
 async function sizeViewport(driver) {
   const window = driver.manage().window();
   await window.setRect({ width: WIDTH, height: HEIGHT });
-  const [innerWidth, innerHeight] = await driver.executeScript(
-    "return [window.innerWidth, window.innerHeight]",
-  );
+  const [innerWidth, innerHeight] = await measureViewport(driver);
   const rect = await window.getRect();
   await window.setRect({
     width: rect.width + (WIDTH - innerWidth),
@@ -1472,11 +1500,8 @@ function makeContext(name, scenario, driver, llm, policy) {
         await driver.close();
       }
       await driver.switchTo().window(handle);
+      await waitForPage(driver, page);
       await sizeViewport(driver);
-      await driver.wait(
-        async () => (await driver.executeScript("return document.readyState")) === "complete",
-        PAGE_TIMEOUT_MS,
-      );
     },
     /** Fails unless the page really uses the scenario's colour scheme. */
     async expectTheme() {
@@ -1866,11 +1891,8 @@ function makeContext(name, scenario, driver, llm, policy) {
         return handle !== undefined;
       }, PAGE_TIMEOUT_MS);
       await driver.switchTo().window(handle);
+      await waitForPage(driver, page);
       await sizeViewport(driver);
-      await driver.wait(
-        async () => (await driver.executeScript("return document.readyState")) === "complete",
-        PAGE_TIMEOUT_MS,
-      );
     },
     /**
      * Right-clicks the n-th row (1-based) and returns the labels of the entries of the browser's
@@ -2165,7 +2187,9 @@ async function main() {
   }
 
   for (const { name, err } of failures) {
-    console.error(`FAILED ${name}: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `FAILED ${name}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+    );
   }
   if (failures.length > 0) return 1;
   console.log(`${names.length} scenario(s) passed`);
