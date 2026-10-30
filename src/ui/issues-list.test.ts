@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { IssueState } from "../core/issues";
+import { IssueCounts, type IssueState } from "../core/issues";
 import { fiveIssues, FIVE_TEXT, newState, placed } from "../core/issues/testing/helpers";
 import { IssuesList, markerLetter, snippetPreview } from "./issues-list";
 
@@ -291,5 +291,107 @@ describe("IssuesList", () => {
     list.destroy();
     check();
     expect(rows()).toEqual([]);
+  });
+});
+
+describe("IssuesList: count badges and the context menu", () => {
+  /** A list on a fresh state, with counts that a test can set. */
+  function withCounts(totals: Record<string, number> = {}) {
+    list.destroy();
+    document.body.replaceChildren();
+    host = document.createElement("section");
+    document.body.append(host);
+    state = newState().state;
+    const source = {
+      totals,
+      countForType: (type: string) =>
+        Promise.resolve({ total: source.totals[type] ?? 0, last30: 0, last7: 0 }),
+    };
+    const counts = new IssueCounts(state, source, () => undefined);
+    const menus: [number, string][] = [];
+    list = new IssuesList(document, host, state, {
+      counts,
+      onRowContextMenu: (id, event) => menus.push([id, event.type]),
+    });
+    return { counts, source, menus };
+  }
+  const badges = () =>
+    rows().map((row) => {
+      const badge = row.querySelector<HTMLElement>(".count-badge");
+      return [badge?.hidden, badge?.textContent];
+    });
+
+  it("hides every badge until the counts are known", () => {
+    withCounts({ verb_form: 7 });
+    check();
+    expect(badges()).toEqual(Array.from({ length: 5 }, () => [true, ""]));
+  });
+
+  it("shows x<total> on the rows whose type has a recorded mistake, and nothing for the others", async () => {
+    const { counts } = withCounts({ verb_form: 7, collocation: 1 });
+    check();
+    await counts.refresh();
+    expect(badges()).toEqual([
+      [false, "x7"],
+      [true, ""],
+      [false, "x1"],
+      [true, ""],
+      [true, ""],
+    ]);
+    expect(rows()[0]?.querySelector(".count-badge")?.getAttribute("title")).toBe(
+      "You have made this mistake 7 times",
+    );
+    expect(rows()[2]?.querySelector(".count-badge")?.getAttribute("title")).toBe(
+      "You have made this mistake 1 time",
+    );
+  });
+
+  it("shows no badge for the issues of an auto-check", async () => {
+    const { counts } = withCounts({ verb_form: 7 });
+    state.beginCheck(false);
+    state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+    await counts.refresh();
+    expect(badges().every(([hidden]) => hidden === true)).toBe(true);
+  });
+
+  it("updates the badges in place when the counts change, without redrawing the rows", async () => {
+    const { counts, source } = withCounts({ verb_form: 7 });
+    check();
+    await counts.refresh();
+    const row = rows()[0];
+    source.totals = { verb_form: 8 };
+    await counts.refresh();
+    expect(rows()[0]).toBe(row);
+    expect(badges()[0]).toEqual([false, "x8"]);
+    source.totals = {};
+    await counts.refresh();
+    expect(badges()[0]).toEqual([true, ""]);
+    expect(rows()[0]?.querySelector(".count-badge")?.hasAttribute("title")).toBe(false);
+  });
+
+  it("keeps the badges when the list is drawn again", async () => {
+    const { counts } = withCounts({ verb_form: 7 });
+    check();
+    await counts.refresh();
+    state.setHidden("vocabulary", true);
+    expect(badges()[0]).toEqual([false, "x7"]);
+  });
+
+  it("tells the page which row got a context menu, from the contextmenu event", () => {
+    const { menus } = withCounts();
+    check();
+    rows()[2]
+      ?.querySelector(".row-label")
+      ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    host.querySelector("#issues")?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(menus).toEqual([[state.issues[2]?.id ?? 0, "contextmenu"]]);
+  });
+
+  it("has no badge and no menu handler without counts and without the callback", () => {
+    check();
+    expect(rows()[0]?.querySelector<HTMLElement>(".count-badge")?.hidden).toBe(true);
+    expect(() =>
+      rows()[0]?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })),
+    ).not.toThrow();
   });
 });

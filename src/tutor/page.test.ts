@@ -957,7 +957,7 @@ describe("explanations (SPEC section 4.5)", () => {
     expect(text("explanation")).toContain("Select an error in the list");
     rowClick(1);
     expect(panelState()).toBe("loading");
-    expect(text("explain-header")).toBe("Subject-verb agreement");
+    expect(text("explain-header")).toMatch(/^Subject-verb agreement/);
     expect(text("explain-snippet")).toBe("He go");
     expect(text("explain-category")).toBe("Grammar");
     await settle(() => {
@@ -985,7 +985,7 @@ describe("explanations (SPEC section 4.5)", () => {
     await explainHeGo(h);
     rowClick(2);
     await settle(() => {
-      expect(text("explain-header")).toBe("Collocation");
+      expect(text("explain-header")).toMatch(/^Collocation/);
     });
     await settle(() => {
       expect(panelState()).toBe("ready");
@@ -993,7 +993,7 @@ describe("explanations (SPEC section 4.5)", () => {
     expect(explainRequests(h)).toHaveLength(2);
     rowClick(1);
     await settle(() => {
-      expect(text("explain-header")).toBe("Subject-verb agreement");
+      expect(text("explain-header")).toMatch(/^Subject-verb agreement/);
       expect(panelState()).toBe("ready");
     });
     h.scheduler.advance(100);

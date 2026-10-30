@@ -4,12 +4,16 @@ import { CountingRandom } from "../../core/analysis/testing/helpers";
 import { validateConfig } from "../../core/llm";
 import { FakeFetch, type FakeScript } from "../../core/llm/testing/fake-fetch";
 import { Logger } from "../../core/log";
-import type { LLMConfigInput } from "../../core/store";
+import { Stats, type LLMConfigInput } from "../../core/store";
 import { freshStore } from "../../core/store/testing/db";
-import { FakeClock, FakeScheduler } from "../../core/testing/fake-clock";
+import type { FakeClock } from "../../core/testing/fake-clock";
+import { FakeScheduler } from "../../core/testing/fake-clock";
+import { SessionIgnoreSet } from "../../platform/ignore-set";
 import { FakeChannelBus, type FakeChangeChannel } from "../../platform/testing/fake-channel";
 import { FakeLinkOpener } from "../../platform/testing/fake-link-opener";
+import { FakeContextMenus, FakeCurrentTab } from "../../platform/testing/fake-menus";
 import { FakePermissions } from "../../platform/testing/fake-permissions";
+import { FakeSessionStorage } from "../../platform/testing/fake-session-storage";
 import type { TutorDeps } from "../deps";
 import { mountTutor, type TutorPage } from "../page";
 
@@ -42,11 +46,22 @@ export function config(overrides: Partial<LLMConfigInput> = {}): LLMConfigInput 
 
 export const ORIGIN = "https://api.example.com/*";
 
+/** The address the page gives its menu entries (`documentUrlPatterns`). */
+export const PAGE_URL = "moz-extension://test/tutor.html";
+
+/** The id of the tab the page under test is in. */
+export const TAB_ID = 7;
+
 export interface TutorHarness {
   page: TutorPage;
   doc: Document;
   deps: TutorDeps;
   db: IDBDatabase;
+  /** Mistakes and token usage, over the same database and the shared ignore set. */
+  stats: Stats;
+  /** `storage.session`, shared by every tab of the test. */
+  session: FakeSessionStorage;
+  menus: FakeContextMenus;
   fake: FakeFetch;
   permissions: FakePermissions;
   scheduler: FakeScheduler;
@@ -80,7 +95,10 @@ export async function mountForTest(
   options: HarnessOptions = {},
 ): Promise<TutorHarness> {
   loadTutorHtml(doc);
-  const { store, db } = await freshStore({ validateConfig });
+  const { store, db, clock } = await freshStore({ validateConfig }, 1_000);
+  const session = new FakeSessionStorage();
+  const stats = new Stats(db, clock, new SessionIgnoreSet(session));
+  const menus = new FakeContextMenus();
   for (const input of options.configs ?? []) await store.createConfig(input);
   if (options.selected !== undefined && options.selected !== null) {
     await store.setSetting("selected_llm_id", options.selected);
@@ -102,7 +120,6 @@ export async function mountForTest(
   const fake = new FakeFetch(
     options.script ?? { kind: "json", body: { choices: [{ message: { content: "{}" } }] } },
   );
-  const clock = new FakeClock(1_000);
   const scheduler = new FakeScheduler();
   const logged: TutorHarness["logged"] = [];
   const sink = (level: string) => (message: string, fields?: unknown) => {
@@ -113,6 +130,10 @@ export async function mountForTest(
   const channel = bus.connect();
   const deps: TutorDeps = {
     store,
+    stats,
+    menus,
+    currentTab: new FakeCurrentTab(TAB_ID),
+    pageUrl: PAGE_URL,
     channel,
     permissions,
     links,
@@ -137,6 +158,9 @@ export async function mountForTest(
     doc,
     deps,
     db,
+    stats,
+    session,
+    menus,
     fake,
     permissions,
     scheduler,

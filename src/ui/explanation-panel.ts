@@ -48,8 +48,8 @@ type Mode = "idle" | "loading" | "ready" | "failed" | "cancelled";
  * It only draws what an `ExplanationController` tells it (`ExplanationView`), and reports the
  * button presses back through the action handler. The tutor page, the page-mode popover and the
  * issues dialog share it. The header line shows the error type's label; `setHeaderLine` replaces
- * it with the longer text of step 9 ("... you have made this mistake 7 times ..."), and
- * `notErrorButton` is the hidden slot of that step's **Not an error**.
+ * it with the counts text ("... you have made this mistake 7 times ...", SPEC section 4.5), and
+ * `notErrorButton` is **Not an error**, whose click the page handles.
  */
 export class ExplanationPanel implements ExplanationView {
   private readonly doc: Document;
@@ -114,7 +114,7 @@ export class ExplanationPanel implements ExplanationView {
       role: "region",
       "aria-label": "Explanation text",
     });
-    this.notError = el(doc, "button", { type: "button", id: "explain-not-error", hidden: true }, [
+    this.notError = el(doc, "button", { type: "button", id: "explain-not-error" }, [
       "Not an error",
     ]);
     this.regenerateButton = el(doc, "button", { type: "button", id: "explain-regenerate" }, [
@@ -165,7 +165,7 @@ export class ExplanationPanel implements ExplanationView {
     this.handler = handler;
   }
 
-  /** The hidden button for step 9's **Not an error**, shown in every state but idle. */
+  /** The **Not an error** button (SPEC section 5.7), shown in every state but idle. The page handles its click. */
   get notErrorButton(): HTMLButtonElement {
     return this.notError;
   }
@@ -186,7 +186,7 @@ export class ExplanationPanel implements ExplanationView {
 
   /**
    * Replaces the header line (the error type's label) with `text`, or restores the label with
-   * undefined. Step 9 puts the counts text here.
+   * undefined. `SelectedIssueHeader` puts the counts text here.
    */
   setHeaderLine(text: string | undefined): void {
     this.headerLine = text;

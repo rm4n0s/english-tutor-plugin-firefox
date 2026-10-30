@@ -2,11 +2,15 @@ import { SystemClock, SystemScheduler } from "../core/clock";
 import { validateConfig } from "../core/llm";
 import { Logger } from "../core/log";
 import { CryptoRandom } from "../core/random";
-import { openDatabase, Store } from "../core/store";
+import { openDatabase, Stats, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
+import { SessionIgnoreSet } from "../platform/ignore-set";
 import { BrowserLinkOpener } from "../platform/links";
+import { BrowserContextMenus } from "../platform/menus";
 import { BrowserOptionsOpener } from "../platform/options-page";
 import { BrowserHostPermissions } from "../platform/permissions";
+import { BrowserSessionStorage } from "../platform/session-storage";
+import { BrowserCurrentTab } from "../platform/tabs";
 import { attachDivider } from "../ui/divider";
 import { mountTutor } from "./page";
 
@@ -38,9 +42,14 @@ async function main(): Promise<void> {
   const clock = new SystemClock();
   const db = await openDatabase(indexedDB);
   const store = new Store(db, clock, { validateConfig });
+  const stats = new Stats(db, clock, new SessionIgnoreSet(new BrowserSessionStorage(browser)));
   const options = new BrowserOptionsOpener(browser);
   const page = mountTutor(document, {
     store,
+    stats,
+    menus: new BrowserContextMenus(browser),
+    currentTab: new BrowserCurrentTab(browser),
+    pageUrl: browser.runtime.getURL("tutor.html"),
     clock,
     log,
     channel: new BroadcastChangeChannel(),

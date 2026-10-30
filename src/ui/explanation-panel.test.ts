@@ -102,8 +102,14 @@ describe("the states", () => {
       show: () => {
         panel.showLoading(TARGET);
       },
-      shown: ["#explain-header", "#explain-target", "#explain-progress", "#explain-cancel"],
-      hidden: ["#explain-regenerate", "#explain-retry", "#explain-not-error"],
+      shown: [
+        "#explain-header",
+        "#explain-target",
+        "#explain-progress",
+        "#explain-cancel",
+        "#explain-not-error",
+      ],
+      hidden: ["#explain-regenerate", "#explain-retry"],
     },
     {
       name: "ready",
@@ -111,8 +117,8 @@ describe("the states", () => {
         panel.showLoading(TARGET);
         panel.showReady("Use **goes**.");
       },
-      shown: ["#explain-header", "#explain-regenerate"],
-      hidden: ["#explain-target", "#explain-progress", "#explain-retry", "#explain-not-error"],
+      shown: ["#explain-header", "#explain-regenerate", "#explain-not-error"],
+      hidden: ["#explain-target", "#explain-progress", "#explain-retry"],
     },
     {
       name: "failed",
@@ -120,8 +126,8 @@ describe("the states", () => {
         panel.showLoading(TARGET);
         panel.showFailed("The server said no.");
       },
-      shown: ["#explain-header", "#explain-retry"],
-      hidden: ["#explain-target", "#explain-progress", "#explain-regenerate", "#explain-not-error"],
+      shown: ["#explain-header", "#explain-retry", "#explain-not-error"],
+      hidden: ["#explain-target", "#explain-progress", "#explain-regenerate"],
     },
     {
       name: "cancelled",
@@ -129,8 +135,8 @@ describe("the states", () => {
         panel.showLoading(TARGET);
         panel.showCancelled();
       },
-      shown: ["#explain-header", "#explain-regenerate"],
-      hidden: ["#explain-target", "#explain-progress", "#explain-retry", "#explain-not-error"],
+      shown: ["#explain-header", "#explain-regenerate", "#explain-not-error"],
+      hidden: ["#explain-target", "#explain-progress", "#explain-retry"],
     },
   ];
 
@@ -196,10 +202,11 @@ describe("the states", () => {
     expect(host.querySelector("#explain-panel")).toBeNull();
   });
 
-  it("has a hidden slot for Not an error, and the header line can be replaced", () => {
+  it("shows Not an error in every state but idle, and the header line can be replaced", () => {
+    expect(host.querySelector("#explain-not-error")).toBeNull();
     panel.showLoading(TARGET);
     panel.showReady("x");
-    expect(panel.notErrorButton.hidden).toBe(true);
+    expect(panel.notErrorButton.hidden).toBe(false);
     expect(panel.notErrorButton.textContent).toBe("Not an error");
     panel.setHeaderLine("Subject-verb agreement: you have made this mistake 7 times");
     expect(q("#explain-header").textContent).toBe(

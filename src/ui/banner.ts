@@ -16,7 +16,7 @@ export class Banner {
   private readonly action: HTMLButtonElement;
   private onAction: (() => void) | undefined;
 
-  constructor(doc: Document, host: HTMLElement) {
+  constructor(doc: Document, host: HTMLElement, id = "banner") {
     this.text = el(doc, "span", { class: "banner-text" });
     this.action = el(doc, "button", { class: "banner-action", type: "button", hidden: true });
     const dismiss = el(
@@ -25,7 +25,7 @@ export class Banner {
       { class: "banner-dismiss", type: "button", "aria-label": "Dismiss" },
       ["×"],
     );
-    this.element = el(doc, "div", { id: "banner", class: "banner", role: "alert", hidden: true }, [
+    this.element = el(doc, "div", { id, class: "banner", role: "alert", hidden: true }, [
       this.text,
       this.action,
       dismiss,

@@ -5,7 +5,7 @@ import type { CurrentTab } from "../tabs";
 export class FakeCurrentTab implements CurrentTab {
   tabId: number | undefined;
 
-  constructor(tabId: number | undefined = 1) {
+  constructor(tabId?: number) {
     this.tabId = tabId;
   }
 

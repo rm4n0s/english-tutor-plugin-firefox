@@ -12,23 +12,27 @@ import {
   AutoCheck,
   CheckController,
   ExplanationController,
+  IssueCounts,
   IssueState,
+  SelectedIssueHeader,
   TokenTally,
   TrackedText,
   type CheckOutcome,
 } from "../core/issues";
 import { effectiveBaseUrl } from "../core/llm";
-import { StoreUsageRecorder, type LLMConfig } from "../core/store";
+import { StoreUsageRecorder, TabSource, type LLMConfig, type MistakeInput } from "../core/store";
 import { Banner } from "../ui/banner";
 import { EditorSelection } from "../ui/editor-selection";
 import { ExplanationPanel } from "../ui/explanation-panel";
 import { IssuesList } from "../ui/issues-list";
 import { LinkConfirm } from "../ui/link-confirm";
 import { LoadingLayer } from "../ui/loading-layer";
+import { StatsDialog } from "../ui/stats-dialog";
 import { EditorMirror } from "../ui/mirror";
 import { IssueTooltip } from "../ui/tooltip";
 import type { TutorDeps } from "./deps";
 import { LLMSelector } from "./llm-selector";
+import { RowMenu } from "./row-menu";
 import { StatusBar } from "./status-bar";
 
 export interface TutorPage {
@@ -37,6 +41,10 @@ export interface TutorPage {
   /** The issue state of the tab's text. */
   state: IssueState;
   tally: TokenTally;
+  /** The source key of the tab's text (SPEC section 5.7). */
+  source: TabSource;
+  /** How often the user made the mistakes of the issues on screen (badges, header line). */
+  counts: IssueCounts;
   destroy(): void;
 }
 
@@ -49,7 +57,9 @@ function requireElement<T extends HTMLElement>(doc: Document, id: string, type: 
 /**
  * Wires the tutor page (SPEC section 4.2) that `tutor.html` describes: the LLM selector, Check and
  * Cancel, the editor with its mirror and loading layer, the legend, the issues list, the
- * explanation panel, the banner and the status bar. Other buttons come in later steps.
+ * explanation panel, the banner and the status bar, and the statistics: recording after a manual
+ * check, the count badges and header line, Not an error, the row menu and the Statistics dialog.
+ * Other buttons come in later steps.
  */
 export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const editor = requireElement(doc, "editor", HTMLTextAreaElement);
@@ -59,6 +69,7 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const prefsButton = requireElement(doc, "prefs", HTMLButtonElement);
   const select = requireElement(doc, "llm-select", HTMLSelectElement);
   const autoCheckBox = requireElement(doc, "auto-check", HTMLInputElement);
+  const statsButton = requireElement(doc, "stats", HTMLButtonElement);
 
   const state = new IssueState(deps.clock);
   // Edits are found and applied to the state first, before the mirror and the status bar redraw
@@ -93,6 +104,11 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     banner.show(err instanceof AppError ? err.message : "Something went wrong.");
   };
 
+  // The mistakes of this tab's text are recorded under this source (SPEC section 5.7). It is made
+  // when the tab loads; New and Clear (step 11) renew it, and Save to library moves it.
+  const source = new TabSource(deps.random);
+  const counts = new IssueCounts(state, deps.stats, report);
+
   let model: AnalysisModel | undefined;
   const linkConfirm = new LinkConfirm(doc, doc.body);
   const explanation = new ExplanationPanel(doc, requireElement(doc, "explanation", HTMLElement), {
@@ -108,6 +124,7 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     },
     scheduler: deps.scheduler,
   });
+  const header = new SelectedIssueHeader(state, counts, explanation);
   const selector = new LLMSelector(
     doc,
     select,
@@ -158,9 +175,28 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const editorMirror = new EditorMirror(doc, editor, mirror, state);
   const editorSelection = new EditorSelection(editor, mirror, state);
   const tooltip = new IssueTooltip(doc, editor, mirror, state);
+  const rowMenu = new RowMenu({
+    menus: deps.menus,
+    currentTab: deps.currentTab,
+    pageUrl: deps.pageUrl,
+    log: deps.log,
+    actions: {
+      notAnError: (id) => {
+        notAnError(id);
+      },
+      regenerate: (id) => {
+        explanationController.regenerate(id);
+      },
+      canRegenerate: () => selector.selected !== undefined,
+    },
+  });
   const issuesList = new IssuesList(doc, requireElement(doc, "issues-pane", HTMLElement), state, {
     onActivate: () => {
       editorSelection.focusSelected();
+    },
+    counts,
+    onRowContextMenu: (id) => {
+      rowMenu.open(id);
     },
   });
   const loading = new LoadingLayer(doc, editorBox, editor, state, deps.scheduler);
@@ -214,13 +250,75 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
 
   function runCheck(manual: boolean): void {
     const config = selector.selected;
+    const sourceKey = source.key;
     controller
       .check({ manual })
       .then((outcome) => {
         handleOutcome(outcome, config);
+        if (outcome.kind !== "finished") return undefined;
+        return afterCheck(outcome, config?.name ?? "", sourceKey);
       })
       .catch(report);
   }
+
+  // Only a manual check is recorded (SPEC section 5.7), after the issues are placed. A failed
+  // recording shows its error in the banner and leaves the underlines as they are. Then the
+  // badges and the header counts are read again.
+  async function afterCheck(
+    outcome: Extract<CheckOutcome, { kind: "finished" }>,
+    llmName: string,
+    sourceKey: string,
+  ): Promise<void> {
+    if (outcome.manual) {
+      const mistakes = outcome.result.placed.map<MistakeInput>((p) => ({
+        error_type: p.issue.type.id,
+        category: p.issue.type.category,
+        snippet: outcome.text.slice(p.start, p.end),
+        fingerprint: p.fingerprint,
+      }));
+      try {
+        const recorded = await deps.stats.record(sourceKey, llmName, mistakes);
+        if (recorded.inserted > 0) deps.channel.post("stats-changed");
+      } catch (err) {
+        report(err);
+      }
+    }
+    await counts.refresh();
+  }
+
+  // Not an error (SPEC section 5.7): the issue's event is deleted, its pair goes into the ignore
+  // set, and its underline and row go at once.
+  function notAnError(issueId: number): void {
+    const issue = state.issues.find((i) => i.id === issueId);
+    if (issue === undefined) return;
+    deps.stats
+      .notAnError(source.key, issue.fingerprint)
+      .then(() => {
+        state.removeIssue(issue.id);
+        deps.channel.post("stats-changed");
+        return counts.refresh();
+      })
+      .catch(report);
+  }
+  explanation.notErrorButton.addEventListener("click", () => {
+    const selected = state.selectedId;
+    if (selected !== null) notAnError(selected);
+  });
+
+  // The Statistics dialog (SPEC section 4.8).
+  const statsDialog = new StatsDialog(doc, doc.body, {
+    stats: deps.stats,
+    onReset: () => {
+      deps.channel.post("stats-changed");
+      counts.refresh().catch(report);
+    },
+    onError: (err) => {
+      deps.log.error("statistics failed", { err });
+    },
+  });
+  statsButton.addEventListener("click", () => {
+    statsDialog.open().catch(report);
+  });
 
   function toggleCheck(): void {
     if (state.pending !== null) {
@@ -320,9 +418,16 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     if (message.type === "configs-changed" || message.type === "settings-changed") {
       selector.load().catch(report);
       loadAutoCheck().catch(report);
+    } else if (message.type === "stats-changed") {
+      // Another tab recorded, removed or reset mistakes: the badges and the header counts follow.
+      counts.refresh().catch(report);
+      if (statsDialog.isOpen) statsDialog.reload().catch(report);
     }
   });
 
+  rowMenu.start().catch((err: unknown) => {
+    deps.log.warn("the row menu is not available", { err });
+  });
   const ready = Promise.all([selector.load(), loadAutoCheck()]).then(() => undefined, report);
   updateCheckButton();
 
@@ -330,6 +435,8 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     ready,
     state,
     tally,
+    source,
+    counts,
     destroy: () => {
       controller.cancel();
       explanationController.destroy();
@@ -346,6 +453,10 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       editorMirror.destroy();
       loading.destroy();
       statusBar.destroy();
+      header.destroy();
+      counts.destroy();
+      rowMenu.destroy();
+      statsDialog.destroy();
     },
   };
 }
