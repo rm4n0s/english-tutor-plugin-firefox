@@ -253,6 +253,14 @@ class Active {
     on(this.win, "resize", () => {
       this.schedulePosition();
     });
+  }
+
+  /**
+   * Watches the page for layout changes, once there is a box to follow: a page where the user never
+   * focuses a text box has no observer at all.
+   */
+  private observe(): void {
+    if (this.mutationObserver !== undefined || this.resizeObserver !== undefined) return;
     if (typeof this.win.MutationObserver === "function") {
       this.mutationObserver = new this.win.MutationObserver(() => {
         this.schedulePosition();
@@ -290,6 +298,7 @@ class Active {
       tracked = { state, badge };
       this.boxes.set(found.element, tracked);
       this.byId.set(state.id, tracked);
+      this.observe();
       this.resizeObserver?.observe(found.element);
       this.link.start();
     } else {
@@ -415,7 +424,7 @@ class Active {
   // Following the boxes
 
   private schedulePosition(): void {
-    if (this.frame !== undefined) return;
+    if (this.frame !== undefined || this.boxes.size === 0) return;
     this.frame = this.win.requestAnimationFrame(() => {
       this.frame = undefined;
       this.position();

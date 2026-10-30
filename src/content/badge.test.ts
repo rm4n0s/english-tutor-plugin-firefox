@@ -6,6 +6,7 @@ import { BlockedCard, OPEN_IN_TUTOR_LABEL } from "./blocked-card";
 import { OverlayHost } from "./overlay-host";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.documentElement.querySelectorAll(":scope > div").forEach((d) => {
     d.remove();
   });
@@ -126,6 +127,32 @@ describe("Badge: its states", () => {
       expect(badge.element.querySelector("script, foreignObject")).toBeNull();
     },
   );
+
+  it("leaves a spinner that goes on spinning as it is", () => {
+    const { badge } = setup();
+    badge.show({ kind: "spinner", label: "Checking" });
+    const spinner = badge.element.firstElementChild;
+    badge.show({ kind: "spinner", label: "Still checking" });
+    expect(badge.element.firstElementChild).toBe(spinner);
+    expect(badge.element.getAttribute("title")).toBe("Still checking");
+    badge.show({ kind: "check", label: "No errors found" });
+    badge.show({ kind: "spinner", label: "Checking again" });
+    expect(badge.element.firstElementChild).not.toBe(spinner);
+  });
+
+  it.each([
+    { name: "spins", reduce: false, animations: 1 },
+    { name: "stands still when the user asks for reduced motion", reduce: true, animations: 0 },
+  ])("the spinner $name", ({ reduce, animations }) => {
+    const animate = vi.spyOn(SVGElement.prototype, "animate");
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) => ({ matches: reduce && query.includes("reduce"), media: query }) as MediaQueryList,
+    );
+    const { badge } = setup();
+    badge.show({ kind: "spinner", label: "Checking" });
+    expect(animate).toHaveBeenCalledTimes(animations);
+    animate.mockRestore();
+  });
 
   it("replaces its content when the state changes", () => {
     const { badge } = setup();

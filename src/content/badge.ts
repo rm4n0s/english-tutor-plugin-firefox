@@ -125,7 +125,15 @@ export class Badge {
   }
 
   show(view: BadgeView): void {
+    const spinning = this.currentView?.kind === "spinner" && view.kind === "spinner";
     this.currentView = view;
+    // A spinner that goes on spinning is left as it is, so that the turn does not start over each
+    // time the frame says it is still checking.
+    if (spinning) {
+      this.element.setAttribute("title", view.label);
+      this.element.setAttribute("aria-label", view.label);
+      return;
+    }
     this.spin?.cancel();
     this.spin = undefined;
     this.element.setAttribute("title", view.label);
@@ -152,8 +160,9 @@ export class Badge {
       case "spinner": {
         const spinner = spinnerSvg(this.doc);
         this.element.replaceChildren(spinner);
-        // The Web Animations API: no style sheet is needed, so a strict policy cannot stop it.
-        if (typeof spinner.animate === "function") {
+        // The Web Animations API: no style sheet is needed, so a strict policy cannot stop it. A
+        // user who asks for reduced motion gets a ring that stands still.
+        if (typeof spinner.animate === "function" && !this.reducedMotion()) {
           const spin = spinner.animate(
             [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
             { duration: 900, iterations: Infinity },
@@ -167,6 +176,14 @@ export class Badge {
     }
     if (view.kind !== "warning" && view.kind !== "count")
       applyCss(this.element, { "font-size": "11px" });
+  }
+
+  private reducedMotion(): boolean {
+    const view = this.doc.defaultView;
+    return (
+      typeof view?.matchMedia === "function" &&
+      view.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
   }
 
   /** Puts the badge's top left corner at the window coordinates. */

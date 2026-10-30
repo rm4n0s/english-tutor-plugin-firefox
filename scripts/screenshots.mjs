@@ -1816,6 +1816,7 @@ const SCENARIOS = {
       // vocabulary issue "make a photo" is left, and the badge changes to its colour at once.
       await ctx.typeAt("I s", "e", 0);
       await ctx.typeAt("He g", "o", 0);
+      await ctx.waitForBadge("vocabulary");
       await ctx.waitForBadge("spinner");
       await ctx.waitForLLMRequests(2);
     },
@@ -2402,6 +2403,10 @@ async function startBrowser(theme, zipPath, downloadDir) {
     JSON.stringify({ [GECKO_ID]: EXTENSION_UUID }),
   );
   options.setPreference("extensions.webextOptionalPermissionPrompts", false);
+  // Reduced motion: the badge of page mode shows a spinner that stands still, so that its
+  // screenshot is the same on every run (the page cannot read into the badge's closed shadow root
+  // to pause its animation).
+  options.setPreference("ui.prefersReducedMotion", 1);
   options.setPreference(
     "layout.css.prefers-color-scheme.content-override",
     COLOR_SCHEME_PREF[theme],
