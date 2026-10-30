@@ -108,8 +108,9 @@ label.inline {
 .explanation-pane {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  scrollbar-color: var(--divider-hover) var(--bg-alt);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 10px 12px;
   font-size: 11pt;
 }

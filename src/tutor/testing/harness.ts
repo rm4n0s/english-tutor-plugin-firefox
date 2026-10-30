@@ -8,6 +8,7 @@ import type { LLMConfigInput } from "../../core/store";
 import { freshStore } from "../../core/store/testing/db";
 import { FakeClock, FakeScheduler } from "../../core/testing/fake-clock";
 import { FakeChannelBus, type FakeChangeChannel } from "../../platform/testing/fake-channel";
+import { FakeLinkOpener } from "../../platform/testing/fake-link-opener";
 import { FakePermissions } from "../../platform/testing/fake-permissions";
 import type { TutorDeps } from "../deps";
 import { mountTutor, type TutorPage } from "../page";
@@ -55,6 +56,8 @@ export interface TutorHarness {
   /** Another page on the same channel (the options page, or another tab). */
   other: { received: string[]; channel: FakeChangeChannel };
   logged: { level: string; message: string; fields: unknown }[];
+  /** The addresses the page opened in new tabs. */
+  links: FakeLinkOpener;
   /** How many times the page asked to open the options page. */
   opened: { options: number };
 }
@@ -106,11 +109,13 @@ export async function mountForTest(
     logged.push({ level, message, fields });
   };
   const opened = { options: 0 };
+  const links = new FakeLinkOpener();
   const channel = bus.connect();
   const deps: TutorDeps = {
     store,
     channel,
     permissions,
+    links,
     fetch: fake.fetch,
     clock,
     scheduler,
@@ -139,6 +144,7 @@ export async function mountForTest(
     channel,
     other: { received, channel: otherChannel },
     logged,
+    links,
     opened,
   };
 }

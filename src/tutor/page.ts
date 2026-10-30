@@ -1,6 +1,7 @@
 import {
   Analyzer,
   CATEGORIES,
+  Explainer,
   modelFromConfig,
   type AnalysisModel,
   type UsageRecorder,
@@ -10,6 +11,7 @@ import {
   adjacentIssueId,
   AutoCheck,
   CheckController,
+  ExplanationController,
   IssueState,
   TokenTally,
   TrackedText,
@@ -21,6 +23,7 @@ import { Banner } from "../ui/banner";
 import { EditorSelection } from "../ui/editor-selection";
 import { ExplanationPanel } from "../ui/explanation-panel";
 import { IssuesList } from "../ui/issues-list";
+import { LinkConfirm } from "../ui/link-confirm";
 import { LoadingLayer } from "../ui/loading-layer";
 import { EditorMirror } from "../ui/mirror";
 import { IssueTooltip } from "../ui/tooltip";
@@ -91,16 +94,20 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   };
 
   let model: AnalysisModel | undefined;
-  const explanation = new ExplanationPanel(
-    doc,
-    requireElement(doc, "explanation", HTMLElement),
-    state,
-    {
-      openOptions: () => {
-        deps.openOptions();
-      },
+  const linkConfirm = new LinkConfirm(doc, doc.body);
+  const explanation = new ExplanationPanel(doc, requireElement(doc, "explanation", HTMLElement), {
+    openOptions: () => {
+      deps.openOptions();
     },
-  );
+    // A link opens only after the user has seen the whole address and confirmed it.
+    openLink: (url) => {
+      linkConfirm
+        .ask(url)
+        .then((confirmed) => (confirmed ? deps.links.open(url) : undefined))
+        .catch(report);
+    },
+    scheduler: deps.scheduler,
+  });
   const selector = new LLMSelector(
     doc,
     select,
@@ -113,19 +120,38 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     report,
   );
 
+  // The selected LLM as a model, made on first use and again after the selection changes.
+  function currentModel(): AnalysisModel | undefined {
+    const config = selector.selected;
+    if (config === undefined) return undefined;
+    model ??= modelFromConfig(config, { fetch: deps.fetch, permissions: deps.permissions });
+    return model;
+  }
+
   const controller = new CheckController({
     state,
     runner: analyzer,
-    getModel: () => {
-      const config = selector.selected;
-      if (config === undefined) return undefined;
-      model ??= modelFromConfig(config, { fetch: deps.fetch, permissions: deps.permissions });
-      return model;
-    },
+    getModel: currentModel,
     getText: () => editor.value,
     onUsage: (usage) => {
       tally.setLast(usage);
     },
+    log: deps.log,
+  });
+
+  // Selecting an issue explains it; a new check result, deselecting or an edit that removes the
+  // issue cancels the explanation (SPEC section 4.5).
+  const explanationController = new ExplanationController({
+    state,
+    explainer: new Explainer({
+      random: deps.random,
+      usage,
+      logger: deps.log,
+      clock: deps.clock,
+    }),
+    view: explanation,
+    getModel: currentModel,
+    getText: () => editor.value,
     log: deps.log,
   });
 
@@ -306,6 +332,8 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     tally,
     destroy: () => {
       controller.cancel();
+      explanationController.destroy();
+      linkConfirm.destroy();
       autoCheck.stop();
       editor.removeEventListener("input", onInput);
       stopChannel();

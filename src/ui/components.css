@@ -270,6 +270,217 @@
   color: var(--accent);
 }
 
+.explain-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+}
+
+.explain-header {
+  margin: 0;
+  font-weight: 600;
+}
+
+.explain-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.explain-snippet {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  color: var(--fg);
+  font-family: inherit;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.explain-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+.explain-progress button {
+  margin-left: auto;
+}
+
+.spinner-small {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.explain-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  scrollbar-color: var(--divider-hover) var(--bg-alt);
+  line-height: 1.45;
+}
+
+.explain-body > :first-child {
+  margin-top: 0;
+}
+
+.explain-body p,
+.explain-body ul,
+.explain-body ol,
+.explain-body blockquote,
+.explain-body pre {
+  margin: 0.5em 0;
+}
+
+.explain-body ul,
+.explain-body ol {
+  padding-left: 1.6em;
+}
+
+.explain-body h3,
+.explain-body h4,
+.explain-body h5,
+.explain-body h6 {
+  margin: 0.9em 0 0.3em;
+  line-height: 1.25;
+}
+
+.explain-body h3 {
+  font-size: 1.25em;
+}
+
+.explain-body h4 {
+  font-size: 1.15em;
+}
+
+.explain-body h5 {
+  font-size: 1.05em;
+  color: var(--accent);
+}
+
+.explain-body h6 {
+  font-size: 1em;
+}
+
+.explain-body code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  font-family: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  font-size: 0.92em;
+}
+
+.explain-body pre {
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.explain-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.explain-body blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.explain-body a {
+  text-decoration: underline;
+}
+
+.explain-message {
+  margin: 0;
+}
+
+.explain-error {
+  color: var(--danger);
+}
+
+.explain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The popover of page mode is about 360 px wide (SPEC section 4.11). */
+.explain-compact {
+  gap: 6px;
+  font-size: 0.92em;
+}
+
+.explain-compact .explain-actions button {
+  flex: 1 1 auto;
+}
+
+.explain-compact .explain-progress-text {
+  min-width: 0;
+}
+
+/* The confirmation before a link opens (SPEC section 4.5). */
+.link-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000000 38%, transparent);
+}
+
+.link-confirm-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(480px, 100%);
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-toolbar);
+  color: var(--fg);
+  box-shadow: 0 6px 24px color-mix(in srgb, #000000 40%, transparent);
+}
+
+.link-confirm-title {
+  margin: 0;
+  font-size: 1.15em;
+}
+
+.link-confirm-text {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.link-confirm-url {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.link-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* The tooltip of the underlines (SPEC section 4.3). */
 .issue-tooltip {
   position: fixed;

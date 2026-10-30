@@ -4,6 +4,7 @@ import { Logger } from "../core/log";
 import { CryptoRandom } from "../core/random";
 import { openDatabase, Store } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
+import { BrowserLinkOpener } from "../platform/links";
 import { BrowserOptionsOpener } from "../platform/options-page";
 import { BrowserHostPermissions } from "../platform/permissions";
 import { attachDivider } from "../ui/divider";
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
     log,
     channel: new BroadcastChangeChannel(),
     permissions: new BrowserHostPermissions(browser),
+    links: new BrowserLinkOpener(browser),
     // The page's own fetch, called as a method of window.
     fetch: (input, init) => window.fetch(input, init),
     scheduler: new SystemScheduler(),

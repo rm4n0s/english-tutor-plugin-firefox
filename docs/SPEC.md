@@ -520,6 +520,7 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 | `StatsResetFailed` | `store` | Reset statistics or Not an error fails |
 | `UsageSaveFailed` | `store` | storing a request's token usage fails (the result is still shown) |
 | `UsageQueryFailed` | `store` | reading the Token usage tab fails |
+| `LinkOpenFailed` | `platform` | a link of an explanation cannot be opened in a new tab (`tabs.create` fails) |
 | `UnknownProvider` | `llm` | the provider string is not supported |
 | `HostPermissionDenied` | `llm` / `platform` | the origin of the LLM's base URL is not granted, or the user refused it |
 | `LLMCallFailed` | `llm` | network failure, non-2xx status, or a broken stream |

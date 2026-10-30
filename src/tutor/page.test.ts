@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
-import { issuesJson, reply, slowReply } from "../core/analysis/testing/helpers";
-import type { FakeScript } from "../core/llm/testing/fake-fetch";
+import { issuesJson, reply, slowReply, streamReply } from "../core/analysis/testing/helpers";
+import type { FakeResponse, FakeScript } from "../core/llm/testing/fake-fetch";
 import { requestResult } from "../core/store/idb";
 import {
   config,
@@ -889,5 +889,317 @@ describe("auto-check (SPEC section 5.1)", () => {
       expect(h.page.state.outcome).toBe("finished");
     });
     expect(mirrorSpans().map(([word]) => word)).toEqual(["I seen", "school", "I very like"]);
+  });
+});
+
+describe("explanations (SPEC section 4.5)", () => {
+  const EXPLANATION = "### What is wrong\nUse **goes** with *he*.\n\n- He `goes`\n- He went";
+  const sse = (content: string) =>
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content } }] })}\n\n`;
+  const usageChunk = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } })}\n\n`;
+
+  /** A script that answers checks with `CHECKED` and explanations with `explain(n)`. */
+  function script(explain: (n: number) => FakeResponse): FakeScript {
+    let explanations = 0;
+    return (request) => {
+      const messages = request.body.messages as { role: string; content: string }[];
+      const system = messages.find((m) => m.role === "system")?.content ?? "";
+      return system.includes("patient English teacher") ? explain(explanations++) : CHECKED;
+    };
+  }
+  const explained = (n = 0): FakeResponse => streamReply([EXPLANATION, ` (${String(n)})`]);
+  const held = (): FakeResponse => ({
+    kind: "stream",
+    chunks: [sse("Partial"), usageChunk],
+    hold: true,
+  });
+  const explainRequests = (h: TutorHarness) =>
+    h.fake.requests.filter((r) =>
+      (r.body.messages as { content: string }[])[0]?.content.includes("patient English teacher"),
+    );
+
+  const rowClick = (index: number) =>
+    [...document.querySelectorAll(".issue-row")][index]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+  const caretTo = (offset: number) => {
+    editor().setSelectionRange(offset, offset);
+    editor().dispatchEvent(new Event("selectionchange"));
+  };
+  const panelState = () => document.getElementById("explain-panel")?.dataset.state ?? "idle";
+  const body = () => byId("explain-body");
+
+  async function checked(
+    explain: (n: number) => FakeResponse,
+    extra: Partial<HarnessOptions> = {},
+  ): Promise<TutorHarness> {
+    const h = await mount({
+      configs: [config()],
+      selected: 1,
+      script: script(explain),
+      ...extra,
+    });
+    await checkText(h);
+    return h;
+  }
+
+  /** Selects the second row, "He go", and waits for its explanation. */
+  async function explainHeGo(h: TutorHarness): Promise<void> {
+    rowClick(1);
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    h.scheduler.advance(100);
+  }
+
+  it("starts when an issue is selected, streams it, and renders the markdown", async () => {
+    const h = await checked(explained);
+    expect(text("explanation")).toContain("Select an error in the list");
+    rowClick(1);
+    expect(panelState()).toBe("loading");
+    expect(text("explain-header")).toBe("Subject-verb agreement");
+    expect(text("explain-snippet")).toBe("He go");
+    expect(text("explain-category")).toBe("Grammar");
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(body().querySelector("h5")?.textContent).toBe("What is wrong");
+    expect(body().querySelector("strong")?.textContent).toBe("goes");
+    expect(body().querySelectorAll("li")).toHaveLength(2);
+    expect(body().textContent).not.toContain("**");
+    expect(explainRequests(h)).toHaveLength(1);
+    expect(byId("banner").hidden).toBe(true);
+  });
+
+  it("starts for a caret selection too", async () => {
+    const h = await checked(explained);
+    caretTo(TEXT.indexOf("He go") + 1);
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(explainRequests(h)).toHaveLength(1);
+  });
+
+  it("shows the cached explanation when the issue is selected again, without a request", async () => {
+    const h = await checked(explained);
+    await explainHeGo(h);
+    rowClick(2);
+    await settle(() => {
+      expect(text("explain-header")).toBe("Collocation");
+    });
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(explainRequests(h)).toHaveLength(2);
+    rowClick(1);
+    await settle(() => {
+      expect(text("explain-header")).toBe("Subject-verb agreement");
+      expect(panelState()).toBe("ready");
+    });
+    h.scheduler.advance(100);
+    expect(body().querySelector("strong")?.textContent).toBe("goes");
+    expect(body().textContent).toContain("(0)");
+    expect(explainRequests(h)).toHaveLength(2);
+  });
+
+  it("selecting nothing cancels the running explanation and returns to the idle hint", async () => {
+    const h = await checked(held);
+    rowClick(1);
+    await settle(() => {
+      expect(body().textContent).toBe("Partial");
+    });
+    caretTo(TEXT.indexOf("him"));
+    expect(panelState()).toBe("idle");
+    expect(text("explanation")).toContain("Select an error in the list");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(panelState()).toBe("idle");
+    expect(h.logged.filter((l) => l.level === "error")).toEqual([]);
+  });
+
+  it("an edit that removes the selected issue returns to idle", async () => {
+    await checked(held);
+    rowClick(1);
+    await settle(() => {
+      expect(body().textContent).toBe("Partial");
+    });
+    type(TEXT.replace("He go", "He goes"));
+    expect(panelState()).toBe("idle");
+  });
+
+  it("an edit elsewhere keeps the explanation", async () => {
+    const h = await checked(explained);
+    await explainHeGo(h);
+    type(`Hello! ${TEXT}`);
+    expect(panelState()).toBe("ready");
+    expect(h.page.state.selected?.snippet).toBe("He go");
+  });
+
+  it("a new check result goes idle, forgets the cache, and ignores a late result", async () => {
+    const h = await checked(explained);
+    await explainHeGo(h);
+    click("check");
+    await settle(() => {
+      expect(h.fake.requests.filter((r) => !explainRequests(h).includes(r))).toHaveLength(2);
+      expect(h.page.state.pending).toBeNull();
+    });
+    expect(panelState()).toBe("idle");
+    rowClick(1);
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(explainRequests(h)).toHaveLength(2);
+    expect(body().textContent).toContain("(1)");
+  });
+
+  it("a new check result cancels a running explanation", async () => {
+    const h = await checked(held);
+    rowClick(1);
+    await settle(() => {
+      expect(body().textContent).toBe("Partial");
+    });
+    click("check");
+    await settle(() => {
+      expect(h.page.state.pending).toBeNull();
+    });
+    expect(panelState()).toBe("idle");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(panelState()).toBe("idle");
+  });
+
+  it("Cancel shows the cancelled state, and Regenerate asks again, skipping the cache", async () => {
+    const h = await checked((n) => (n === 0 ? held() : explained(n)));
+    rowClick(1);
+    await settle(() => {
+      expect(body().textContent).toBe("Partial");
+    });
+    click("explain-cancel");
+    expect(panelState()).toBe("cancelled");
+    expect(body().textContent).toBe("Explanation cancelled.");
+    expect(byId("explain-regenerate").hidden).toBe(false);
+    click("explain-regenerate");
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(body().textContent).toContain("(1)");
+    click("explain-regenerate");
+    await settle(() => {
+      expect(body().textContent).toContain("(2)");
+    });
+    expect(explainRequests(h)).toHaveLength(3);
+  });
+
+  it("records the usage of an explanation, and of a cancelled one that reported some", async () => {
+    const h = await checked((n) => (n === 0 ? held() : explained()));
+    rowClick(1);
+    await settle(() => {
+      expect(body().textContent).toBe("Partial");
+    });
+    click("explain-cancel");
+    await settle(async () => {
+      const rows = await requestResult(
+        h.db.transaction("llm_usage").objectStore("llm_usage").getAll(),
+      );
+      expect(rows.filter((r) => (r as { kind: string }).kind === "explain")).toMatchObject([
+        { llm_name: "Local", kind: "explain", input_tokens: 7, output_tokens: 3 },
+      ]);
+    });
+    click("explain-regenerate");
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    await settle(async () => {
+      const rows = await requestResult(
+        h.db.transaction("llm_usage").objectStore("llm_usage").getAll(),
+      );
+      expect(rows.filter((r) => (r as { kind: string }).kind === "explain")).toHaveLength(2);
+    });
+  });
+
+  it("a failure shows its message with Retry, and Retry works", async () => {
+    const h = await checked((n) =>
+      n === 0
+        ? { kind: "json", status: 500, body: { error: { message: "The model crashed." } } }
+        : explained(),
+    );
+    rowClick(1);
+    await settle(() => {
+      expect(panelState()).toBe("failed");
+    });
+    expect(text("explain-body")).toContain("HTTP 500");
+    expect(byId("explain-retry").hidden).toBe(false);
+    expect(byId("explain-regenerate").hidden).toBe(true);
+    expect(h.logged.some((l) => l.level === "error")).toBe(true);
+    click("explain-retry");
+    await settle(() => {
+      expect(panelState()).toBe("ready");
+    });
+    expect(explainRequests(h)).toHaveLength(2);
+  });
+
+  it("with no LLM configured any more, selecting an issue shows the failed state with that message", async () => {
+    const h = await checked(explained);
+    await h.deps.store.deleteConfig(1);
+    h.other.channel.post("configs-changed");
+    await settle(() => {
+      expect(select().disabled).toBe(true);
+    });
+    expect(text("explanation")).toContain("No LLM is configured. Add one in Preferences to start");
+    rowClick(1);
+    expect(panelState()).toBe("failed");
+    expect(text("explain-body")).toBe(
+      "No LLM is configured. Add one in Preferences to get explanations.",
+    );
+    expect(explainRequests(h)).toHaveLength(0);
+  });
+
+  describe("links", () => {
+    const LINKED = "Read [the rule](http://example.com/rule) first.";
+    const anchor = () => body().querySelector("a");
+    const clickLink = () => {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      anchor()?.dispatchEvent(event);
+      return event;
+    };
+
+    async function withLink(): Promise<TutorHarness> {
+      const h = await checked(() => streamReply([LINKED]));
+      await explainHeGo(h);
+      return h;
+    }
+
+    it("asks first, showing the full address, and opens nothing on Cancel", async () => {
+      const h = await withLink();
+      expect(byId("link-confirm").hidden).toBe(true);
+      const event = clickLink();
+      expect(event.defaultPrevented).toBe(true);
+      expect(byId("link-confirm").hidden).toBe(false);
+      expect(text("link-confirm-url")).toBe("http://example.com/rule");
+      click("link-confirm-cancel");
+      await Promise.resolve();
+      expect(byId("link-confirm").hidden).toBe(true);
+      expect(h.links.opened).toEqual([]);
+    });
+
+    it("opens the address in a new tab on confirmation, once", async () => {
+      const h = await withLink();
+      clickLink();
+      click("link-confirm-open");
+      await settle(() => {
+        expect(h.links.opened).toEqual(["http://example.com/rule"]);
+      });
+      expect(byId("link-confirm").hidden).toBe(true);
+      expect(panelState()).toBe("ready");
+    });
+
+    it("shows a failure to open the tab in the banner", async () => {
+      const h = await withLink();
+      h.links.failWith = new Error("tabs.create failed");
+      clickLink();
+      click("link-confirm-open");
+      await settle(() => {
+        expect(byId("banner").hidden).toBe(false);
+      });
+      expect(h.links.opened).toEqual([]);
+    });
   });
 });
