@@ -202,6 +202,7 @@ export class LLMSection {
   private highlight(id: number): void {
     this.highlighted = id;
     setHidden(this.confirm, true);
+    setHidden(this.status, true);
     for (const row of this.list.children) {
       row.setAttribute("aria-selected", String(row.getAttribute("data-id") === String(id)));
     }
@@ -241,6 +242,7 @@ export class LLMSection {
   private openForm(config: LLMConfig | undefined): void {
     this.closeForm();
     setHidden(this.confirm, true);
+    setHidden(this.status, true);
     const form = new LLMForm({
       doc: this.doc,
       deps: this.deps,

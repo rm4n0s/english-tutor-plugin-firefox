@@ -19,7 +19,8 @@ h1 {
 }
 
 .card h2 {
-  padding: 10px 14px;
+  margin: 0;
+  padding: 10px 14px 0;
   font-size: 15px;
 }
 
@@ -104,7 +105,7 @@ button.danger {
 
 .llm-row {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1.2fr 2fr 0.8fr;
+  grid-template-columns: 1.9fr 1.4fr 1.2fr 2.1fr 1fr;
   gap: 10px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--divider);
@@ -169,6 +170,10 @@ button.danger {
   align-items: center;
   gap: 4px 12px;
   margin-bottom: 8px;
+}
+
+.form-row.single {
+  display: block;
 }
 
 .form-row > .message {

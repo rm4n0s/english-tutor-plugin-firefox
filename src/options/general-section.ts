@@ -48,7 +48,7 @@ export class GeneralSection {
     });
     this.delayError = this.errorLine("auto-check-delay-error");
     host.append(
-      el(doc, "div", { class: "form-row" }, [
+      el(doc, "div", { class: "form-row single" }, [
         el(doc, "label", { class: "inline", for: "auto-check" }, [
           this.autoCheck,
           " Auto-check while typing",
