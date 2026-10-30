@@ -404,7 +404,7 @@ describe("using an alternative (SPEC section 4.6)", () => {
   ])("falls back to setRangeText and an input event when $name", async ({ setup }) => {
     setup();
     const inputs: InputEvent[] = [];
-    s.editor.addEventListener("input", (e) => inputs.push(e as InputEvent));
+    s.editor.addEventListener("input", (e) => inputs.push(e));
     await ready();
     dblclick(".alt-row");
     expect(s.editor.value).toBe("Yesterday I saw him.");
