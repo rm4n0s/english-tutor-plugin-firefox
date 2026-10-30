@@ -1690,15 +1690,19 @@ const SCENARIOS = {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       if (ctx.llmRequests() !== 0) throw new Error("text of an excluded field was sent");
       for (const id of excluded) await ctx.expectNoBadge(id);
-      // Blur the last field: its caret blinks, and a screenshot would catch it on or off. The
-      // focus ring fades out of its own accord, so wait until it is gone.
-      await ctx.stabilise();
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await ctx.screenshot();
       // The control, a plain text box on the same page, is checked: page mode does run here.
       await ctx.focusBox("control");
       await ctx.waitForLLMRequests(1);
       await ctx.waitForBadge("grammar", "control");
+      // Blur the control (its badge stays on a box with issues): its caret blinks, and a screenshot
+      // would catch it on or off. The focus ring fades out of its own accord, so wait until it is
+      // gone. The picture shows the five excluded fields with no badge and the control with its count.
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForBadge("grammar", "control");
+      for (const id of excluded) await ctx.expectNoBadge(id);
+      if (ctx.llmRequests() !== 1) throw new Error("text of an excluded field was sent");
+      await ctx.screenshot();
     },
   },
   "toolbar-menu-site": {
