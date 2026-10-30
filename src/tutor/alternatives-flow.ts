@@ -205,8 +205,10 @@ export class AlternativesFlow {
     const before = editor.value;
     editor.focus();
     editor.setSelectionRange(asked.start, asked.end);
-    let done = false;
+    let done: boolean;
     try {
+      // The only way to edit a textarea that keeps the browser's undo history (SPEC section 4.6).
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- no replacement exists
       done = this.doc.execCommand("insertText", false, alternative);
     } catch {
       done = false;
