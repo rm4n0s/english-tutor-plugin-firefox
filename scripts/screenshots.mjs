@@ -3543,6 +3543,302 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "cleared-by-page": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // The page empties the box from its own script, as a site does when a message is sent
+      // (`textarea.value = ""` fires no `input` event). The badge and the underlines of the old
+      // text go by themselves, though nothing in the page tells the extension.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.waitForLLMRequests(1);
+      const sent = Date.now();
+      await ctx.clickButton("send");
+      await ctx.waitForNoBadge();
+      console.log(
+        `  a box emptied by the page's script (not focused) was noticed after at most ${Date.now() - sent} ms (click and screenshot polling included)`,
+      );
+      await ctx.waitForNoUnderlines();
+      if ((await ctx.boxText()) !== "") throw new Error("the page did not empty the box");
+      // Nothing is left to check, now or after the pause (1 s here).
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      if (ctx.llmRequests() !== 1) throw new Error("an empty box was checked");
+      await ctx.waitForNoBadge();
+      await ctx.waitForNoUnderlines();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForNoBadge();
+      await ctx.screenshot();
+    },
+  },
+  "replaced-by-page": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // The page swaps in another text from its script. The mistake in the part it changed
+      // ("I seen") loses its underline; the other two move with their words, as they do for an
+      // edit the user makes (SPEC section 5.5), and are under exactly their words.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.waitForLLMRequests(1);
+      await ctx.clickButton("replace");
+      await ctx.eventually(async () => {
+        await ctx.expectUnderline("He go", "grammar");
+        await ctx.expectUnderline("make a photo", "vocabulary");
+        await ctx.expectNoUnderlineUnder("I saw", "grammar");
+      });
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.expectNoUnderlineUnder("I saw", "grammar");
+      if (ctx.llmRequests() !== 1) throw new Error("the replaced text was checked again");
+      await ctx.screenshot();
+    },
+  },
+  "text-sync-native": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. A textarea and an input emptied by the page's script: form.reset() and
+      // `input.value = ""`. The old issues go from the badge and the underlines, and the box is
+      // checked again when the user writes in it. The timing is measured too: the badge must be
+      // gone within a second of the script (the layout watcher looks every 250 ms).
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      // An input (one line) emptied by script.
+      await ctx.focusBox("line");
+      await ctx.waitForBadge("grammar", "line");
+      await ctx.waitForLLMRequests(1);
+      await ctx.clickButton("line-clear");
+      await ctx.waitForNoBadge("line");
+      await ctx.waitForNoUnderlines("line");
+      // A textarea emptied by form.reset(): the old issues go too.
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(2);
+      await ctx.clickButton("reset-form");
+      await ctx.waitForNoBadge();
+      await ctx.waitForNoUnderlines();
+      if ((await ctx.boxText()) !== "") throw new Error("form.reset() did not empty the box");
+      // The same box, written in again, is checked and underlined.
+      await ctx.focusBox();
+      await ctx.typeInBox(PAGE_MODE_TEXT);
+      await ctx.waitForLLMRequests(3);
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      // How long it takes: the script sets the value, and the next look of the watcher notices it.
+      // The box has the focus, so an emptied box shows the plain icon, not the count.
+      await ctx.driver.executeScript("document.getElementById('box').value = ''");
+      const started = Date.now();
+      await ctx.waitForBadge("icon");
+      const took = Date.now() - started;
+      if (took > 1500) throw new Error(`the cleared box still had its count after ${took} ms`);
+      await ctx.waitForNoUnderlines();
+      console.log(
+        `  a value set by script was noticed after at most ${took} ms (screenshot polling included)`,
+      );
+    },
+  },
+  "text-sync-timer-only": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. The guaranteed way a script's change of a text box is noticed is the layout
+      // watcher's look (every 250 ms). In Firefox 159 the `selectionchange` that setting `value`
+      // fires makes it faster, so this page stops every event the content script listens to (a
+      // capture listener on the window runs before the document's) and moves the text by script:
+      // the underlines must still follow, each time within one look and a screenshot.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      await ctx.clickAt(900, 700);
+      await ctx.driver.executeScript(
+        `for (const type of ["selectionchange", "keyup", "change", "focusin", "focusout", "reset", "submit"]) {
+           window.addEventListener(type, (event) => event.stopImmediatePropagation(), true);
+         }`,
+      );
+      const delays = [];
+      for (let i = 0; i < 6; i++) {
+        await new Promise((resolve) => setTimeout(resolve, i * 41));
+        const prefixed = i % 2 === 0;
+        await ctx.driver.executeScript(
+          "document.getElementById('box').value = arguments[0]",
+          prefixed ? `Oh! ${PAGE_MODE_TEXT}` : PAGE_MODE_TEXT,
+        );
+        const started = Date.now();
+        await ctx.eventually(() => ctx.expectUnderline("I seen", "grammar"));
+        delays.push(Date.now() - started);
+      }
+      const slowest = Math.max(...delays);
+      console.log(
+        `  with every event stopped, the timer alone noticed a change after ${delays.join(", ")} ms (screenshot polling included)`,
+      );
+      if (slowest > 1000) throw new Error(`a change by script was noticed after ${slowest} ms`);
+      if (ctx.llmRequests() !== 1) throw new Error("the moved text was checked again");
+    },
+  },
+  "text-sync-editable": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. Editable content that a framework rewrites without an input event: the children
+      // replaced (React-style), `textContent = ""`. A MutationObserver on the editing host sees it.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox("editor");
+      await ctx.waitForBadge("grammar", "editor");
+      await ctx.waitForLLMRequests(1);
+      await ctx.expectUnderline("I seen", "grammar", { id: "editor" });
+      // The children are replaced by other paragraphs: the changed part loses its underline, the
+      // others stay under their words.
+      await ctx.clickButton("editor-replace");
+      await ctx.eventually(async () => {
+        await ctx.expectUnderline("He go", "grammar", { id: "editor" });
+        await ctx.expectNoUnderlineUnder("I saw", "grammar", { id: "editor" });
+      });
+      // The post is emptied the way React does it: one empty paragraph.
+      const cleared = Date.now();
+      await ctx.clickButton("editor-clear");
+      await ctx.waitForNoBadge("editor");
+      console.log(
+        `  editable content emptied by script was noticed after at most ${Date.now() - cleared} ms (click and screenshot polling included)`,
+      );
+      await ctx.waitForNoUnderlines("editor");
+      // Written again, then emptied with textContent.
+      await ctx.focusBox("editor");
+      await ctx.typeInBox("He go to school every day.", "editor");
+      await ctx.waitForLLMRequests(2);
+      await ctx.waitForBadge("grammar", "editor");
+      await ctx.expectUnderline("He go", "grammar", { id: "editor" });
+      await ctx.clickButton("editor-text");
+      await ctx.waitForNoBadge("editor");
+      await ctx.waitForNoUnderlines("editor");
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      if (ctx.llmRequests() !== 2) throw new Error("an empty post was checked");
+    },
+  },
+  "text-sync-user-clear": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. The user empties the box: select all and Delete, cut, undo back to empty. These
+      // fire `input` events, and the old issues go with them.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      const box = () => ctx.driver.findElement(By.id("box"));
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      await box().sendKeys(Key.chord(Key.CONTROL, "a"), Key.DELETE);
+      if ((await ctx.boxText()) !== "") throw new Error("select all and Delete left text");
+      await ctx.waitForNoUnderlines();
+      await ctx.waitForBadge("icon");
+      // Written again and checked; select all and cut.
+      await box().sendKeys("He go to school every day.");
+      await ctx.waitForLLMRequests(2);
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await box().sendKeys(Key.chord(Key.CONTROL, "a"), Key.chord(Key.SHIFT, Key.DELETE));
+      await ctx.eventually(async () => {
+        if ((await ctx.boxText()) !== "") throw new Error("cut left text");
+      });
+      await ctx.waitForNoUnderlines();
+      await ctx.waitForBadge("icon");
+      // Written again and checked; undo until the box is empty.
+      await box().sendKeys("He go to school every day.");
+      await ctx.waitForLLMRequests(3);
+      await ctx.waitForBadge("grammar");
+      for (let i = 0; i < 6 && (await ctx.boxText()) !== ""; i++) {
+        await box().sendKeys(Key.chord(Key.CONTROL, "z"));
+      }
+      if ((await ctx.boxText()) !== "") throw new Error("undo did not empty the box");
+      await ctx.waitForNoUnderlines();
+      await ctx.waitForBadge("icon");
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      if (ctx.llmRequests() !== 3) throw new Error("an empty box was checked");
+    },
+  },
+  "text-sync-recreate": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. The page renders its box again (a new element at the same place with the same
+      // text, as a framework does after a message is sent): the old box's issues, badge and
+      // underlines are forgotten; the new box starts from nothing and is checked on its own.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      await ctx.clickButton("recreate");
+      await ctx.waitForNoBadge();
+      await ctx.waitForNoUnderlines();
+      // The new box has the same text and no state: it gets its own check when it is used.
+      await ctx.focusBox();
+      await ctx.waitForLLMRequests(2);
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      // Rendered again while it has the focus: the same.
+      await ctx.clickButton("recreate");
+      await ctx.waitForNoBadge();
+      await ctx.waitForNoUnderlines();
+    },
+  },
+  "text-sync-pending-check": {
+    theme: "light",
+    dir: "step-20-page-text-sync",
+    async run(ctx) {
+      // No PNG. A check for the old text is still running when the page empties the box: its
+      // reply, which arrives later, is not applied to the empty box.
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 2500 });
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("text-sync.html");
+      await ctx.focusBox();
+      await ctx.waitForLLMRequests(1);
+      await ctx.waitForBadge("spinner");
+      await ctx.clickButton("send");
+      await ctx.waitForNoBadge();
+      // The reply is sent (or its connection was dropped by the cancel) before this ends.
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await ctx.waitForNoBadge();
+      await ctx.waitForNoUnderlines();
+      if (ctx.llmRequests() !== 1) throw new Error("an empty box was checked");
+      // The box still works: written in again, it is checked.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.focusBox();
+      await ctx.typeInBox(PAGE_MODE_TEXT);
+      await ctx.waitForLLMRequests(2);
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+    },
+  },
 };
 
 /** The colour of the link in the explanation panel and the no-LLM hint (`--accent`, light). */
@@ -6317,6 +6613,43 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         async () => !(await ctx.badgeShows("dimmed", id)),
         PAGE_TIMEOUT_MS,
         `the dimmed badge of #${id} never went`,
+      );
+    },
+    /** Clicks a button of the test page, as the user does. */
+    async clickButton(id) {
+      await driver.findElement(By.id(id)).click();
+    },
+    /**
+     * Runs `check` (which throws when it fails) again every 100 ms until it passes, or fails with
+     * its last error after the page timeout: for a picture that must change after the page's own
+     * script did something no event announces.
+     */
+    async eventually(check) {
+      const deadline = Date.now() + PAGE_TIMEOUT_MS;
+      for (;;) {
+        try {
+          await check();
+          return;
+        } catch (err) {
+          if (Date.now() > deadline) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+    },
+    /** Waits until the box shows no badge at all (no count, no check mark, no icon). */
+    async waitForNoBadge(id = "box") {
+      await ctx.eventually(() => ctx.expectNoBadge(id));
+    },
+    /** Waits until no pixel of the box has the colour of an underline (the badge's corner excepted). */
+    async waitForNoUnderlines(id = "box") {
+      await ctx.eventually(() => ctx.expectNoUnderlines(id, { ignoreBadge: true }));
+    },
+    /** The text of a box of the page: the value of a text box, the text of editable content. */
+    async boxText(id = "box") {
+      return driver.executeScript(
+        `const box = document.getElementById(arguments[0]);
+         return "value" in box ? box.value : box.innerText;`,
+        id,
       );
     },
     /** Waits until no prompt card shows. */

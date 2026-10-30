@@ -327,6 +327,100 @@ PAGES["spa-message.html"] =
 </html>
 `;
 
+// Step 20: a page that changes the text of its own boxes from its script, as sites do after a
+// message is sent, when a form is reset or when a framework renders again. None of these changes
+// fires an `input` event. Every button is clicked by the harness (SPEC section 4.11, "Checking").
+// The boxes have no blinking caret, so that a picture is the same on every run.
+const REPLACED_TEXT =
+  "Yesterday I saw my friend at the park. He go to school every day, and he make a photo of everything.";
+const REPLACED_PARAGRAPHS = [
+  "Yesterday I saw my friend at the park.",
+  "He go to school every day, and he make a photo of everything.",
+];
+PAGES["text-sync.html"] =
+  pageHead(
+    "A page that rewrites its own boxes",
+    `textarea, input[type="text"], .editable { caret-color: transparent; }
+      textarea { height: 120px; }
+      .editable { min-height: 100px; }
+      .row { display: flex; gap: 8px; margin: 8px 0 0; }
+      .row button { font: 14px sans-serif; padding: 4px 12px; }
+      #sent { margin: 6px 0 0; min-height: 24px; color: #1b7a3d; font-weight: 600; }
+      label { margin: 10px 0 4px; }`,
+  ) +
+  `  <body>
+    <h1>Rewrites its own boxes</h1>
+    <form id="form">
+      <label for="box">Your message</label>
+      <textarea id="box"></textarea>
+      <div class="row">
+        <button type="button" id="send">Send</button>
+        <button type="button" id="replace">Replace</button>
+        <button type="button" id="reset-form">Reset the form</button>
+        <button type="button" id="recreate">Render again</button>
+      </div>
+      <p id="sent"></p>
+      <label for="line">Title</label>
+      <input type="text" id="line" />
+      <div class="row"><button type="button" id="line-clear">Clear the title</button></div>
+    </form>
+    <label id="editor-label">Post</label>
+    <div class="editable" id="editor" contenteditable="true" role="textbox"></div>
+    <div class="row">
+      <button type="button" id="editor-clear">Clear the post</button>
+      <button type="button" id="editor-replace">Replace the post</button>
+      <button type="button" id="editor-text">textContent</button>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const TEXT = ${JSON.stringify(PAGE_MODE_TEXT)};
+      const paragraphs = (editor, texts) => {
+        const nodes = texts.map((text) => {
+          const p = document.createElement("p");
+          p.textContent = text;
+          return p;
+        });
+        editor.replaceChildren(...nodes);
+      };
+      // The default values stay empty: form.reset() empties the boxes.
+      $("box").value = TEXT;
+      $("line").value = TEXT;
+      paragraphs($("editor"), ${JSON.stringify(PARAGRAPHS)});
+      $("send").addEventListener("click", () => {
+        $("box").value = "";
+        $("sent").textContent = "Message sent.";
+      });
+      $("replace").addEventListener("click", () => {
+        $("box").value = ${JSON.stringify(REPLACED_TEXT)};
+      });
+      $("reset-form").addEventListener("click", () => $("form").reset());
+      $("recreate").addEventListener("click", () => {
+        // The framework renders the composer again: a new element at the same place, same text.
+        const fresh = document.createElement("textarea");
+        fresh.id = "box";
+        fresh.value = $("box").value;
+        $("box").replaceWith(fresh);
+      });
+      $("line-clear").addEventListener("click", () => {
+        $("line").value = "";
+      });
+      $("editor-clear").addEventListener("click", () => {
+        // What React does for an emptied Draft.js or Lexical editor: one empty paragraph.
+        const p = document.createElement("p");
+        p.append(document.createElement("br"));
+        $("editor").replaceChildren(p);
+      });
+      $("editor-replace").addEventListener("click", () => {
+        paragraphs($("editor"), ${JSON.stringify(REPLACED_PARAGRAPHS)});
+      });
+      $("editor-text").addEventListener("click", () => {
+        $("editor").textContent = "";
+      });
+    </script>
+  </body>
+</html>
+`;
+
 // A web component with an open shadow root (Lit and others): the editor is inside it.
 PAGES["shadow.html"] =
   pageHead(
