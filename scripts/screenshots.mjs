@@ -1297,6 +1297,15 @@ const SCENARIOS = {
       // is clicked from the browser's chrome, as a user would.
       // Three tabs: tutor A, tutor B, and the options page C, which is the one in front.
       await ctx.open("tutor.html");
+      // The background script made its menus (the web page submenu and the button's entries): the
+      // browser refuses a second entry with the same id.
+      await ctx.expectBackgroundMenus([
+        "english-tutor-web",
+        "english-tutor-web-check",
+        "english-tutor-web-alternatives",
+        "english-tutor-action-new-tab",
+        "english-tutor-action-preferences",
+      ]);
       await ctx.openAlongside("tutor.html");
       await ctx.openAlongside("options.html");
       const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
@@ -2114,9 +2123,11 @@ async function startBrowser(theme, zipPath, downloadDir) {
  * page before this.
  */
 async function waitForPage(driver, page) {
+  // A page opened with a fragment (a hand-off key) clears it, so only the path is compared.
+  const path = page.split("#")[0];
   await driver.wait(
     async () =>
-      (await driver.getCurrentUrl()).endsWith(`/${page}`) &&
+      (await driver.getCurrentUrl()).endsWith(`/${path}`) &&
       (await driver.executeScript("return document.readyState")) === "complete",
     PAGE_TIMEOUT_MS,
     `${page} never finished loading`,
@@ -3031,6 +3042,22 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         .move({ origin: handle, x: dx, y: dy })
         .release()
         .perform();
+    },
+    /**
+     * Fails unless the extension has a menu entry with each of these ids. The page asks the
+     * browser to make one with the same id, which it refuses ("already exists") if it is there.
+     */
+    async expectBackgroundMenus(ids) {
+      const answers = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         const ids = arguments[0];
+         Promise.all(ids.map((id) => new Promise((resolve) =>
+           browser.menus.create({ id, title: "probe", contexts: ["tools_menu"] },
+             () => resolve(String(browser.runtime.lastError?.message ?? "made")))))).then(done);`,
+        ids,
+      );
+      const missing = ids.filter((_, i) => !answers[i].includes("already exists"));
+      if (missing.length > 0) throw new Error(`the menu entries ${missing.join(", ")} are missing`);
     },
     /** Closes the open context menu without choosing anything. */
     async closeMenu() {

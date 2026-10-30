@@ -112,8 +112,10 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   // when the tab loads, renewed by New, Clear and Open, and moved by Save to library.
   const source = new TabSource(deps.random);
   const tabText = new TabText();
-  // The id of this tab, known once `tabs.getCurrent()` answers (in `start`).
+  // The id of this tab, known once `tabs.getCurrent()` answers (in `start`). Until then the state
+  // written by an earlier page keeps the id it had.
   let tabId: number | undefined;
+  let storedTabId: number | undefined;
   const persistence = new TabPersistence({
     storage: deps.tabStorage,
     scheduler: deps.scheduler,
@@ -125,14 +127,14 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       documentId: tabText.documentId,
       lineEnding: tabText.lineEnding,
       dirty: tabText.dirty,
-      tabId,
+      tabId: tabId ?? storedTabId,
     }),
   });
   // A reload, or a restored closed tab, gives the text back (SPEC section 4.2). Issues are not
   // kept: the text has to be checked again, which counts nothing twice.
   const restored = persistence.restore();
   if (restored !== undefined) {
-    tabId = restored.tabId;
+    storedTabId = restored.tabId;
     editor.value = restored.text;
     source.restore(restored.source);
     tabText.loaded(
@@ -751,9 +753,8 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       saving.syncWithLibrary(),
       deps.currentTab.info(),
     ]);
-    const stored = tabId;
     tabId = tab?.tabId;
-    if (restored !== undefined && stored !== undefined && tabId !== undefined && stored !== tabId) {
+    if (storedTabId !== undefined && tabId !== undefined && storedTabId !== tabId) {
       // Duplicating a tab copies its `sessionStorage`, and so the source key. Two tabs counting
       // mistakes under one source would count the same text once (SPEC section 5.7), so this tab
       // gets a source of its own. A `doc:` source stays: both tabs edit that document.
