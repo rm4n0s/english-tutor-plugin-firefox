@@ -44,6 +44,6 @@ describe("the manifest (SPEC section 3.2: page mode follows LanguageTool's model
 
   it("is the same version as package.json", () => {
     expect(manifest.version).toBe(pkg.version);
-    expect(pkg.version).toBe("0.3.0");
+    expect(pkg.version).toBe("0.3.1");
   });
 });
