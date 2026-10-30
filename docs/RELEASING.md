@@ -8,7 +8,7 @@ For the maintainer. This code repository (`rm4n0s/english-tutor-plugin-firefox`)
 
 The code is never pushed there. **The releases repo must stay public**: if it were made private, nobody could download a release, and installed copies would stop finding updates. Its first commit (for example a README made by `gh repo create --public --add-readme`) must exist before the first `gh release create`.
 
-The extension is never listed on addons.mozilla.org (AMO). Each release is signed by AMO as an **unlisted** version, so it installs and stays installed in release Firefox. AMO has version 0.1.0 already (signed by hand), so a version number can never be reused: the next release is 0.2.0.
+The extension is never listed on addons.mozilla.org (AMO). Each release is signed by AMO as an **unlisted** version, so it installs and stays installed in release Firefox. AMO has version 0.1.0 already (signed by hand), so a version number can never be reused: 0.2.0 was signed but never published, so the first public release is 0.3.0.
 
 ## One time: the AMO account and key
 

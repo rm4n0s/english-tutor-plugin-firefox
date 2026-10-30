@@ -11,7 +11,7 @@ This page is the install guide. Each release is a signed file attached to a [rel
 
 ## Install
 
-1. Open the [latest release](https://github.com/rm4n0s/english-tutor-releases/releases/latest) and download the file named `english-tutor-<version>.xpi` (for example `english-tutor-0.2.0.xpi`).
+1. Open the [latest release](https://github.com/rm4n0s/english-tutor-releases/releases/latest) and download the file named `english-tutor-<version>.xpi` (for example `english-tutor-0.3.0.xpi`).
 2. Open it in Firefox: use **File, Open File...** (`Ctrl+O`) and choose the file, or drag the file onto a Firefox window. If Firefox offers to download it instead of installing it, open the downloaded file the same way.
 3. Firefox asks whether to add English Tutor. Read the list and click **Add**. The extension asks for no access to websites now.
 4. A welcome page opens. The English Tutor button is in the toolbar (if it is not, open the puzzle-piece menu and pin it).
@@ -59,12 +59,12 @@ Small local models sometimes answer in a form the extension cannot read. It retr
 
 ## Page mode
 
-Page mode does in a web page's text boxes what the editor does: it underlines the errors in the box, shows a badge with their number, explains one when you click it, and has a dialog with the list of issues. It is **off everywhere until you turn it on**, because it sends what you type to your language model.
+Page mode does in a web page's text boxes what the editor does: it underlines the errors in the box, shows a badge with their number, explains one when you click it, and has a dialog with the list of issues. The icon is in the text boxes of every website, but **nothing is read until you turn a site on**, because it sends what you type to your language model.
 
-- Turn it on once: press **Allow** on the welcome page, or tick **Offer to check text boxes on websites** in **Prefs**. Firefox asks for access to all websites. This only lets English Tutor see which site a tab shows; it reads nothing yet.
+- Nothing to allow: Firefox grants English Tutor access to websites when you install it (the installation prompt lists "access your data for all websites", as LanguageTool's does). The icon is on by default; untick **Show the English Tutor icon in text boxes on websites** in **Prefs** if you do not want it. You can take the access away in the extensions panel or in `about:addons`: English Tutor then does nothing on the sites it cannot reach, and **Prefs** has a button to give it back.
 - On a site you did not turn on, a text box you click into gets a small greyed icon at its bottom right corner. Click it and a card asks about that site: **Turn on** or **Never on this site**. Until you turn a site on, nothing is read and nothing is sent. The icon is not shown on a site you chose **Never** for.
 - Password, payment, one-time code, search and other non-text fields, and code editors, are never read. English Tutor never writes a correction into the page: you fix the text yourself.
-- Right-click the toolbar button to turn page mode off or on for the page you are on. Unticking the box in **Prefs** turns it off everywhere and gives the access back.
+- Right-click the toolbar button to turn page mode off or on for the page you are on. Unticking the box in **Prefs** hides the icon everywhere.
 
 ## Privacy
 
