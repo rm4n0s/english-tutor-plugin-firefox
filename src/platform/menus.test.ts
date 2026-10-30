@@ -20,14 +20,14 @@ function fakeApi(options: { lastError?: Error; throws?: Error } = {}) {
   };
   const failure = options.throws;
   const api = {
-    runtime: { lastError: undefined as Error | undefined },
+    runtime: { lastError: null as Error | null },
     menus: {
       create: (props: object, callback: () => void) => {
         calls.push({ method: "create", args: [props] });
         if (failure !== undefined) throw failure;
-        api.runtime.lastError = options.lastError;
+        api.runtime.lastError = options.lastError ?? null;
         callback();
-        api.runtime.lastError = undefined;
+        api.runtime.lastError = null;
         return 1;
       },
       remove: (id: string) => {
@@ -60,7 +60,7 @@ const caught = (promise: Promise<unknown>) =>
   );
 
 describe("BrowserContextMenus", () => {
-  it("creates each entry for the tab context on the given pages", async () => {
+  it("creates each entry, for every context, on the given pages", async () => {
     const { api, calls } = fakeApi();
     await new BrowserContextMenus(api).create(
       [
@@ -73,7 +73,7 @@ describe("BrowserContextMenus", () => {
       {
         id: "a",
         title: "A",
-        contexts: ["tab"],
+        contexts: ["all"],
         documentUrlPatterns: ["moz-extension://x/tutor.html"],
         visible: false,
         enabled: true,
@@ -81,7 +81,7 @@ describe("BrowserContextMenus", () => {
       {
         id: "b",
         title: "B",
-        contexts: ["tab"],
+        contexts: ["all"],
         documentUrlPatterns: ["moz-extension://x/tutor.html"],
         visible: true,
         enabled: false,
@@ -121,19 +121,20 @@ describe("BrowserContextMenus", () => {
       expect(err).toBeInstanceOf(AppError);
       expect(matches(err as AppError)).toBe(true);
       expect((err as AppError).cause).toBeInstanceOf(Error);
+      expect((err as AppError).message).toBe((options.lastError ?? options.throws).message);
     });
   });
 
-  it("updates, refreshes and overrides the context of a tab", async () => {
+  it("updates, refreshes and overrides the context menu without the browser's own entries", async () => {
     const { api, calls } = fakeApi();
     const menus = new BrowserContextMenus(api);
     await menus.update("a", { visible: true, title: "T" });
     await menus.refresh();
-    menus.overrideContext(7);
+    menus.overrideContext();
     expect(calls).toEqual([
       { method: "update", args: ["a", { visible: true, title: "T" }] },
       { method: "refresh", args: [] },
-      { method: "overrideContext", args: [{ context: "tab", tabId: 7 }] },
+      { method: "overrideContext", args: [{ showDefaults: false }] },
     ]);
   });
 

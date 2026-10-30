@@ -53,7 +53,7 @@ describe("RowMenu", () => {
     await menu.start();
     menu.open(3);
     expect(menus.entries.size).toBe(0);
-    expect(menus.overridden).toEqual([]);
+    expect(menus.overridden).toBe(0);
   });
 
   it("two tabs make entries of their own and do not clash", async () => {
@@ -81,11 +81,11 @@ describe("RowMenu", () => {
     expect([...menus.entries.keys()]).toEqual([NOT(1), REGEN(1), NOT(2), REGEN(2)]);
   });
 
-  it("opening the menu on a row overrides the context of this tab", async () => {
+  it("opening the menu on a row overrides the browser's menu", async () => {
     const { menus, menu } = setup();
     await menu.start();
     menu.open(4);
-    expect(menus.overridden).toEqual([7]);
+    expect(menus.overridden).toBe(1);
   });
 
   it("shows the entries, enabling Regenerate, when the menu it opened is shown, and hides them after", async () => {

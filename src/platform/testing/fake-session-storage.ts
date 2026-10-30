@@ -14,6 +14,11 @@ export class FakeSessionStorage implements SessionStorage {
     return Promise.resolve(found);
   }
 
+  getAll(): Promise<Record<string, unknown>> {
+    if (this.failWith !== undefined) return Promise.reject(this.failWith);
+    return Promise.resolve(Object.fromEntries(this.values));
+  }
+
   set(items: Readonly<Record<string, unknown>>): Promise<void> {
     if (this.failWith !== undefined) return Promise.reject(this.failWith);
     for (const [key, value] of Object.entries(items)) this.values.set(key, value);

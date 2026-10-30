@@ -21,7 +21,7 @@ export interface RowMenuDeps {
 /**
  * The context menu of a row of the issues list (SPEC section 4.4): **Not an error** and
  * **Regenerate explanation**. The page calls `open` from the row's `contextmenu` event, which
- * calls `menus.overrideContext` for this tab, so the browser shows only these entries.
+ * calls `menus.overrideContext()`, so the browser leaves out its own entries and shows only these.
  *
  * The entries are made for this tab alone (their ids contain the tab id) and are invisible until
  * the menu this page opened is shown: `menus.onShown` makes them visible (and enables or
@@ -89,7 +89,7 @@ export class RowMenu {
     if (this.tabId === undefined || this.ids === undefined) return;
     this.target = issueId;
     this.armed = true;
-    this.deps.menus.overrideContext(this.tabId);
+    this.deps.menus.overrideContext();
   }
 
   destroy(): void {

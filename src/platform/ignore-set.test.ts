@@ -43,12 +43,49 @@ describe("SessionIgnoreSet", () => {
     ]);
   });
 
+  it("moves the pairs of one source to another, and only those", async () => {
+    const storage = new FakeSessionStorage();
+    await storage.set({ "handoff:1": { text: "kept" } });
+    const set = new SessionIgnoreSet(storage);
+    await set.add("session:a", "f1");
+    await set.add("session:a", "f2");
+    await set.add("session:ab", "f3");
+    await set.add("session:b", "f4");
+    await set.move("session:a", "doc:7");
+    expect(await set.has("doc:7", "f1")).toBe(true);
+    expect(await set.has("doc:7", "f2")).toBe(true);
+    expect(await set.has("session:a", "f1")).toBe(false);
+    expect(await set.has("session:ab", "f3")).toBe(true);
+    expect(await set.has("session:b", "f4")).toBe(true);
+    expect([...storage.values.keys()].sort()).toEqual(
+      [
+        "handoff:1",
+        ignoreKey("doc:7", "f1"),
+        ignoreKey("doc:7", "f2"),
+        ignoreKey("session:ab", "f3"),
+        ignoreKey("session:b", "f4"),
+      ].sort(),
+    );
+  });
+
+  it.each([
+    { name: "onto itself", from: "session:a", to: "session:a" },
+    { name: "from a source without pairs", from: "session:z", to: "doc:1" },
+  ])("does nothing when it moves $name", async ({ from, to }) => {
+    const storage = new FakeSessionStorage();
+    const set = new SessionIgnoreSet(storage);
+    await set.add("session:a", "f1");
+    await set.move(from, to);
+    expect([...storage.values.keys()]).toEqual([ignoreKey("session:a", "f1")]);
+  });
+
   it("passes a storage failure on", async () => {
     const storage = new FakeSessionStorage();
     storage.failWith = new Error("no storage");
     const set = new SessionIgnoreSet(storage);
     await expect(set.has("session:a", "f1")).rejects.toThrow("no storage");
     await expect(set.add("session:a", "f1")).rejects.toThrow("no storage");
+    await expect(set.move("session:a", "doc:1")).rejects.toThrow("no storage");
   });
 });
 
@@ -58,7 +95,7 @@ describe("BrowserSessionStorage", () => {
     const api = {
       storage: {
         session: {
-          get: (keys: string[]) => {
+          get: (keys: string[] | null) => {
             calls.push(["get", keys]);
             return Promise.resolve({ a: 1 });
           },
@@ -75,10 +112,12 @@ describe("BrowserSessionStorage", () => {
     } as unknown as typeof browser;
     const storage = new BrowserSessionStorage(api);
     expect(await storage.get(["a", "b"])).toEqual({ a: 1 });
+    expect(await storage.getAll()).toEqual({ a: 1 });
     await storage.set({ a: 1 });
     await storage.remove(["a"]);
     expect(calls).toEqual([
       ["get", ["a", "b"]],
+      ["get", null],
       ["set", { a: 1 }],
       ["remove", ["a"]],
     ]);

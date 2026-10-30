@@ -23,6 +23,18 @@ export class SessionIgnoreSet implements IgnoreSet {
   add(source: string, fingerprint: string): Promise<void> {
     return this.storage.set({ [ignoreKey(source, fingerprint)]: true });
   }
+
+  /** Gives every pair of source `from` to source `to` (Save to library, SPEC section 5.7). */
+  async move(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    const prefix = ignoreKey(from, "");
+    const moving = Object.keys(await this.storage.getAll()).filter((key) => key.startsWith(prefix));
+    if (moving.length === 0) return;
+    const moved: Record<string, boolean> = {};
+    for (const key of moving) moved[ignoreKey(to, key.slice(prefix.length))] = true;
+    await this.storage.set(moved);
+    await this.storage.remove(moving);
+  }
 }
 
 /** The `storage.session` key of a pair. A fingerprint is hex, so `|` cannot be inside it. */

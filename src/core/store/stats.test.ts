@@ -221,6 +221,16 @@ describe("Stats.moveSource", () => {
     });
   });
 
+  it("moves the Not-an-error pairs with the events, so a re-check under the document records nothing", async () => {
+    const { stats, ignore } = await setup();
+    await stats.notAnError("session:a", "f1");
+    ignore.pairs.add("session:b|f9");
+    await stats.moveSource("session:a", "doc:7");
+    expect([...ignore.pairs].sort()).toEqual(["doc:7|f1", "session:b|f9"]);
+    const result = await stats.record("doc:7", "Local", [mistake("f1"), mistake("f2")]);
+    expect(result).toEqual({ inserted: 1, duplicate: 0, ignored: 1 });
+  });
+
   it("leaves the events of other sources and moving a source onto itself alone", async () => {
     const { stats, db } = await setup();
     await stats.record("session:a", "Local", [mistake("f1")]);

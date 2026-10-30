@@ -21,6 +21,8 @@ const DAY_MS = 86_400_000;
 export interface IgnoreSet {
   has(source: string, fingerprint: string): Promise<boolean>;
   add(source: string, fingerprint: string): Promise<void>;
+  /** Gives the pairs of source `from` to source `to`, when a text is saved to the library. */
+  move(from: string, to: string): Promise<void>;
 }
 
 /** What a failing method reports: the tag of SPEC section 10 and a message the page can show. */
@@ -219,8 +221,11 @@ export class Stats {
    * event whose fingerprint `to` already has is deleted instead of moved.
    */
   moveSource(from: string, to: string, options: AbortOptions = {}): Promise<MoveResult> {
-    return this.guard("Stats.moveSource", SAVE_FAILED, options, () =>
-      transact(
+    return this.guard("Stats.moveSource", SAVE_FAILED, options, async () => {
+      // The Not-an-error pairs of the session follow its events, so that a re-check of the saved
+      // text does not record again what the user said is not an error.
+      await this.ignore.move(from, to);
+      return transact(
         this.db,
         STORES.errorEvents,
         "readwrite",
@@ -245,8 +250,8 @@ export class Stats {
           return result;
         },
         options,
-      ),
-    );
+      );
+    });
   }
 
   // Counting

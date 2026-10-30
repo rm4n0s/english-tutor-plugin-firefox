@@ -458,16 +458,16 @@ describe("the row's context menu (SPEC section 4.4)", () => {
     expect(h.menus.entries.get(REGEN)?.title).toBe("Regenerate explanation");
   });
 
-  it("overrides the menu of this tab on a right click on a row, and on no other element", async () => {
+  it("overrides the browser's menu on a right click on a row, and on no other element", async () => {
     const h = await mount({ script });
     await checkedAndCounted(h);
     await settle(() => {
       expect(h.menus.entries.size).toBe(2);
     });
     byId("issues").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
-    expect(h.menus.overridden).toEqual([]);
+    expect(h.menus.overridden).toBe(0);
     contextMenu(2);
-    expect(h.menus.overridden).toEqual([TAB_ID]);
+    expect(h.menus.overridden).toBe(1);
   });
 
   it("Not an error removes the issue of the row it was opened on, selected or not", async () => {

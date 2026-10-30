@@ -6,6 +6,8 @@
 export interface SessionStorage {
   /** The stored values of these keys; a key without a value is missing from the result. */
   get(keys: readonly string[]): Promise<Record<string, unknown>>;
+  /** Everything stored (hand-off entries and the ignore set share the storage). */
+  getAll(): Promise<Record<string, unknown>>;
   set(items: Readonly<Record<string, unknown>>): Promise<void>;
   remove(keys: readonly string[]): Promise<void>;
 }
@@ -19,6 +21,10 @@ export class BrowserSessionStorage implements SessionStorage {
 
   get(keys: readonly string[]): Promise<Record<string, unknown>> {
     return this.api.storage.session.get([...keys]);
+  }
+
+  getAll(): Promise<Record<string, unknown>> {
+    return this.api.storage.session.get(null);
   }
 
   set(items: Readonly<Record<string, unknown>>): Promise<void> {

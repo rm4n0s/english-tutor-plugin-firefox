@@ -31,17 +31,17 @@ export interface MenuShown {
 
 /**
  * The extension's context menus (`browser.menus`), for pages that show their own menu: the page
- * calls `overrideContext` in a `contextmenu` handler, which makes the browser show only the
- * entries made for the `tab` context (SPEC sections 4.3 and 4.4). The only place that calls
- * `browser.menus`.
+ * calls `overrideContext` in a `contextmenu` handler, which makes the browser leave out its own
+ * entries and show only the extension's (SPEC sections 4.3 and 4.4). The only place that calls
+ * `browser.menus`. It needs the `menus` and `menus.overrideContext` permissions.
  *
  * The browser sends `onClicked`, `onShown` and `onHidden` to every open page of the extension,
  * so each page must check that the event is for its own tab and its own entries.
  */
 export interface ContextMenus {
   /**
-   * Makes the entries, for the `tab` context, on pages whose address matches one of
-   * `documentUrlPatterns`. Fails with `ContextMenuFailed`.
+   * Makes the entries, for every context, on pages whose address matches one of
+   * `documentUrlPatterns` (so only on the extension's own page). Fails with `ContextMenuFailed`.
    */
   create(entries: readonly MenuEntry[], documentUrlPatterns: readonly string[]): Promise<void>;
   /** Removes entries. Entries that do not exist are skipped. Fails with `ContextMenuFailed`. */
@@ -51,14 +51,26 @@ export interface ContextMenus {
   /** Redraws the menu that is open, after `update` calls made in an `onShown` listener. */
   refresh(): Promise<void>;
   /**
-   * Replaces the menu that this `contextmenu` event opens with the `tab` context menu of the tab.
-   * Call it synchronously from the event handler.
+   * Hides the browser's own entries in the menu that this `contextmenu` event opens, so it shows
+   * only the extension's visible entries. Call it synchronously from the event handler.
    */
-  overrideContext(tabId: number): void;
+  overrideContext(): void;
   /** Returns the function that removes the listener. */
   onClicked(listener: (click: MenuClick) => void): () => void;
   onShown(listener: (shown: MenuShown) => void): () => void;
   onHidden(listener: () => void): () => void;
+}
+
+/**
+ * `runtime.lastError` is a plain object with a message, not an `Error`, so the message is taken
+ * from it; other foreign errors are wrapped as they are.
+ */
+function failure(err: unknown, where: string): AppError {
+  const message =
+    typeof err === "object" && err !== null && "message" in err && typeof err.message === "string"
+      ? err.message
+      : "unknown error";
+  return new AppError("ContextMenuFailed", message, {}, { cause: err }).via(where);
 }
 
 export class BrowserContextMenus implements ContextMenus {
@@ -82,20 +94,21 @@ export class BrowserContextMenus implements ContextMenus {
           {
             id: entry.id,
             title: entry.title,
-            contexts: ["tab"],
+            contexts: ["all"],
             documentUrlPatterns: [...documentUrlPatterns],
             visible: entry.visible ?? true,
             enabled: entry.enabled ?? true,
           },
           () => {
-            const problem = this.api.runtime.lastError;
-            if (problem === undefined) resolve();
+            // Firefox sets `lastError` to null, not undefined, when there is no problem.
+            const problem: unknown = this.api.runtime.lastError;
+            if (problem === undefined || problem === null) resolve();
             else
               reject(AppError.wrap("ContextMenuFailed", problem).via("BrowserContextMenus.create"));
           },
         );
       } catch (err) {
-        reject(AppError.wrap("ContextMenuFailed", err).via("BrowserContextMenus.create"));
+        reject(failure(err, "BrowserContextMenus.create"));
       }
     });
   }
@@ -114,7 +127,7 @@ export class BrowserContextMenus implements ContextMenus {
     try {
       await this.api.menus.update(id, { ...changes });
     } catch (err) {
-      throw AppError.wrap("ContextMenuFailed", err).via("BrowserContextMenus.update");
+      throw failure(err, "BrowserContextMenus.update");
     }
   }
 
@@ -122,12 +135,12 @@ export class BrowserContextMenus implements ContextMenus {
     try {
       await this.api.menus.refresh();
     } catch (err) {
-      throw AppError.wrap("ContextMenuFailed", err).via("BrowserContextMenus.refresh");
+      throw failure(err, "BrowserContextMenus.refresh");
     }
   }
 
-  overrideContext(tabId: number): void {
-    this.api.menus.overrideContext({ context: "tab", tabId });
+  overrideContext(): void {
+    this.api.menus.overrideContext({ showDefaults: false });
   }
 
   onClicked(listener: (click: MenuClick) => void): () => void {

@@ -27,8 +27,8 @@ export interface FakeEntry {
  */
 export class FakeContextMenus implements ContextMenus {
   readonly entries = new Map<string, FakeEntry>();
-  /** The tab ids passed to `overrideContext`, in order. */
-  readonly overridden: number[] = [];
+  /** How many times `overrideContext` was called. */
+  overridden = 0;
   /** How many times `refresh` was called. */
   refreshes = 0;
   failWith: Error | undefined;
@@ -77,8 +77,8 @@ export class FakeContextMenus implements ContextMenus {
     return Promise.resolve();
   }
 
-  overrideContext(tabId: number): void {
-    this.overridden.push(tabId);
+  overrideContext(): void {
+    this.overridden++;
   }
 
   onClicked(listener: (click: MenuClick) => void): () => void {
