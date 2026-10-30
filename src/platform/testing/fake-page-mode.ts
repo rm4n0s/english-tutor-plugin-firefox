@@ -7,6 +7,7 @@ import type {
   PageModePermission,
   PageModeRuntime,
   PageTabs,
+  FrameClaim,
 } from "../page-mode";
 
 export class FakePageModePermission implements PageModePermission {
@@ -119,12 +120,23 @@ export class FakePageModeRuntime implements PageModeRuntime {
   enabledFails: Error | undefined;
   readonly asked: string[] = [];
   readonly opened: string[] = [];
+  /** The frame ids the content script registered. */
+  readonly registered: string[] = [];
+  registerFails: Error | undefined;
+  /** When set, the registration waits for it. */
+  registerGate: Promise<void> | undefined;
   readonly listeners = new Set<(message: PageBroadcast) => void>();
 
   enabledOn(host: string): Promise<boolean> {
     this.asked.push(host);
     if (this.enabledFails !== undefined) return Promise.reject(this.enabledFails);
     return Promise.resolve(this.enabled);
+  }
+
+  async registerFrame(id: string): Promise<void> {
+    if (this.registerFails !== undefined) throw this.registerFails;
+    await this.registerGate;
+    this.registered.push(id);
   }
 
   openInTutor(text: string): Promise<void> {
@@ -146,5 +158,19 @@ export class FakePageModeRuntime implements PageModeRuntime {
   /** The background script sends a message to the page. */
   broadcast(message: PageBroadcast): void {
     for (const handler of [...this.listeners]) handler(message);
+  }
+}
+
+/** The frame's claim at the background script, in memory. */
+export class FakeFrameClaim implements FrameClaim {
+  /** The answer of the background script. */
+  granted = true;
+  fails: Error | undefined;
+  readonly claimed: string[] = [];
+
+  claim(id: string): Promise<boolean> {
+    this.claimed.push(id);
+    if (this.fails !== undefined) return Promise.reject(this.fails);
+    return Promise.resolve(this.granted);
   }
 }

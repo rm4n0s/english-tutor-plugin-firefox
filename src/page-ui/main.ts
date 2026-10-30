@@ -6,6 +6,7 @@ import { frameIdOfFragment } from "../core/page-mode/protocol";
 import { CryptoRandom } from "../core/random";
 import { openDatabase, Store, StoreUsageRecorder } from "../core/store";
 import { BroadcastChangeChannel } from "../platform/channel";
+import { BrowserFrameClaim } from "../platform/page-mode";
 import { WindowPagePortServer } from "../platform/page-port";
 import { PageFrame, type FrameServices } from "./frame";
 import { AllUrlsPermissions } from "./permissions";
@@ -43,5 +44,11 @@ async function openServices(): Promise<FrameServices> {
 const id = frameIdOfFragment(window.location.hash);
 if (id !== undefined) {
   // Registered now, synchronously: the content script connects as soon as this frame has loaded.
-  new PageFrame({ id, server: new WindowPagePortServer(window), services: openServices(), log });
+  new PageFrame({
+    id,
+    server: new WindowPagePortServer(window),
+    claim: new BrowserFrameClaim(browser),
+    services: openServices(),
+    log,
+  });
 }

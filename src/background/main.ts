@@ -1,6 +1,7 @@
 import { SystemClock } from "../core/clock";
 import { HandoffStore } from "../core/handoff";
 import { Logger } from "../core/log";
+import { FrameClaims } from "../core/page-mode/frame-claims";
 import { validateConfig } from "../core/llm";
 import { CryptoRandom } from "../core/random";
 import { openDatabase, Store } from "../core/store";
@@ -71,6 +72,7 @@ startBackground({
     channel: new BroadcastChangeChannel(),
     log,
   }),
+  frameClaims: new FrameClaims(new BrowserSessionStorage(browser), new SystemClock()),
   permission,
   messages: new BrowserBackgroundMessages(browser),
   log,

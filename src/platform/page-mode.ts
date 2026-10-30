@@ -1,4 +1,6 @@
 import {
+  PAGE_FRAME_CLAIM,
+  PAGE_FRAME_REGISTER,
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_OPEN_TUTOR,
@@ -147,7 +149,7 @@ export class BrowserPageModeBackendLink implements PageModeBackendLink {
 export interface MessageSender {
   /** Whether it is this extension's own code. */
   ownExtension: boolean;
-  tab: { windowId: number; index: number } | undefined;
+  tab: { id: number; windowId: number; index: number } | undefined;
 }
 
 /** The background script's `runtime.onMessage`. */
@@ -175,7 +177,10 @@ export class BrowserBackgroundMessages implements BackgroundMessages {
       const tab = sender.tab;
       return handler(message, {
         ownExtension: sender.id === this.api.runtime.id,
-        tab: tab?.windowId === undefined ? undefined : { windowId: tab.windowId, index: tab.index },
+        tab:
+          tab?.id === undefined || tab.windowId === undefined
+            ? undefined
+            : { id: tab.id, windowId: tab.windowId, index: tab.index },
       });
     });
   }
@@ -187,6 +192,8 @@ export interface PageModeRuntime {
   enabledOn(host: string): Promise<boolean>;
   /** Opens a new tutor tab with the text (the hand-off of SPEC section 4.1). */
   openInTutor(text: string): Promise<void>;
+  /** Tells the background script the id of the frame about to be made (SPEC section 4.11). */
+  registerFrame(id: string): Promise<void>;
   /** The messages the background script sends: `page-mode-off` and `settings-changed`. */
   onBroadcast(handler: (message: PageBroadcast) => void): () => void;
   /** The address of the frame; `fragment` is its id. */
@@ -209,6 +216,10 @@ export class BrowserPageModeRuntime implements PageModeRuntime {
     );
   }
 
+  async registerFrame(id: string): Promise<void> {
+    await this.api.runtime.sendMessage({ type: PAGE_FRAME_REGISTER, id });
+  }
+
   async openInTutor(text: string): Promise<void> {
     await this.api.runtime.sendMessage({ type: PAGE_MODE_OPEN_TUTOR, text });
   }
@@ -228,5 +239,28 @@ export class BrowserPageModeRuntime implements PageModeRuntime {
 
   frameUrl(fragment: string): string {
     return `${this.api.runtime.getURL("page-ui.html")}#${fragment}`;
+  }
+}
+
+/** The page-mode frame's question to the background script: am I the frame that was registered? */
+export interface FrameClaim {
+  /** True when the background script registered this id for the tab this frame is in. */
+  claim(id: string): Promise<boolean>;
+}
+
+export class BrowserFrameClaim implements FrameClaim {
+  private readonly api: typeof browser;
+
+  constructor(api: typeof browser) {
+    this.api = api;
+  }
+
+  async claim(id: string): Promise<boolean> {
+    const answer: unknown = await this.api.runtime.sendMessage({ type: PAGE_FRAME_CLAIM, id });
+    return (
+      typeof answer === "object" &&
+      answer !== null &&
+      (answer as { granted?: unknown }).granted === true
+    );
   }
 }

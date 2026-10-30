@@ -4,6 +4,7 @@ import { Logger } from "../core/log";
 import { connectMessage, type FrameMessage } from "../core/page-mode/protocol";
 import { FakeClock, FakeScheduler } from "../core/testing/fake-clock";
 import type { FakePort } from "../platform/testing/fake-page-port";
+import { FakeFrameClaim } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { PageFrame, type FrameServices } from "./frame";
 import { FakeRunner, MODEL, settle } from "./testing";
@@ -27,22 +28,26 @@ function setup(options: { services?: Promise<FrameServices> } = {}) {
   const record = (message: string) => {
     logged.push(message);
   };
+  const claim = new FakeFrameClaim();
   const frame = new PageFrame({
     id: ID,
     server: bus.server,
+    claim,
     services: options.services ?? Promise.resolve(services),
     log: new Logger({ debug: record, info: record, warn: record, error: record }),
   });
   /** The content script opens the channel with `id`; returns its end and what the frame sent. */
-  const connect = (id = ID) => {
+  const connect = async (id = ID) => {
     const mine = bus.connector.connect({ window: {} as Window, origin: "moz-extension://x" }, id);
     const received: FrameMessage[] = [];
     mine.onMessage((m) => {
       received.push(m as FrameMessage);
     });
+    // The frame answers once the background script has confirmed its id.
+    await settle();
     return { port: mine as FakePort, received };
   };
-  return { bus, frame, runner, scheduler, load, logged, connect };
+  return { bus, frame, claim, runner, scheduler, load, logged, connect };
 }
 
 const focus = (box = 1, text = TEXT, revision = 0) => ({
@@ -54,25 +59,25 @@ const focus = (box = 1, text = TEXT, revision = 0) => ({
 });
 
 describe("PageFrame: accepting one port", () => {
-  it("accepts the port offered with its id and says ready", () => {
+  it("accepts the port offered with its id and says ready", async () => {
     const t = setup();
-    const { received } = t.connect();
+    const { received } = await t.connect();
     expect(received).toEqual([{ type: "ready" }]);
   });
 
-  it("ignores a port offered with another id, and says nothing", () => {
+  it("ignores a port offered with another id, and says nothing", async () => {
     const t = setup();
-    const { received, port } = t.connect(OTHER);
+    const { received, port } = await t.connect(OTHER);
     expect(received).toEqual([]);
     expect(port.disconnected).toBe(false);
     // The real port still gets in afterwards.
-    expect(t.connect().received).toEqual([{ type: "ready" }]);
+    expect((await t.connect()).received).toEqual([{ type: "ready" }]);
   });
 
   it("accepts exactly one port: a second one with the same id is ignored", async () => {
     const t = setup();
-    const first = t.connect();
-    const second = t.connect();
+    const first = await t.connect();
+    const second = await t.connect();
     expect(second.received).toEqual([]);
     first.port.post(focus());
     second.port.post(focus(2));
@@ -82,7 +87,7 @@ describe("PageFrame: accepting one port", () => {
 
   it("is a no-op for the messages of a port it did not accept", async () => {
     const t = setup();
-    const { port } = t.connect(OTHER);
+    const { port } = await t.connect(OTHER);
     port.post(focus());
     await t.frame.idle();
     expect(t.frame.boxes).toBe(0);
@@ -93,11 +98,58 @@ describe("PageFrame: accepting one port", () => {
   });
 });
 
+describe("PageFrame: the claim at the background script", () => {
+  it("says ready only after the claim is granted, and claims its own id", async () => {
+    const t = setup();
+    const mine = t.bus.connector.connect({ window: {} as Window, origin: "moz-extension://x" }, ID);
+    const received: unknown[] = [];
+    mine.onMessage((m) => {
+      received.push(m);
+    });
+    expect(t.claim.claimed).toEqual([ID]);
+    expect(received).toEqual([]);
+    await settle();
+    expect(received).toEqual([{ type: "ready" }]);
+  });
+
+  it.each([
+    { name: "a claim that is refused (a frame a web page made by itself)", refuse: true },
+    { name: "a claim that fails (the background script cannot be reached)", refuse: false },
+  ])("ignores the port and does nothing after $name", async ({ refuse }) => {
+    const t = setup();
+    if (refuse) t.claim.granted = false;
+    else t.claim.fails = new Error("no background script");
+    const { port, received } = await t.connect();
+    expect(received).toEqual([]);
+    expect(port.disconnected).toBe(true);
+    port.post(focus());
+    await t.frame.idle();
+    expect(t.frame.boxes).toBe(0);
+    expect(t.runner.asked).toEqual([]);
+    expect(t.logged).toEqual([
+      `[english-tutor] the page-mode frame was not started: the claim ${refuse ? "refused" : "failed"}`,
+    ]);
+  });
+
+  it("does not claim for a port offered with another id", async () => {
+    const t = setup();
+    await t.connect(OTHER);
+    expect(t.claim.claimed).toEqual([]);
+  });
+
+  it("claims once: a second port with its id does not start a second claim", async () => {
+    const t = setup();
+    await t.connect();
+    await t.connect();
+    expect(t.claim.claimed).toEqual([ID]);
+  });
+});
+
 describe("PageFrame: the boxes of the page", () => {
   it("makes a session for a focused box, with the content script's source, and checks it", async () => {
     const t = setup();
     t.runner.answer(resultOf([placed(10, 16), placed(22, 27)]));
-    const { port, received } = t.connect();
+    const { port, received } = await t.connect();
     port.post(focus());
     await t.frame.idle();
     await settle();
@@ -110,7 +162,7 @@ describe("PageFrame: the boxes of the page", () => {
 
   it("reads the settings again at every focus", async () => {
     const t = setup();
-    const { port } = t.connect();
+    const { port } = await t.connect();
     port.post(focus(1, "one two"));
     port.post(focus(2, "one two"));
     port.post({ type: "blur", box: 1 });
@@ -122,7 +174,7 @@ describe("PageFrame: the boxes of the page", () => {
   it("keeps the state of each box apart", async () => {
     const t = setup();
     t.runner.answer(resultOf([placed(10, 16)])).answer(resultOf([]));
-    const { port, received } = t.connect();
+    const { port, received } = await t.connect();
     port.post(focus(1));
     await t.frame.idle();
     await settle();
@@ -140,7 +192,7 @@ describe("PageFrame: the boxes of the page", () => {
   it("applies an edit message to the box's text", async () => {
     const t = setup();
     t.runner.answer(resultOf([]));
-    const { port } = t.connect();
+    const { port } = await t.connect();
     port.post(focus());
     port.post({ type: "edit", box: 1, revision: 1, start: 0, removed: 0, inserted: "Oh! " });
     await t.frame.idle();
@@ -149,7 +201,7 @@ describe("PageFrame: the boxes of the page", () => {
 
   it("asks for the text again when an edit does not follow", async () => {
     const t = setup();
-    const { port, received } = t.connect();
+    const { port, received } = await t.connect();
     port.post(focus());
     port.post({ type: "edit", box: 1, revision: 5, start: 0, removed: 0, inserted: "x" });
     await t.frame.idle();
@@ -162,7 +214,7 @@ describe("PageFrame: the boxes of the page", () => {
   it("forgets a box: its check is cancelled and its session is gone", async () => {
     const t = setup();
     t.runner.hold();
-    const { port } = t.connect();
+    const { port } = await t.connect();
     port.post(focus());
     await t.frame.idle();
     await settle();
@@ -174,7 +226,7 @@ describe("PageFrame: the boxes of the page", () => {
 
   it("ignores messages for a box it does not have, and messages that are not the protocol's", async () => {
     const t = setup();
-    const { port, received } = t.connect();
+    const { port, received } = await t.connect();
     for (const message of [
       { type: "edit", box: 9, revision: 1, start: 0, removed: 0, inserted: "x" },
       { type: "blur", box: 9 },
@@ -197,15 +249,16 @@ describe("PageFrame: the boxes of the page", () => {
     expect(t.logged).toEqual([]);
   });
 
-  it("disposes every session when the page goes away, and takes a new port after", async () => {
+  it("disposes every session when the page goes away, and takes no other port: a claim works once", async () => {
     const t = setup();
     t.runner.hold();
-    const { port } = t.connect();
+    const { port } = await t.connect();
     port.post(focus());
     await t.frame.idle();
     port.disconnect();
     expect(t.frame.boxes).toBe(0);
-    expect(t.connect().received).toEqual([{ type: "ready" }]);
+    expect((await t.connect()).received).toEqual([]);
+    expect(t.claim.claimed).toEqual([ID]);
   });
 });
 
@@ -216,7 +269,7 @@ describe("PageFrame: while the store opens", () => {
       open = resolve;
     });
     const t = setup({ services: slow });
-    const { port, received } = t.connect();
+    const { port, received } = await t.connect();
     expect(received).toEqual([{ type: "ready" }]);
     port.post(focus(1, "one two"));
     port.post({ type: "edit", box: 1, revision: 1, start: 7, removed: 0, inserted: " three" });
@@ -235,7 +288,7 @@ describe("PageFrame: while the store opens", () => {
 
   it("logs a store that cannot be opened and drops the messages", async () => {
     const t = setup({ services: Promise.reject(new Error("no database")) });
-    const { port } = t.connect();
+    const { port } = await t.connect();
     port.post(focus());
     await t.frame.idle();
     expect(t.frame.boxes).toBe(0);

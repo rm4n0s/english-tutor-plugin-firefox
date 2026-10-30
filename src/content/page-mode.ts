@@ -202,6 +202,7 @@ class Active {
         parent: this.host.layer,
         connector: deps.connector,
         frameUrl: (id) => deps.runtime.frameUrl(id),
+        register: (id) => deps.runtime.registerFrame(id),
         scheduler: deps.scheduler,
         random: deps.random,
         log: deps.log,

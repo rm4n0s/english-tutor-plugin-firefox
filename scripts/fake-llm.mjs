@@ -134,11 +134,11 @@ export const PAGES = {
 };
 
 /**
- * Headers of test pages. `strict-csp.html` has `frame-src 'none'`: Firefox does not apply a page's
- * policy to the extension's own frame that a content script adds (checked in Firefox 159: the frame
- * loads), so page mode works there. `blocked-frame.html` has `Cross-Origin-Embedder-Policy:
- * require-corp`, which Firefox does enforce against a frame whose document does not opt in, as the
- * extension's does not: this is the page whose frame cannot load (`PageFrameBlocked`).
+ * Headers of test pages. `strict-csp.html` has `frame-src 'none'` and still works: in Firefox 159
+ * a page's `frame-src` and `Cross-Origin-Embedder-Policy` do not apply to the extension's own frame
+ * that a content script adds. `blocked-frame.html` has `Content-Security-Policy: sandbox
+ * allow-same-origin`: the frame inherits the page's sandbox flags, so its script does not run and
+ * never answers (`PageFrameBlocked`).
  */
 export const PAGE_HEADERS = {
   "strict-csp.html": { "content-security-policy": "frame-src 'none'" },

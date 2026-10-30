@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_URLS,
   BrowserBackgroundMessages,
+  BrowserFrameClaim,
   BrowserContentScripts,
   BrowserPageModeBackendLink,
   BrowserPageModePermission,
@@ -203,12 +204,15 @@ describe("BrowserBackgroundMessages", () => {
 
   it("tells the handler whether the sender is the extension and where its tab is", () => {
     const { messages, seen } = setup();
-    messages.fire("a", { id: "english-tutor@rm4n0s.dev", tab: { windowId: 4, index: 2 } });
+    messages.fire("a", { id: "english-tutor@rm4n0s.dev", tab: { id: 9, windowId: 4, index: 2 } });
     messages.fire("b", { id: "someone-else@example.com" });
     messages.fire("c", { id: "english-tutor@rm4n0s.dev", tab: {} });
+    // A tab without an id cannot be told from another one.
+    messages.fire("d", { id: "english-tutor@rm4n0s.dev", tab: { windowId: 4, index: 2 } });
     expect(seen.map((s) => s.sender)).toEqual([
-      { ownExtension: true, tab: { windowId: 4, index: 2 } },
+      { ownExtension: true, tab: { id: 9, windowId: 4, index: 2 } },
       { ownExtension: false, tab: undefined },
+      { ownExtension: true, tab: undefined },
       { ownExtension: true, tab: undefined },
     ]);
   });
@@ -218,6 +222,38 @@ describe("BrowserBackgroundMessages", () => {
     const [answered] = messages.fire("answer me", { id: "english-tutor@rm4n0s.dev" });
     expect(await answered).toBe("answered");
     expect(messages.fire("other", { id: "english-tutor@rm4n0s.dev" })).toEqual([undefined]);
+  });
+});
+
+describe("BrowserFrameClaim", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+
+  it.each([
+    { name: "granted: true", answer: { granted: true }, expected: true },
+    { name: "granted: false", answer: { granted: false }, expected: false },
+    { name: "granted as a string", answer: { granted: "yes" }, expected: false },
+    { name: "an empty object", answer: {}, expected: false },
+    { name: "null", answer: null, expected: false },
+    { name: "undefined (nobody answered)", answer: undefined, expected: false },
+  ])("claims the id and reads $name", async ({ answer, expected }) => {
+    const sent: unknown[] = [];
+    const api = {
+      runtime: {
+        sendMessage: (message: unknown) => {
+          sent.push(message);
+          return Promise.resolve(answer);
+        },
+      },
+    } as unknown as typeof browser;
+    expect(await new BrowserFrameClaim(api).claim(ID)).toBe(expected);
+    expect(sent).toEqual([{ type: "page-frame-claim", id: ID }]);
+  });
+
+  it("fails when the background script cannot be reached", async () => {
+    const api = {
+      runtime: { sendMessage: () => Promise.reject(new Error("no receiver")) },
+    } as unknown as typeof browser;
+    await expect(new BrowserFrameClaim(api).claim(ID)).rejects.toThrow("no receiver");
   });
 });
 
@@ -251,6 +287,14 @@ describe("BrowserPageModeRuntime", () => {
     const t = setup({ ok: true });
     await t.runtime.openInTutor("Some text.");
     expect(t.sent).toEqual([{ type: "page-mode-open-tutor", text: "Some text." }]);
+  });
+
+  it("registers the id of the frame it is about to make", async () => {
+    const t = setup({ ok: true });
+    await t.runtime.registerFrame("11111111-1111-4111-8111-111111111111");
+    expect(t.sent).toEqual([
+      { type: "page-frame-register", id: "11111111-1111-4111-8111-111111111111" },
+    ]);
   });
 
   it("makes the frame's address from the extension's own page and the id", () => {

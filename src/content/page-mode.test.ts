@@ -7,7 +7,7 @@ import { frameIdOfFragment, type ContentMessage } from "../core/page-mode/protoc
 import { FakeClock, FakeScheduler } from "../core/testing/fake-clock";
 import { PageFrame } from "../page-ui/frame";
 import { FakeRunner, MODEL, settle } from "../page-ui/testing";
-import { FakePageModeRuntime } from "../platform/testing/fake-page-mode";
+import { FakeFrameClaim, FakePageModeRuntime } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { OPEN_IN_TUTOR_LABEL } from "./blocked-card";
 import { FRAME_BLOCKED_MESSAGE, FRAME_TIMEOUT_MS } from "./frame-link";
@@ -89,6 +89,7 @@ async function setup(options: Options = {}) {
       frame = new PageFrame({
         id,
         server: bus.server,
+        claim: new FakeFrameClaim(),
         services: Promise.resolve({
           clock: new FakeClock(1_000),
           scheduler,
@@ -109,6 +110,8 @@ async function setup(options: Options = {}) {
   /** Focus the box, load the frame, and let the frame finish its work. */
   const focusAndLoad = async (target: Element = box) => {
     focusIn(target);
+    // The id is registered with the background script before the iframe is made.
+    await settle();
     if (iframe() !== null && frame === undefined) loadFrame();
     await frame?.idle();
     await settle();
@@ -637,11 +640,33 @@ describe("PageModeContent: the frame is blocked (PageFrameBlocked)", () => {
   it("shows ! with the reason after 5 seconds, and checks nothing", async () => {
     const t = await setup({ frame: "never" });
     focusIn(t.box);
+    await settle();
     t.loadFrame();
     t.scheduler.advance(FRAME_TIMEOUT_MS);
     expect(t.content.blocked?.hasRoute("PageFrameBlocked")).toBe(true);
     expect(t.kind()).toBe("warning");
     expect(t.badge()?.getAttribute("title")).toBe(FRAME_BLOCKED_MESSAGE);
+    expect(t.runner.asked).toEqual([]);
+  });
+
+  it("registers the frame's id with the background script before the iframe is made", async () => {
+    const t = await setup({ frame: "never" });
+    focusIn(t.box);
+    expect(t.runtime.registered).toEqual([]);
+    expect(t.iframe()).toBeNull();
+    await settle();
+    expect(t.runtime.registered).toHaveLength(1);
+    expect(t.iframe()?.src.endsWith(`#${t.runtime.registered[0] ?? ""}`)).toBe(true);
+  });
+
+  it("shows ! at once, with its own route, when the id cannot be registered, and makes no frame", async () => {
+    const t = await setup({ frame: "never" });
+    t.runtime.registerFails = new Error("no background");
+    focusIn(t.box);
+    await settle();
+    expect(t.iframe()).toBeNull();
+    expect(t.content.blocked?.hasRoute("FrameLink.register->PageFrameBlocked")).toBe(true);
+    expect(t.kind()).toBe("warning");
     expect(t.runner.asked).toEqual([]);
   });
 
@@ -651,6 +676,7 @@ describe("PageModeContent: the frame is blocked (PageFrameBlocked)", () => {
       frame: "never",
     });
     focusIn(t.box);
+    await settle();
     t.loadFrame();
     t.scheduler.advance(FRAME_TIMEOUT_MS);
     const b = document.getElementById("b");
@@ -663,6 +689,7 @@ describe("PageModeContent: the frame is blocked (PageFrameBlocked)", () => {
   it("offers only Open in English Tutor, which sends the text of the box", async () => {
     const t = await setup({ frame: "never" });
     focusIn(t.box);
+    await settle();
     t.loadFrame();
     t.scheduler.advance(FRAME_TIMEOUT_MS);
     t.box.value = `${TEXT} More.`;

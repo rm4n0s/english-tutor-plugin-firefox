@@ -7,6 +7,7 @@ import {
   type ContentMessage,
   type FrameMessage,
 } from "../core/page-mode/protocol";
+import type { FrameClaim } from "../platform/page-mode";
 import type { PagePort, PagePortServer } from "../platform/page-port";
 import { BoxSession } from "./box-session";
 
@@ -26,6 +27,8 @@ export interface PageFrameDeps {
   /** The id in the frame's address: the one port name this frame accepts. */
   id: string;
   server: PagePortServer;
+  /** Asks the background script whether this frame was registered for the tab it is in. */
+  claim: FrameClaim;
   /** Resolves when the store is open and the settings are read. */
   services: Promise<FrameServices>;
   log: Logger;
@@ -44,6 +47,8 @@ export interface PageFrameDeps {
 export class PageFrame {
   private readonly deps: PageFrameDeps;
   private port: PagePort | undefined;
+  /** A port was offered with this frame's id: the claim is made once, whatever the answer. */
+  private offered = false;
   private services: FrameServices | undefined;
   private queue: Promise<void>;
   private readonly sessions = new Map<number, BoxSession>();
@@ -79,7 +84,28 @@ export class PageFrame {
 
   private accept(port: PagePort, id: string): void {
     // Not offered with this frame's id, or a second one: ignored.
-    if (id !== this.deps.id || this.port !== undefined) return;
+    if (id !== this.deps.id || this.offered) return;
+    this.offered = true;
+    // The id is in the frame's own address, which a web page can make up too: a page that embeds
+    // `page-ui.html` itself would pass that check. Only the background script knows whether the
+    // content script of this tab registered the id, and it says yes once.
+    this.deps.claim.claim(id).then(
+      (granted) => {
+        if (granted) this.open(port);
+        else this.refuse(port, "refused");
+      },
+      () => {
+        this.refuse(port, "failed");
+      },
+    );
+  }
+
+  private refuse(port: PagePort, why: string): void {
+    this.deps.log.warn(`the page-mode frame was not started: the claim ${why}`);
+    port.disconnect();
+  }
+
+  private open(port: PagePort): void {
     this.port = port;
     port.onMessage((data) => {
       const message = parseContentMessage(data);

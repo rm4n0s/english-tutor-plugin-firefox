@@ -30,6 +30,7 @@ import {
   startBackground,
 } from "./background";
 import { PageModeBackend } from "./page-mode";
+import { FrameClaims } from "../core/page-mode/frame-claims";
 
 const NOW = 1_000_000;
 
@@ -87,6 +88,7 @@ function setup(
     lifecycle,
     options,
     pageMode,
+    frameClaims: new FrameClaims(session, clock),
     permission,
     messages: messageBus,
     log,
@@ -390,7 +392,10 @@ describe("hand-off expiry", () => {
     session.failWith = new Error("storage broke");
     const s = setup({ session });
     await settle();
-    expect(messages(s.logged)).toEqual(["could not delete old hand-off entries"]);
+    expect(messages(s.logged)).toEqual([
+      "could not delete old hand-off entries",
+      "could not delete old page-mode frame entries",
+    ]);
   });
 });
 
@@ -677,7 +682,7 @@ describe("page mode", () => {
       const s = setup();
       const reply = await s.messageBus.send(
         { type: "page-mode-open-tutor", text: "I has a idea." },
-        { tab: { windowId: 4, index: 2 } },
+        { tab: { id: 7, windowId: 4, index: 2 } },
       );
       expect(reply.answer).toEqual({ ok: true });
       expect(s.tabs.opened).toHaveLength(1);
@@ -706,6 +711,104 @@ describe("page mode", () => {
         { ownExtension: false },
       );
       expect(s.tabs.opened).toEqual([]);
+    });
+  });
+
+  describe("the page-mode frame: register and claim", () => {
+    const ID = "11111111-1111-4111-8111-111111111111";
+    const OTHER = "22222222-2222-4222-8222-222222222222";
+    const inTab = (id: number) => ({ tab: { id, windowId: 1, index: 0 } });
+    const register = (s: ReturnType<typeof setup>, id = ID, tab = 5) =>
+      s.messageBus.send({ type: "page-frame-register", id }, inTab(tab));
+    const claim = (s: ReturnType<typeof setup>, id = ID, tab = 5) =>
+      s.messageBus.send({ type: "page-frame-claim", id }, inTab(tab));
+
+    it("registers the id with the sender's tab, and grants the claim of that tab once", async () => {
+      const s = setup();
+      expect((await register(s)).answer).toEqual({ ok: true });
+      expect(s.session.values.get(`page-frame:${ID}`)).toEqual({ tabId: 5, at: NOW });
+      expect((await claim(s)).answer).toEqual({ granted: true });
+      expect(s.session.values.has(`page-frame:${ID}`)).toBe(false);
+      expect((await claim(s)).answer).toEqual({ granted: false });
+    });
+
+    it("refuses the claim of a frame a web page made by itself (an id nobody registered)", async () => {
+      const s = setup();
+      await register(s);
+      expect((await claim(s, OTHER)).answer).toEqual({ granted: false });
+      // The registered id is still there for the real frame.
+      expect((await claim(s)).answer).toEqual({ granted: true });
+    });
+
+    it("refuses a claim from another tab, and the entry is gone afterwards", async () => {
+      const s = setup();
+      await register(s, ID, 5);
+      expect((await claim(s, ID, 6)).answer).toEqual({ granted: false });
+      expect((await claim(s, ID, 5)).answer).toEqual({ granted: false });
+    });
+
+    it("refuses a claim that has no tab", async () => {
+      const s = setup();
+      await register(s);
+      expect((await s.messageBus.send({ type: "page-frame-claim", id: ID })).answer).toEqual({
+        granted: false,
+      });
+    });
+
+    it("registers nothing for a sender without a tab", async () => {
+      const s = setup();
+      const reply = await s.messageBus.send({ type: "page-frame-register", id: ID });
+      expect(reply.answered).toBe(false);
+      expect(s.session.values.size).toBe(0);
+    });
+
+    it.each([
+      { name: "an id that is not a UUID", message: { type: "page-frame-register", id: "abc" } },
+      { name: "no id", message: { type: "page-frame-register" } },
+      { name: "a claim with a bad id", message: { type: "page-frame-claim", id: 5 } },
+    ])("ignores $name", async ({ message }) => {
+      const s = setup();
+      expect((await s.messageBus.send(message, inTab(5))).answered).toBe(false);
+      expect(s.session.values.size).toBe(0);
+    });
+
+    it("ignores both messages from a sender that is not the extension's own code", async () => {
+      const s = setup();
+      await s.messageBus.send(
+        { type: "page-frame-register", id: ID },
+        { ...inTab(5), ownExtension: false },
+      );
+      expect(s.session.values.size).toBe(0);
+      await register(s);
+      const reply = await s.messageBus.send(
+        { type: "page-frame-claim", id: ID },
+        { ...inTab(5), ownExtension: false },
+      );
+      expect(reply.answered).toBe(false);
+      expect(s.session.values.has(`page-frame:${ID}`)).toBe(true);
+    });
+
+    it("keeps nothing in memory: a restart of the event page still knows the registration", async () => {
+      const first = setup();
+      await register(first);
+      const second = setup({ session: first.session, clock: first.clock });
+      expect((await claim(second)).answer).toEqual({ granted: true });
+    });
+
+    it("refuses the claim of an entry that is older than 5 minutes", async () => {
+      const s = setup();
+      await register(s);
+      s.clock.advance(5 * 60 * 1000 + 1);
+      expect((await claim(s)).answer).toEqual({ granted: false });
+    });
+
+    it("deletes the entries older than 5 minutes when the script runs, and keeps the others", async () => {
+      const session = new FakeSessionStorage();
+      session.values.set("page-frame:old", { tabId: 1, at: NOW - 5 * 60 * 1000 - 1 });
+      session.values.set("page-frame:new", { tabId: 1, at: NOW - 1000 });
+      setup({ session });
+      await settle();
+      expect([...session.values.keys()]).toEqual(["page-frame:new"]);
     });
   });
 

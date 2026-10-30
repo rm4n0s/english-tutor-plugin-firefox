@@ -4,6 +4,7 @@ import {
   messageType,
   parseBroadcast,
   parseConfigRequest,
+  parseFrameIdRequest,
   parseOpenTutorRequest,
 } from "./messages";
 
@@ -59,5 +60,59 @@ describe("runtime messages of page mode", () => {
     { message: undefined, expected: undefined },
   ])("parseBroadcast of $message", ({ message, expected }) => {
     expect(parseBroadcast(message)).toBe(expected);
+  });
+});
+
+describe("the frame id messages", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+
+  it.each([
+    { name: "a register", message: { type: "page-frame-register", id: ID }, ok: true },
+    {
+      name: "a register with extra fields",
+      message: { type: "page-frame-register", id: ID, x: 1 },
+      ok: true,
+    },
+    { name: "a register without an id", message: { type: "page-frame-register" }, ok: false },
+    {
+      name: "a register with a number as id",
+      message: { type: "page-frame-register", id: 5 },
+      ok: false,
+    },
+    {
+      name: "a register with a made-up id",
+      message: { type: "page-frame-register", id: "abc" },
+      ok: false,
+    },
+    {
+      name: "a register with an upper-case id",
+      message: { type: "page-frame-register", id: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" },
+      ok: false,
+    },
+    { name: "a claim (another type)", message: { type: "page-frame-claim", id: ID }, ok: false },
+    { name: "text", message: "page-frame-register", ok: false },
+    { name: "null", message: null, ok: false },
+  ])("reads $name as a register message: $ok", ({ message, ok }) => {
+    expect(parseFrameIdRequest(message, "page-frame-register")).toEqual(
+      ok ? { type: "page-frame-register", id: ID } : undefined,
+    );
+  });
+
+  it.each([
+    { name: "a claim", message: { type: "page-frame-claim", id: ID }, ok: true },
+    {
+      name: "a claim with a made-up id",
+      message: { type: "page-frame-claim", id: "../x" },
+      ok: false,
+    },
+    {
+      name: "a register (another type)",
+      message: { type: "page-frame-register", id: ID },
+      ok: false,
+    },
+  ])("reads $name as a claim message: $ok", ({ message, ok }) => {
+    expect(parseFrameIdRequest(message, "page-frame-claim")).toEqual(
+      ok ? { type: "page-frame-claim", id: ID } : undefined,
+    );
   });
 });

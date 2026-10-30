@@ -22,6 +22,8 @@ export interface FrameLinkDeps {
   connector: PageConnector;
   /** The address of the frame for an id. */
   frameUrl(id: string): string;
+  /** Tells the background script the id, before the frame is made (SPEC section 4.11). */
+  register(id: string): Promise<void>;
   scheduler: Scheduler;
   random: Random;
   log: Logger;
@@ -43,7 +45,9 @@ type LinkState = "idle" | "starting" | "ready" | "blocked" | "closed";
  * `page-ui.html` in the overlay's closed shadow root, made when the first text box is focused, and
  * a private `MessageChannel` whose second end goes to the frame with `postMessage` (see
  * `core/page-mode/protocol.ts`). The random id is in the frame's address fragment and in the first
- * message, so the frame accepts only this channel. A page's script cannot see the channel.
+ * message, so the frame accepts only this channel. A page's script cannot see the channel. The id
+ * is registered with the background script first, and the frame has to claim it from the same tab
+ * (`core/page-mode/frame-claims.ts`), so a frame that a page makes by itself does not start.
  *
  * If the page's Content Security Policy keeps the frame from loading, the frame never answers
  * within 5 seconds: the link is blocked, with `PageFrameBlocked`, and the badge says so.
@@ -70,8 +74,28 @@ export class FrameLink {
   start(): void {
     if (this.current !== "idle") return;
     this.current = "starting";
-    const { doc, parent, scheduler } = this.deps;
+    const { scheduler } = this.deps;
     const id = this.deps.random.uuid();
+    this.cancelTimer = scheduler.after(this.deps.timeoutMs ?? FRAME_TIMEOUT_MS, () => {
+      this.cancelTimer = undefined;
+      this.block("FrameLink.start");
+    });
+    // The background script must know the id before the frame asks about it: a frame that a web
+    // page makes by itself is not registered, and does not start.
+    this.deps.register(id).then(
+      () => {
+        this.makeFrame(id);
+      },
+      () => {
+        this.block("FrameLink.register");
+      },
+    );
+  }
+
+  private makeFrame(id: string): void {
+    // Closed or blocked while the registration was on its way.
+    if (this.current !== "starting" || this.iframe !== undefined) return;
+    const { doc, parent } = this.deps;
     const iframe = doc.createElement("iframe");
     iframe.setAttribute("title", "English Tutor");
     iframe.setAttribute("aria-hidden", "true");
@@ -84,10 +108,6 @@ export class FrameLink {
       border: "0",
     });
     this.iframe = iframe;
-    this.cancelTimer = scheduler.after(this.deps.timeoutMs ?? FRAME_TIMEOUT_MS, () => {
-      this.cancelTimer = undefined;
-      this.block("FrameLink.start");
-    });
     iframe.addEventListener("load", () => {
       this.connect(id);
     });

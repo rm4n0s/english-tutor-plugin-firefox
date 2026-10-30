@@ -1,13 +1,17 @@
 import { handoffFragment, type HandoffAction, type HandoffStore } from "../core/handoff";
 import type { Logger } from "../core/log";
 import {
+  PAGE_FRAME_CLAIM,
+  PAGE_FRAME_REGISTER,
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_OPEN_TUTOR,
   messageType,
   parseConfigRequest,
+  parseFrameIdRequest,
   parseOpenTutorRequest,
 } from "../core/page-mode/messages";
+import type { FrameClaims } from "../core/page-mode/frame-claims";
 import type { Commands } from "../platform/commands";
 import type { Lifecycle } from "../platform/lifecycle";
 import type { Notifier } from "../platform/notifications";
@@ -84,6 +88,8 @@ export interface BackgroundDeps {
   options: OptionsOpener;
   /** Page mode: registration, the per-site list and the content script's questions. */
   pageMode: PageModeBackend;
+  /** Which frame belongs to which tab: a page cannot make a frame of its own (SPEC section 4.11). */
+  frameClaims: FrameClaims;
   permission: PageModePermission;
   messages: BackgroundMessages;
   log: Logger;
@@ -112,7 +118,7 @@ export function latestTutorTab(tabs: readonly TutorTabInfo[]): TutorTabInfo | un
  */
 export function startBackground(deps: BackgroundDeps): void {
   const { button, commands, menus, tabs, handoff, notifier, lifecycle, options, log } = deps;
-  const { pageMode, permission, messages } = deps;
+  const { pageMode, frameClaims, permission, messages } = deps;
 
   const report = (message: string) => (err: unknown) => {
     log.error(message, { err });
@@ -216,12 +222,28 @@ export function startBackground(deps: BackgroundDeps): void {
       if (request === undefined) return undefined;
       return pageMode.enabledOn(request.host).then((enabled) => ({ enabled }));
     }
+    if (type === PAGE_FRAME_REGISTER) {
+      // From the content script of a tab; the browser says which tab. A message without a tab
+      // (from an extension page that is not in a tab) registers nothing.
+      const request = parseFrameIdRequest(message, PAGE_FRAME_REGISTER);
+      if (request === undefined || sender.tab === undefined) return undefined;
+      return frameClaims.register(request.id, sender.tab.id).then(() => ({ ok: true }));
+    }
+    if (type === PAGE_FRAME_CLAIM) {
+      const request = parseFrameIdRequest(message, PAGE_FRAME_CLAIM);
+      if (request === undefined) return undefined;
+      return frameClaims.claim(request.id, sender.tab?.id).then((granted) => ({ granted }));
+    }
     if (type === PAGE_MODE_OPEN_TUTOR) {
       const request = parseOpenTutorRequest(message);
       if (request === undefined) return undefined;
       // A text box that was blocked from showing its panel: the text goes to a new tutor tab,
       // right after the tab it came from, through the hand-off of SPEC section 4.1.
-      return sendToTutor("check", request.text, sender.tab).then(() => ({ ok: true }));
+      const place =
+        sender.tab === undefined
+          ? undefined
+          : { windowId: sender.tab.windowId, index: sender.tab.index };
+      return sendToTutor("check", request.text, place).then(() => ({ ok: true }));
     }
     return undefined;
   });
@@ -253,4 +275,5 @@ export function startBackground(deps: BackgroundDeps): void {
 
   // Hand-off entries nobody took are deleted when the background script next runs.
   handoff.sweep().catch(report("could not delete old hand-off entries"));
+  frameClaims.sweep().catch(report("could not delete old page-mode frame entries"));
 }

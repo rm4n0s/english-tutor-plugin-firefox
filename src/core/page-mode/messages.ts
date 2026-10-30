@@ -1,3 +1,5 @@
+import { FRAME_ID_PATTERN } from "./protocol";
+
 /**
  * The `runtime` messages of page mode (SPEC section 4.11) between the content script, the options
  * page and the background script. Plain data, no `browser.*`. Page scripts cannot send or receive
@@ -15,6 +17,11 @@ export const PAGE_MODE_OFF = "page-mode-off";
 /** The background script tells the open pages that a setting changed: ask again. */
 export const SETTINGS_CHANGED = "settings-changed";
 
+/** The content script tells the background script the id of the frame it is about to make. */
+export const PAGE_FRAME_REGISTER = "page-frame-register";
+/** A page-mode frame asks the background script whether it is the one that was registered. */
+export const PAGE_FRAME_CLAIM = "page-frame-claim";
+
 /** The most text a hand-off from a text box carries: 10,000 words of 20 characters at most. */
 export const MAX_HANDOFF_CHARS = 200_000;
 
@@ -27,6 +34,11 @@ export interface ConfigRequest {
 export interface OpenTutorRequest {
   type: typeof PAGE_MODE_OPEN_TUTOR;
   text: string;
+}
+
+export interface FrameIdRequest {
+  type: typeof PAGE_FRAME_REGISTER | typeof PAGE_FRAME_CLAIM;
+  id: string;
 }
 
 /** The type of a message, or undefined when it is not an object with a string `type`. */
@@ -50,6 +62,17 @@ export function parseOpenTutorRequest(message: unknown): OpenTutorRequest | unde
     return undefined;
   }
   return { type: PAGE_MODE_OPEN_TUTOR, text };
+}
+
+/** A register or claim message with a well-formed frame id, or undefined. */
+export function parseFrameIdRequest(
+  message: unknown,
+  type: FrameIdRequest["type"],
+): FrameIdRequest | undefined {
+  if (messageType(message) !== type) return undefined;
+  const id = (message as { id?: unknown }).id;
+  if (typeof id !== "string" || !FRAME_ID_PATTERN.test(id)) return undefined;
+  return { type, id };
 }
 
 /** The messages the background script sends to the open pages. */

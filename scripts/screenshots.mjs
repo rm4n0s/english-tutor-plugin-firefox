@@ -1617,7 +1617,7 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-13-page-mode",
     async run(ctx) {
-      // The page's policy is `frame-src 'none'`: the frame cannot load, so after 5 seconds the badge
+      // The page's policy is `sandbox`: the frame's script cannot run, so after 5 seconds the badge
       // shows `!`, and its click offers only Open in English Tutor.
       ctx.llm.setReplies(CHECK_REPLY);
       await ctx.configureFakeLLM({ name: "Fake LLM" });
@@ -1797,6 +1797,56 @@ const SCENARIOS = {
       await ctx.configureFakeLLM({ name: "Fake LLM" });
       await ctx.turnOnPageMode();
       await ctx.openPageModePage("strict-csp.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+    },
+  },
+  "page-made-frame": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // A web page can make an iframe of page-ui.html itself (the address is the extension's own,
+      // and the page may even know it), choosing the fragment and the id of its port. The frame
+      // must not start: it asks the background script, which never registered that id (SPEC
+      // section 4.11), so the page cannot use the user's LLM.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      const outcome = await ctx.driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         const [uuid, text] = [arguments[0], arguments[1]];
+         const hex = (n) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+         const id = hex(8) + "-" + hex(4) + "-4" + hex(3) + "-8" + hex(3) + "-" + hex(12);
+         const iframe = document.createElement("iframe");
+         const seen = { loaded: false, answered: [] };
+         iframe.addEventListener("load", () => {
+           seen.loaded = true;
+           const channel = new MessageChannel();
+           channel.port1.onmessage = (event) => seen.answered.push(JSON.stringify(event.data));
+           iframe.contentWindow.postMessage(
+             { type: "english-tutor-page-ui", id },
+             "moz-extension://" + uuid,
+             [channel.port2],
+           );
+           channel.port1.postMessage({
+             type: "focus", box: 1, source: "session:page", revision: 0, text,
+           });
+         });
+         iframe.src = "moz-extension://" + uuid + "/page-ui.html#" + id;
+         document.body.append(iframe);
+         setTimeout(() => done(seen), 4000);`,
+        EXTENSION_UUID,
+        PAGE_MODE_TEXT,
+      );
+      if (!outcome.loaded)
+        throw new Error("the page's own frame did not even load: nothing was tested");
+      if (outcome.answered.length !== 0) {
+        throw new Error(`the page's own frame answered: ${outcome.answered.join(" ")}`);
+      }
+      if (ctx.llmRequests() !== 0)
+        throw new Error("a page used the user's LLM through its own frame");
+      // The page's own frame did not disturb the real one: the text box is still checked.
       await ctx.focusBox();
       await ctx.waitForBadge("grammar");
     },
