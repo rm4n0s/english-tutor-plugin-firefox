@@ -75,7 +75,8 @@ export function formatCount(n: number): string {
   return rounded(n / 1_000_000, "M");
 }
 
-function formatTotals(totals: TokenTotals): string {
+/** `812 in / 164 out`, with `~` before each number of an estimate. */
+export function formatTotals(totals: TokenTotals): string {
   const mark = totals.estimated ? "~" : "";
   return `${mark}${formatCount(totals.inputTokens)} in / ${mark}${formatCount(totals.outputTokens)} out`;
 }

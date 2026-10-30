@@ -491,3 +491,51 @@ describe("ExplanationController: with the real explainer", () => {
     expect(view.events.at(-1)).toBe("cancelled");
   });
 });
+
+describe("ExplanationController: regenerate(issueId) for the row menu", () => {
+  it("selects an issue that is not selected and makes one request that skips the cache", () => {
+    const { state, view, runner, controller, check } = setupManual();
+    check();
+    controller.regenerate(3);
+    expect(state.selectedId).toBe(3);
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.request).toMatchObject({
+      key: `${String(state.checkId)}:3`,
+      regenerate: true,
+    });
+    expect(view.events).toEqual(["loading:Collocation"]);
+  });
+
+  it("asks again for the selected issue without selecting anything", async () => {
+    const { state, runner, controller, check } = setupManual();
+    check();
+    state.select(2);
+    runner.calls[0]?.done.resolve(READY("first"));
+    await tick();
+    controller.regenerate(2);
+    expect(runner.calls).toHaveLength(2);
+    expect(runner.calls[1]?.request).toMatchObject({ regenerate: true });
+    expect(runner.calls[0]?.options.signal?.aborted).toBe(true);
+  });
+
+  it("a plain selection afterwards uses the cache again", () => {
+    const { state, runner, controller, check } = setupManual();
+    check();
+    controller.regenerate(3);
+    state.select(4);
+    expect(runner.calls[1]?.request.regenerate).toBe(false);
+  });
+
+  it.each([
+    { name: "an issue that does not exist", id: 99 },
+    { name: "an issue of a hidden category", id: 3 },
+  ])("does nothing for $name", ({ id }) => {
+    const { state, view, runner, controller, check } = setupManual();
+    check();
+    state.setHidden("vocabulary", true);
+    controller.regenerate(id);
+    expect(runner.calls).toEqual([]);
+    expect(view.events).toEqual([]);
+    expect(state.selectedId).toBeNull();
+  });
+});

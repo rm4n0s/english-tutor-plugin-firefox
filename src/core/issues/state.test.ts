@@ -457,4 +457,53 @@ describe("IssueState", () => {
     state.bumpRevision();
     expect(changes).toEqual(["revision"]);
   });
+
+  describe("removeIssue (Not an error)", () => {
+    function checked() {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 1);
+      return state;
+    }
+
+    it("removes one issue at once and keeps the others, the result and the revision", () => {
+      const state = checked();
+      const revision = state.revision;
+      const changes = recorded(state);
+      expect(state.removeIssue(2)).toBe(true);
+      expect(state.issues.map((i) => i.id)).toEqual([1, 3, 4, 5]);
+      expect(changes).toEqual(["issues"]);
+      expect(state.revision).toBe(revision);
+      expect(state.checked).toBe(true);
+      expect(state.outcome).toBe("finished");
+      expect(state.unplaced).toBe(1);
+    });
+
+    it("deselects the removed issue, and only then", () => {
+      const state = checked();
+      state.select(3);
+      const changes = recorded(state);
+      state.removeIssue(1);
+      expect(state.selectedId).toBe(3);
+      expect(changes).toEqual(["issues"]);
+      changes.length = 0;
+      state.removeIssue(3);
+      expect(state.selectedId).toBeNull();
+      expect(changes).toEqual(["issues", "selection"]);
+    });
+
+    it("says no and tells nobody for an id that is not there", () => {
+      const state = checked();
+      const changes = recorded(state);
+      expect(state.removeIssue(99)).toBe(false);
+      expect(changes).toEqual([]);
+    });
+
+    it("removes an issue of a hidden category too", () => {
+      const state = checked();
+      state.setHidden("vocabulary", true);
+      expect(state.removeIssue(3)).toBe(true);
+      expect(state.issues.map((i) => i.id)).toEqual([1, 2, 4, 5]);
+    });
+  });
 });

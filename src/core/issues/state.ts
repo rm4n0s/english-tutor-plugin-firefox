@@ -315,6 +315,21 @@ export class IssueState {
   }
 
   /**
+   * Removes one issue at once (Not an error, SPEC section 5.7). The selection goes with it if it
+   * was the selected one. Returns whether there was such an issue. Unlike an edit, it does not
+   * change the revision, the check result or the status.
+   */
+  removeIssue(id: number): boolean {
+    if (!this.current.some((issue) => issue.id === id)) return false;
+    this.current = this.current.filter((issue) => issue.id !== id);
+    if (this.selection === id) {
+      this.selection = null;
+      this.emit("issues", "selection");
+    } else this.emit("issues");
+    return true;
+  }
+
+  /**
    * Replaces the issues with a merged list (step 10) and keeps the selection if that issue is
    * still there.
    */

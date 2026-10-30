@@ -34,6 +34,14 @@ export {
   type TextIssue,
 } from "./state";
 export { checkStatusText, issuesEmptyText, issuesHeaderText, wordCountText } from "./status";
-export { formatCount, TokenTally, tokenStatusText, type TokenTotals } from "./tally";
+export { formatCount, formatTotals, TokenTally, tokenStatusText, type TokenTotals } from "./tally";
 export { adjacentIssueId, issueAt, type Direction, type Navigable } from "./navigation";
 export { TrackedText } from "./tracked-text";
+export {
+  headerLineText,
+  IssueCounts,
+  NOT_COUNTED_TEXT,
+  SelectedIssueHeader,
+  type CountSource,
+  type HeaderLineView,
+} from "./counts";

@@ -83,6 +83,8 @@ export class ExplanationController {
   private idle = true;
   private current: TextIssue | undefined;
   private checkId: number;
+  /** The issue whose selection is a regenerate request, while `regenerate` selects it. */
+  private regenerating: number | undefined;
 
   constructor(deps: ExplanationControllerDeps) {
     this.deps = deps;
@@ -114,9 +116,27 @@ export class ExplanationController {
     this.deps.view.showCancelled();
   }
 
-  /** Asks again, skipping the cache (Regenerate, from the ready and cancelled states). */
-  regenerate(): void {
-    if (this.current !== undefined) this.start(this.current, true);
+  /**
+   * Asks again, skipping the cache (Regenerate, from the ready and cancelled states). With an
+   * issue id (the row menu's **Regenerate explanation**) it regenerates that issue's explanation:
+   * the issue is selected first, and only one request is made.
+   */
+  regenerate(issueId?: number): void {
+    if (issueId === undefined) {
+      if (this.current !== undefined) this.start(this.current, true);
+      return;
+    }
+    const { state } = this.deps;
+    const issue = state.visibleIssues.find((i) => i.id === issueId);
+    if (issue === undefined) return;
+    if (state.selectedId === issue.id) {
+      this.start(issue, true);
+      return;
+    }
+    // Selecting starts the request through `onSelection`, which skips the cache for this issue.
+    this.regenerating = issue.id;
+    state.select(issue.id);
+    this.regenerating = undefined;
   }
 
   /** Asks again after a failure. */
@@ -159,7 +179,7 @@ export class ExplanationController {
   private onSelection(): void {
     const issue = this.deps.state.selected;
     if (issue === undefined) this.goIdle();
-    else this.start(issue, false);
+    else this.start(issue, issue.id === this.regenerating);
   }
 
   private start(issue: TextIssue, regenerate: boolean): void {
