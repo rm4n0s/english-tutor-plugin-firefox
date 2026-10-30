@@ -9,7 +9,11 @@ export interface WebMenuItem {
   contexts: readonly ("selection" | "action")[];
   /** Makes this entry part of a submenu. The parent is listed before it. */
   parentId?: string;
-  visible?: boolean;
+  /**
+   * Limits the entry to pages whose address matches one of these patterns (not the extension's
+   * own pages, which have their own menus).
+   */
+  documentUrlPatterns?: readonly string[];
 }
 
 /** An entry was chosen. */
@@ -19,14 +23,6 @@ export interface WebMenuClick {
   selectionText: string | undefined;
   /** The tab the menu was used in, where there is one. */
   tab: { tabId: number; windowId: number; index: number } | undefined;
-}
-
-/** A menu is about to show. */
-export interface WebMenuShown {
-  contexts: readonly string[];
-  selectionText: string | undefined;
-  /** `tab` for the extension's own pages in a tab. */
-  viewType: string | undefined;
 }
 
 /**
@@ -41,13 +37,8 @@ export interface BackgroundMenus {
    * left alone. Fails with `ContextMenuFailed`.
    */
   install(items: readonly WebMenuItem[]): Promise<void>;
-  /** Fails with `ContextMenuFailed`. */
-  update(id: string, changes: { visible?: boolean }): Promise<void>;
-  /** Redraws the menu that is open, after `update` calls made in an `onShown` listener. */
-  refresh(): Promise<void>;
-  /** Register the listeners synchronously at the top level of the background script. */
+  /** Register the listener synchronously at the top level of the background script. */
   onClicked(listener: (click: WebMenuClick) => void): void;
-  onShown(listener: (shown: WebMenuShown) => void): void;
 }
 
 function failure(err: unknown, where: string): AppError {
@@ -87,7 +78,9 @@ export class BrowserBackgroundMenus implements BackgroundMenus {
             title: item.title,
             contexts: [...item.contexts],
             ...(item.parentId === undefined ? {} : { parentId: item.parentId }),
-            visible: item.visible ?? true,
+            ...(item.documentUrlPatterns === undefined
+              ? {}
+              : { documentUrlPatterns: [...item.documentUrlPatterns] }),
           },
           () => {
             // Firefox sets `lastError` to null, not undefined, when there is no problem.
@@ -105,22 +98,6 @@ export class BrowserBackgroundMenus implements BackgroundMenus {
     });
   }
 
-  async update(id: string, changes: { visible?: boolean }): Promise<void> {
-    try {
-      await this.api.menus.update(id, { ...changes });
-    } catch (err) {
-      throw failure(err, "BrowserBackgroundMenus.update");
-    }
-  }
-
-  async refresh(): Promise<void> {
-    try {
-      await this.api.menus.refresh();
-    } catch (err) {
-      throw failure(err, "BrowserBackgroundMenus.refresh");
-    }
-  }
-
   onClicked(listener: (click: WebMenuClick) => void): void {
     this.api.menus.onClicked.addListener((info, tab) => {
       const placed =
@@ -131,17 +108,6 @@ export class BrowserBackgroundMenus implements BackgroundMenus {
         id: String(info.menuItemId),
         selectionText: info.selectionText,
         tab: placed,
-      });
-    });
-  }
-
-  onShown(listener: (shown: WebMenuShown) => void): void {
-    this.api.menus.onShown.addListener((info) => {
-      const extra = info as { selectionText?: string; viewType?: string };
-      listener({
-        contexts: info.contexts,
-        selectionText: extra.selectionText,
-        viewType: extra.viewType,
       });
     });
   }

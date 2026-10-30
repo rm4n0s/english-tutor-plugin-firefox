@@ -225,9 +225,14 @@ export class ExplanationPanel implements ExplanationView {
     this.mode = "ready";
     this.text = markdown;
     this.render();
+    // Following the end is for a text that is still arriving. A finished text, whether the
+    // stream just ended or it came from the cache, is read from its first heading, unless the
+    // user scrolled up from the end while it streamed: then their place stays.
+    const reading = !this.following;
     // Drawn again from the final text: the thinking filter can hide only a closing tag's text
     // once the whole reply is known (SPEC section 6.2).
     this.drawText();
+    if (!reading) this.body.scrollTop = 0;
   }
 
   showFailed(message: string): void {

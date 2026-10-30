@@ -20,6 +20,31 @@ export const OK_REPLY = {
 };
 
 /**
+ * Test pages the harness opens in normal tabs (`GET /pages/<name>`), served from the same fixed
+ * address as the LLM so that they are web pages like any other. `selection.html` has text to
+ * select for the web page menu (SPEC section 4.1).
+ */
+export const PAGES = {
+  "selection.html": `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>A test article</title>
+    <style>
+      body { font: 18px/1.6 sans-serif; max-width: 40em; margin: 3em auto; color: #1d2024; background: #fff; }
+    </style>
+  </head>
+  <body>
+    <h1>A test article</h1>
+    <p id="selected">Yesterday I seen my friend at the market. He go to school every day, and he make a photo of everything.</p>
+    <p>My sentence sounds odd: <span id="phrase">make a photo</span> of everything. Which words are better?</p>
+    <p>This page only holds some text to select.</p>
+  </body>
+</html>
+`,
+};
+
+/**
  * A reply is `{ content, usage?, status?, delayMs?, wordDelayMs?, stallAfterWords? }`. A streamed
  * reply sends one word at a time, `wordDelayMs` apart; with `stallAfterWords` it sends that many
  * words and then holds the connection open until the client goes away, so that a screenshot can
@@ -78,6 +103,13 @@ export class FakeLLMServer {
     return `http://127.0.0.1:${address.port}/v1`;
   }
 
+  /** The address of a test page (`PAGES`). */
+  pageUrl(name) {
+    const address = this.#server.address();
+    if (address === null || typeof address === "string") throw new Error("server is not listening");
+    return `http://127.0.0.1:${address.port}/pages/${name}`;
+  }
+
   async stop() {
     this.#server.closeAllConnections();
     await new Promise((resolve) => this.#server.close(resolve));
@@ -98,6 +130,12 @@ export class FakeLLMServer {
     if (req.method === "GET" && url.pathname === "/v1/models") {
       res.writeHead(200, { ...cors, "content-type": "application/json" });
       res.end(JSON.stringify({ object: "list", data: [{ id: "fake-model", object: "model" }] }));
+      return;
+    }
+    const page = url.pathname.startsWith("/pages/") ? PAGES[url.pathname.slice(7)] : undefined;
+    if (req.method === "GET" && page !== undefined) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(page);
       return;
     }
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {

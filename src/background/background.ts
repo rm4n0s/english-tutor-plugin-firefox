@@ -1,5 +1,3 @@
-import { countWords } from "../core/analysis/text";
-import { MAX_ALTERNATIVES_WORDS } from "../core/analysis/alternatives";
 import { handoffFragment, type HandoffAction, type HandoffStore } from "../core/handoff";
 import type { Logger } from "../core/log";
 import type { Commands } from "../platform/commands";
@@ -8,12 +6,7 @@ import type { Notifier } from "../platform/notifications";
 import type { OptionsOpener } from "../platform/options-page";
 import type { ToolbarButton } from "../platform/toolbar-button";
 import type { TabPlace, TutorTabInfo, TutorTabs } from "../platform/tutor-tabs";
-import type {
-  BackgroundMenus,
-  WebMenuClick,
-  WebMenuItem,
-  WebMenuShown,
-} from "../platform/web-menus";
+import type { BackgroundMenus, WebMenuClick, WebMenuItem } from "../platform/web-menus";
 
 export const TUTOR_PAGE = "tutor.html";
 /** The command of the manifest that brings the tutor page to the front. */
@@ -27,20 +20,33 @@ export const MENU_IDS = {
   preferences: "english-tutor-action-preferences",
 } as const;
 
+/**
+ * The web page entries are limited to web pages, so they do not show in the extension's own pages
+ * (the tutor page has its own menu, SPEC section 4.3) or in the browser's.
+ */
+export const WEB_PAGE_PATTERNS = ["http://*/*", "https://*/*", "file:///*"] as const;
+
 /** The entries of the web page menu (a submenu) and of the toolbar button's menu (SPEC section 4.1). */
 export const MENU_ITEMS: readonly WebMenuItem[] = [
-  { id: MENU_IDS.webParent, title: "English Tutor", contexts: ["selection"] },
+  {
+    id: MENU_IDS.webParent,
+    title: "English Tutor",
+    contexts: ["selection"],
+    documentUrlPatterns: WEB_PAGE_PATTERNS,
+  },
   {
     id: MENU_IDS.webCheck,
     title: "Check with English Tutor",
     contexts: ["selection"],
     parentId: MENU_IDS.webParent,
+    documentUrlPatterns: WEB_PAGE_PATTERNS,
   },
   {
     id: MENU_IDS.webAlternatives,
     title: "Alternatives with English Tutor",
     contexts: ["selection"],
     parentId: MENU_IDS.webParent,
+    documentUrlPatterns: WEB_PAGE_PATTERNS,
   },
   { id: MENU_IDS.newTab, title: "New tutor tab", contexts: ["action"] },
   { id: MENU_IDS.preferences, title: "Preferences", contexts: ["action"] },
@@ -143,20 +149,6 @@ export function startBackground(deps: BackgroundDeps): void {
       options.open().catch(report("could not open the options page"));
     }
   });
-  // Alternatives are offered for at most 600 words. The submenu is left out of the extension's own
-  // pages (the tutor page has its own menu, SPEC section 4.3).
-  menus.onShown((shown: WebMenuShown) => {
-    if (!shown.contexts.includes("selection")) return;
-    const words = countWords(shown.selectionText ?? "");
-    const own = shown.viewType === "tab";
-    Promise.all([
-      menus.update(MENU_IDS.webParent, { visible: !own }),
-      menus.update(MENU_IDS.webAlternatives, { visible: words <= MAX_ALTERNATIVES_WORDS }),
-    ])
-      .then(() => menus.refresh())
-      .catch(report("could not change the web page menu"));
-  });
-
   // A click on the notification of a finished check: its tab and window come to the front.
   notifier.onClicked((id) => {
     const match = CHECK_NOTIFICATION.exec(id);

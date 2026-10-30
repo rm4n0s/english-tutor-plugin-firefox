@@ -416,6 +416,37 @@ describe("following the end", () => {
     expect(body().scrollTop).toBe(body().scrollHeight);
   });
 
+  it("shows a finished explanation from its top when the view followed the end of the stream", () => {
+    panel.showLoading(TARGET);
+    useGeometry();
+    panel.appendText("first lines");
+    panel.appendText(" and more text");
+    scheduler.advance(RENDER_INTERVAL_MS);
+    panel.appendText(" and even more");
+    scheduler.advance(RENDER_INTERVAL_MS);
+    expect(body().scrollTop).toBe(body().scrollHeight);
+    panel.showReady("first lines and more text and even more, and the last words");
+    expect(body().scrollTop).toBe(0);
+  });
+
+  it("keeps the user's place when the stream ends after they scrolled up", () => {
+    panel.showLoading(TARGET);
+    useGeometry();
+    panel.appendText("first lines of the text");
+    panel.appendText(" more");
+    scheduler.advance(RENDER_INTERVAL_MS);
+    userScrollsTo(30);
+    panel.showReady("first lines of the text more and the end of it");
+    expect(body().scrollTop).toBe(30);
+  });
+
+  it("shows an explanation that arrives finished (not streamed) from its top", () => {
+    panel.showLoading(TARGET);
+    useGeometry();
+    panel.showReady("A long explanation that overflows the panel and was never streamed");
+    expect(body().scrollTop).toBe(0);
+  });
+
   it("shows a cached explanation from its top, not its end", () => {
     panel.showLoading(TARGET);
     useGeometry();

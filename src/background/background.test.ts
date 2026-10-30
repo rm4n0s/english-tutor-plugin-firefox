@@ -62,7 +62,6 @@ describe("registering the listeners", () => {
     first.button.click();
     first.commands.press(OPEN_TUTOR_COMMAND);
     first.lifecycle.install();
-    first.menus.show({ selectionText: "a b" });
     first.menus.choose(MENU_IDS.preferences);
     first.notifier.click("check-1");
     first.lifecycle.updateAvailable();
@@ -220,63 +219,19 @@ describe("menus", () => {
 });
 
 describe("the web page menu", () => {
-  const words = (n: number) => Array.from({ length: n }, () => "word").join(" ");
-
-  it.each([
-    { selection: undefined, alternatives: true },
-    { selection: words(1), alternatives: true },
-    { selection: words(600), alternatives: true },
-    { selection: words(601), alternatives: false },
-    { selection: `${words(300)}\n\n${words(301)}`, alternatives: false },
-  ])(
-    "offers Alternatives for a selection of $selection.length characters: $alternatives",
-    async ({ selection, alternatives }) => {
-      const s = setup();
-      s.lifecycle.install();
-      await settle();
-      s.menus.show({ selectionText: selection });
-      await settle();
-      expect(s.menus.isVisible(MENU_IDS.webAlternatives)).toBe(alternatives);
-      expect(s.menus.isVisible(MENU_IDS.webCheck)).toBe(true);
-      expect(s.menus.isVisible(MENU_IDS.webParent)).toBe(true);
-      expect(s.menus.refreshes).toBe(1);
-    },
-  );
-
-  it("shows Alternatives again after a long selection when the next selection is short", async () => {
-    const s = setup();
-    s.lifecycle.install();
-    await settle();
-    s.menus.show({ selectionText: words(700) });
-    await settle();
-    s.menus.show({ selectionText: words(5) });
-    await settle();
-    expect(s.menus.isVisible(MENU_IDS.webAlternatives)).toBe(true);
-  });
-
-  it("leaves the submenu out of the extension's own pages, which have their own menus", async () => {
-    const s = setup();
-    s.lifecycle.install();
-    await settle();
-    s.menus.show({ selectionText: "a b c", viewType: "tab" });
-    await settle();
-    expect(s.menus.isVisible(MENU_IDS.webParent)).toBe(false);
-  });
-
-  it("does nothing for a menu without a selection", async () => {
-    const s = setup();
-    s.lifecycle.install();
-    await settle();
-    s.menus.show({ contexts: ["page"], selectionText: undefined });
-    await settle();
-    expect(s.menus.refreshes).toBe(0);
-  });
-
-  it("logs a failure to change the entries", async () => {
-    const s = setup();
-    s.menus.show({ selectionText: "a" });
-    await settle();
-    expect(messages(s.logged)).toEqual(["could not change the web page menu"]);
+  it("is limited to web pages, so that it does not show in the tutor page's own menu", () => {
+    const selection = MENU_ITEMS.filter((item) => item.contexts.includes("selection"));
+    expect(selection).toHaveLength(3);
+    for (const item of selection) {
+      expect(item.documentUrlPatterns).toEqual(["http://*/*", "https://*/*", "file:///*"]);
+      expect(item.documentUrlPatterns?.some((p) => p.startsWith("moz-extension"))).toBe(false);
+    }
+    // The button's entries have no page.
+    expect(
+      MENU_ITEMS.filter((item) => item.contexts.includes("action")).map(
+        (item) => item.documentUrlPatterns,
+      ),
+    ).toEqual([undefined, undefined]);
   });
 
   describe.each([
@@ -305,6 +260,15 @@ describe("the web page menu", () => {
       await settle();
       expect(s.tabs.opened).toEqual([]);
       expect(s.session.values.size).toBe(0);
+    });
+
+    it("hands over a long selection too: the menu cannot know its length, and the tutor page says so for Alternatives", async () => {
+      const s = setup();
+      const text = Array.from({ length: 700 }, () => "word").join(" ");
+      s.menus.choose(entry, { selectionText: text });
+      await settle();
+      expect(s.tabs.opened).toHaveLength(1);
+      expect([...s.session.values.values()]).toEqual([{ text, action, at: NOW }]);
     });
 
     it("opens the tab where the browser decides when the page's tab is unknown", async () => {

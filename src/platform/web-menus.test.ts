@@ -23,14 +23,19 @@ function event() {
 
 const ITEMS: WebMenuItem[] = [
   { id: "parent", title: "P", contexts: ["selection"] },
-  { id: "child", title: "C", contexts: ["selection"], parentId: "parent", visible: false },
+  {
+    id: "child",
+    title: "C",
+    contexts: ["selection"],
+    parentId: "parent",
+    documentUrlPatterns: ["https://*/*"],
+  },
   { id: "button", title: "B", contexts: ["action"] },
 ];
 
 function menusApi(options: { lastError?: Error; throws?: Error } = {}) {
   const calls: { method: string; args: unknown[] }[] = [];
   const clicked = event();
-  const shown = event();
   const api = {
     runtime: { lastError: null as Error | null },
     menus: {
@@ -47,19 +52,10 @@ function menusApi(options: { lastError?: Error; throws?: Error } = {}) {
         // The id of an earlier run exists once; the others do not.
         return id === "parent" ? Promise.resolve() : Promise.reject(new Error("no such item"));
       },
-      update: (id: string, changes: object) => {
-        calls.push({ method: "update", args: [id, changes] });
-        return options.throws === undefined ? Promise.resolve() : Promise.reject(options.throws);
-      },
-      refresh: () => {
-        calls.push({ method: "refresh", args: [] });
-        return options.throws === undefined ? Promise.resolve() : Promise.reject(options.throws);
-      },
       onClicked: clicked.api,
-      onShown: shown.api,
     },
   };
-  return { api: api as unknown as typeof browser, calls, clicked, shown };
+  return { api: api as unknown as typeof browser, calls, clicked };
 }
 
 const caught = (promise: Promise<unknown>) =>
@@ -90,13 +86,12 @@ describe("BrowserBackgroundMenus", () => {
       title: "C",
       contexts: ["selection"],
       parentId: "parent",
-      visible: false,
+      documentUrlPatterns: ["https://*/*"],
     });
     expect(calls.find((c) => (c.args[0] as { id?: string }).id === "button")?.args[0]).toEqual({
       id: "button",
       title: "B",
       contexts: ["action"],
-      visible: true,
     });
   });
 
@@ -110,27 +105,6 @@ describe("BrowserBackgroundMenus", () => {
     expect((err as AppError).hasRoute("BrowserBackgroundMenus.install")).toBe(true);
     expect((err as AppError).tag).toBe("ContextMenuFailed");
     expect((err as AppError).message).toBe(message);
-  });
-
-  it("update and refresh pass on, and fail with ContextMenuFailed", async () => {
-    const ok = menusApi();
-    const menus = new BrowserBackgroundMenus(ok.api);
-    await menus.update("child", { visible: false });
-    await menus.refresh();
-    expect(ok.calls).toEqual([
-      { method: "update", args: ["child", { visible: false }] },
-      { method: "refresh", args: [] },
-    ]);
-    const bad = menusApi({ throws: new Error("nope") });
-    const failing = new BrowserBackgroundMenus(bad.api);
-    const updateErr = await caught(failing.update("child", { visible: true }));
-    const refreshErr = await caught(failing.refresh());
-    expect(
-      (updateErr as AppError).hasRoute("BrowserBackgroundMenus.update->ContextMenuFailed"),
-    ).toBe(true);
-    expect(
-      (refreshErr as AppError).hasRoute("BrowserBackgroundMenus.refresh->ContextMenuFailed"),
-    ).toBe(true);
   });
 
   it("reports a click with the selection and the tab's place", () => {
@@ -147,23 +121,6 @@ describe("BrowserBackgroundMenus", () => {
       { id: "child", selectionText: "Some text", tab: { tabId: 3, windowId: 8, index: 5 } },
       { id: "7", selectionText: undefined, tab: undefined },
       { id: "button", selectionText: undefined, tab: undefined },
-    ]);
-  });
-
-  it("reports a menu that is about to show", () => {
-    const { api, shown } = menusApi();
-    const heard: unknown[] = [];
-    new BrowserBackgroundMenus(api).onShown((s) => heard.push(s));
-    shown.fire({
-      contexts: ["selection", "page"],
-      selectionText: "x y",
-      viewType: "tab",
-      menuIds: [],
-    });
-    shown.fire({ contexts: ["page"], menuIds: [] });
-    expect(heard).toEqual([
-      { contexts: ["selection", "page"], selectionText: "x y", viewType: "tab" },
-      { contexts: ["page"], selectionText: undefined, viewType: undefined },
     ]);
   });
 });

@@ -1228,6 +1228,272 @@ const SCENARIOS = {
       await ctx.expectTitle("Second – English Tutor");
     },
   },
+  "handoff-check": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      // The fake server holds the reply, so the new tab stays in the checking state.
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 30_000 });
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      const text = await ctx.chooseFromWebPageMenu("selected", "Check with English Tutor");
+      await ctx.waitForText("llm-select", "Fake LLM");
+      await ctx.waitForEditorValue(text);
+      await ctx.waitForVisible("loading");
+      await ctx.waitForText("status-state", "Checking...");
+      await ctx.waitForText("check", "Cancel");
+      // The entry is gone, the address is clean, and the text is a new, unsaved-free text.
+      await ctx.expectTitle("Untitled – English Tutor");
+      await ctx.expectHandoffEntries(0);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "handoff-alternatives": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      ctx.llm.setReplies(SELECTION_REPLIES);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      const text = await ctx.chooseFromWebPageMenu("phrase", "Alternatives with English Tutor");
+      await ctx.waitForEditorValue(text);
+      await ctx.expectDataState("alternatives", "ready");
+      await ctx.expectText("alt-selected", "make a photo");
+      await ctx.expectAlternativeRows(ALTERNATIVES);
+      // All of the text is selected, and no check was made.
+      const selection = await ctx.editorSelection();
+      if (selection.start !== 0 || selection.end !== text.length) {
+        throw new Error(`the selection is ${JSON.stringify(selection)}, not all of "${text}"`);
+      }
+      await ctx.expectText("status-state", "Ready");
+      await ctx.expectHandoffEntries(0);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "handoff-expired": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      // An address whose entry is gone, as after a browser restart.
+      await ctx.open("tutor.html#handoff=0a1b2c3d-0000-4000-8000-0123456789ab");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForVisible("banner");
+      await ctx.expectText("banner", "no longer available");
+      await ctx.waitForEditorValue("");
+      await ctx.expectCleanAddress();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "focus-latest-tutor": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      // No screenshot: the state is the browser's own (which tab is selected). The toolbar button
+      // is clicked from the browser's chrome, as a user would.
+      // Three tabs: tutor A, tutor B, and the options page C, which is the one in front.
+      await ctx.open("tutor.html");
+      await ctx.openAlongside("tutor.html");
+      await ctx.openAlongside("options.html");
+      const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+      // A was in front last of the two tutor tabs: the button brings A to the front.
+      await ctx.selectTab(1);
+      await pause();
+      await ctx.selectTab(0);
+      await pause();
+      await ctx.selectTab(2);
+      await pause();
+      await ctx.clickToolbarButton();
+      await ctx.expectSelectedTab(0, 3);
+
+      // Now B was in front last.
+      await ctx.selectTab(0);
+      await pause();
+      await ctx.selectTab(1);
+      await pause();
+      await ctx.selectTab(2);
+      await pause();
+      await ctx.clickToolbarButton();
+      await ctx.expectSelectedTab(1, 3);
+
+      // No tutor tab open: the button opens one.
+      await ctx.closeTab(1);
+      await ctx.closeTab(0);
+      await ctx.expectTabCount(1);
+      await ctx.clickToolbarButton();
+      await ctx.expectTabCount(2);
+      await ctx.expectSelectedUrl("tutor.html");
+    },
+  },
+  "notify-background-check": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      // No screenshot: a notification is the system's, not the page's. The scenario reads the
+      // notifications the extension has made from `browser.notifications.getAll()`, called in an
+      // extension page of another tab (the harness's only way to see them in a headless browser).
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 1500 });
+      await openTutorWithText(ctx);
+      const tutor = await ctx.driver.getWindowHandle();
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "Checking...");
+      // Another tab comes to the front while the check runs: the tutor tab is hidden when it ends.
+      await ctx.openAlongside("options.html");
+      const shown = await ctx.waitForNotifications(1);
+      const [[id, options]] = Object.entries(shown);
+      if (!/^check-\d+$/.test(id)) throw new Error(`the notification has the id ${id}`);
+      if (options.title !== "Check finished" || options.message !== "5 issues") {
+        throw new Error(`the notification says ${JSON.stringify(options)}`);
+      }
+
+      // A check the user watches (the tab in front) makes none.
+      await ctx.clearNotifications();
+      await ctx.driver.switchTo().window(tutor);
+      await ctx.chrome("gBrowser.selectedTab = gBrowser.tabs[0];");
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.fill("editor", `${SAMPLE_TEXT} `);
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.openAlongside("options.html");
+      await ctx.expectNoNotifications();
+      // The tutor tab has unsaved text and is hidden: the browser would ask before closing it, and
+      // would not quit. Leaving through `open` closes it as the harness does everywhere.
+      await ctx.open("options.html");
+    },
+  },
+  fonts: {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      ctx.llm.setReplies(SAMPLE_REPLIES);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      // Generic families, so that the shot does not depend on which fonts a machine has.
+      await ctx.fill("font-editor-family", "serif", Key.TAB);
+      await ctx.fill("font-editor-size", "16", Key.TAB);
+      await ctx.fill("font-button-family", "monospace", Key.TAB);
+      await ctx.fill("font-button-size", "12", Key.TAB);
+      await ctx.fill("font-results-family", "serif", Key.TAB);
+      await ctx.fill("font-results-size", "13", Key.TAB);
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "Fake LLM");
+      await ctx.fill("editor", SAMPLE_TEXT);
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.click("issues", ".issue-row:nth-child(2)");
+      await ctx.waitForExplanation("Subject-verb agreement");
+      // The three fonts are really in use (the computed values, not just the settings).
+      await ctx.expectFont("editor", { family: "serif", px: 16 * (96 / 72) });
+      await ctx.expectFont("check", { family: "monospace", px: 12 * (96 / 72) });
+      await ctx.expectFont("explanation", { family: "serif", px: 13 * (96 / 72) });
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // A change on the options page reaches the open tutor tab at once.
+      const tutor = await ctx.driver.getWindowHandle();
+      await ctx.openAlongside("options.html");
+      await ctx.driver.wait(until.elementLocated(By.id("font-editor-size")), PAGE_TIMEOUT_MS);
+      await ctx.fill("font-editor-size", "20", Key.TAB);
+      await ctx.driver.switchTo().window(tutor);
+      await ctx.driver.wait(
+        async () =>
+          Math.abs(
+            (await ctx.driver.executeScript(
+              'return parseFloat(getComputedStyle(document.getElementById("editor")).fontSize)',
+            )) -
+              20 * (96 / 72),
+          ) < 0.05,
+        PAGE_TIMEOUT_MS,
+        "the open tutor tab did not follow the font size",
+      );
+    },
+  },
+  "pane-sizes": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      // No screenshot: the positions of the two dividers are dragged, and come back after a reload.
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      const before = await ctx.paneSizes();
+      if (Math.abs(before.editor - 65) > 1 || Math.abs(before.issues - 40) > 1) {
+        throw new Error(`the panes start at ${JSON.stringify(before)}, not 65 / 40`);
+      }
+      await ctx.dragDivider("divider-main", -160, 0);
+      await ctx.dragDivider("divider-side", 0, 120);
+      const moved = await ctx.paneSizes();
+      if (!(moved.editor < before.editor - 8) || !(moved.issues > before.issues + 8)) {
+        throw new Error(`the dividers did not move: ${JSON.stringify(moved)}`);
+      }
+      // Reloading gives the same sizes back, from `pane_sizes` in the store.
+      await ctx.reload();
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.driver.wait(
+        async () => {
+          const now = await ctx.paneSizes();
+          return (
+            Math.abs(now.editor - moved.editor) < 0.5 && Math.abs(now.issues - moved.issues) < 0.5
+          );
+        },
+        PAGE_TIMEOUT_MS,
+        `the sizes did not come back: ${JSON.stringify(await ctx.paneSizes())}, expected ${JSON.stringify(moved)}`,
+      );
+    },
+  },
+  narrow: {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      await narrowChecked(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot({ width: NARROW_WIDTH });
+    },
+  },
+  "narrow-dark": {
+    theme: "dark",
+    dir: "step-12-browser",
+    async run(ctx) {
+      await narrowChecked(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot({ width: NARROW_WIDTH });
+    },
+  },
+  "explain-scrolled-top": {
+    theme: "light",
+    dir: "step-12-browser",
+    async run(ctx) {
+      await checkedSample(ctx, (request) =>
+        isExplainRequest(request) ? longExplanationFor(request) : CHECK_REPLY,
+      );
+      // The long explanation streams in (the view follows its end while it grows).
+      await ctx.click("issues", ".issue-row:nth-child(2)");
+      await ctx.expectSelectedRow(2, "He go");
+      await ctx.waitForExplanation("Subject-verb agreement");
+      await ctx.expectOverflows("explain-body");
+      // The stream ended while the view followed its end: the finished text starts at its top.
+      await ctx.waitForScrollTop("explain-body", 0);
+      // Another issue, and then this one again: its explanation is cached, and opens at its top.
+      await ctx.click("issues", ".issue-row:nth-child(1)");
+      await ctx.waitForExplanation("Verb form");
+      await ctx.click("issues", ".issue-row:nth-child(2)");
+      await ctx.expectSelectedRow(2, "He go");
+      await ctx.waitForExplanation("Subject-verb agreement");
+      await ctx.expectOverflows("explain-body");
+      await ctx.waitForScrollTop("explain-body", 0);
+      await ctx.expectText("explain-body", "What is wrong");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
   "restored-after-reload": {
     theme: "light",
     dir: "step-11-saving",
@@ -1705,6 +1971,48 @@ function explanationFor(request) {
   };
 }
 
+/** The width of the narrow window scenarios, below the 800 px where the layout changes. */
+const NARROW_WIDTH = 720;
+
+/**
+ * The sample text, checked and its second issue explained, in a window `NARROW_WIDTH` wide
+ * (SPEC section 4.2: below 800 px the right column moves under the editor).
+ */
+async function narrowChecked(ctx) {
+  await explainSelected(ctx, EXPLAIN_REPLY);
+  await ctx.waitForExplanation("Subject-verb agreement");
+  await ctx.resize(NARROW_WIDTH);
+  await ctx.expectNarrowLayout();
+}
+
+/** A long explanation for "He go": many sections, so that it overflows the panel. */
+function longExplanationFor(request) {
+  const user = request.body.messages.find((m) => m.role === "user")?.content ?? "";
+  const faulty = /=====BEGIN FAULTY WORDS \S+=====\n([\s\S]*?)\n=====END/.exec(user)?.[1];
+  if (faulty !== "He go") return explanationFor(request);
+  const sections = [
+    "What is wrong",
+    "Why",
+    "Better ways",
+    "More examples",
+    "Common mistakes",
+    "Remember",
+  ];
+  const lines = [];
+  for (const heading of sections) {
+    lines.push(`### ${heading}`);
+    for (const line of [
+      "In the present simple, a verb after *he*, *she* or *it* takes **-s**: *He go* should be *He goes*.",
+      "- **He goes** to school every day.",
+      "- **She works** in a shop and **it rains** a lot here.",
+      "",
+    ]) {
+      lines.push(line);
+    }
+  }
+  return { content: lines.join("\n"), usage: { prompt_tokens: 300, completion_tokens: 260 } };
+}
+
 /** Answers checks with the sample's issues and explanations with the canned explanation. */
 const SAMPLE_REPLIES = (request) =>
   isExplainRequest(request) ? explanationFor(request) : CHECK_REPLY;
@@ -1829,16 +2137,18 @@ async function measureViewport(driver) {
   return size;
 }
 
-/** Sizes the window so that the page area, which a screenshot captures, is WIDTH x HEIGHT. */
-async function sizeViewport(driver) {
+/** Sizes the window so that the page area, which a screenshot captures, is `width` x HEIGHT. */
+async function sizeViewport(driver, width = WIDTH) {
   const window = driver.manage().window();
-  await window.setRect({ width: WIDTH, height: HEIGHT });
+  await window.setRect({ width, height: HEIGHT });
   const [innerWidth, innerHeight] = await measureViewport(driver);
   const rect = await window.getRect();
   await window.setRect({
-    width: rect.width + (WIDTH - innerWidth),
+    width: rect.width + (width - innerWidth),
     height: rect.height + (HEIGHT - innerHeight),
   });
+  const [finalWidth] = await measureViewport(driver);
+  if (finalWidth !== width) throw new Error(`the page area is ${finalWidth} px wide, not ${width}`);
 }
 
 function pngSize(png) {
@@ -1904,6 +2214,10 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       await waitForPage(driver, page);
       await sizeViewport(driver);
     },
+    /** Makes the page area `width` px wide (and HEIGHT high), as a narrow window does. */
+    async resize(width) {
+      await sizeViewport(driver, width);
+    },
     /** Fails unless the page really uses the scenario's colour scheme. */
     async expectTheme() {
       const dark = await driver.executeScript(
@@ -1915,11 +2229,12 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         );
       }
     },
-    async screenshot() {
+    /** Takes the screenshot of the page area, which is 1280x800 unless `resize` made it narrower. */
+    async screenshot({ width: expectedWidth = WIDTH } = {}) {
       const png = Buffer.from(await driver.takeScreenshot(), "base64");
       const { width, height } = pngSize(png);
-      if (width !== WIDTH || height !== HEIGHT) {
-        throw new Error(`the screenshot is ${width}x${height}, not ${WIDTH}x${HEIGHT}`);
+      if (width !== expectedWidth || height !== HEIGHT) {
+        throw new Error(`the screenshot is ${width}x${height}, not ${expectedWidth}x${HEIGHT}`);
       }
       const relative = `${scenario.dir}/${name}.png`;
       const committed = `${root}docs/screenshots/${relative}`;
@@ -2407,6 +2722,316 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         await driver.setContext(firefox.Context.CONTENT);
       }
     },
+    /**
+     * Opens a test page of the fake server (`PAGES`) in a new tab and leaves the other tabs open,
+     * as the browser would for a link. The tab is opened by the browser's own code, as `open` does.
+     */
+    async openWebPage(name) {
+      const before = await driver.getAllWindowHandles();
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        await driver.executeScript(
+          `const tab = gBrowser.addTab(arguments[0], {
+             triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+           });
+           gBrowser.selectedTab = tab;`,
+          llm.pageUrl(name),
+        );
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+      await ctx.switchToNewTab(before);
+      await driver.wait(
+        async () =>
+          (await driver.getCurrentUrl()).endsWith(`/pages/${name}`) &&
+          (await driver.executeScript("return document.readyState")) === "complete",
+        PAGE_TIMEOUT_MS,
+        `${name} never finished loading`,
+      );
+      await sizeViewport(driver);
+    },
+    /** Switches to the tab that is not in `before` (a list of window handles) and returns its handle. */
+    async switchToNewTab(before) {
+      let handle;
+      await driver.wait(
+        async () => {
+          const after = await driver.getAllWindowHandles();
+          handle = after.find((h) => !before.includes(h));
+          return handle !== undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        "no new tab opened",
+      );
+      await driver.switchTo().window(handle);
+      return handle;
+    },
+    /**
+     * Selects all the text of the element on a web page the way a user does with the mouse, and
+     * returns a point inside it for a right-click that keeps the selection.
+     */
+    async selectElementText(id) {
+      return driver.executeScript(
+        `const element = document.getElementById(arguments[0]);
+         const range = document.createRange();
+         range.selectNodeContents(element);
+         const selection = window.getSelection();
+         selection.removeAllRanges();
+         selection.addRange(range);
+         const rect = range.getClientRects()[0];
+         return { x: Math.round(rect.left + 60), y: Math.round(rect.top + rect.height / 2) };`,
+        id,
+      );
+    },
+    /**
+     * Chooses an entry inside a submenu of the open context menu (the extension's "English
+     * Tutor" submenu of a web page), as a click on it does.
+     */
+    async chooseSubmenuItem(submenuLabel, label) {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        const chosen = await driver.executeScript(
+          `const popup = document.getElementById("contentAreaContextMenu");
+           const menu = [...popup.children].find((m) => m.localName === "menu" && !m.hidden && m.label === arguments[0]);
+           if (menu === undefined) return "no submenu " + arguments[0];
+           const inner = menu.menupopup ?? menu.querySelector("menupopup");
+           const item = [...inner.children].find((m) => m.localName === "menuitem" && !m.hidden && m.label === arguments[1]);
+           if (item === undefined || item.disabled) return "no enabled entry " + arguments[1];
+           item.doCommand();
+           popup.hidePopup();
+           return "ok";`,
+          submenuLabel,
+          label,
+        );
+        if (chosen !== "ok") throw new Error(chosen);
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    /**
+     * The whole path of the web page menu (SPEC section 4.1): opens the test page in a tab,
+     * selects the text of the element, right-clicks it, checks that the browser's own menu has
+     * the "English Tutor" submenu with both entries, chooses `entry` from it, and follows the new
+     * tutor tab that opens. Returns the selected text.
+     */
+    async chooseFromWebPageMenu(elementId, entry) {
+      await ctx.openWebPage("selection.html");
+      const text = await driver.executeScript(
+        "return document.getElementById(arguments[0]).textContent",
+        elementId,
+      );
+      const menu = await ctx.rightClickAt(await ctx.selectElementText(elementId));
+      const sub = menu.filter((e) => e.submenu === "English Tutor").map((e) => e.label);
+      const parent = menu.find((e) => e.label === "English Tutor");
+      if (parent === undefined || !parent.isMenu) {
+        throw new Error(`the web page menu has no English Tutor submenu: ${JSON.stringify(menu)}`);
+      }
+      if (
+        JSON.stringify(sub) !==
+        JSON.stringify(["Check with English Tutor", "Alternatives with English Tutor"])
+      ) {
+        throw new Error(`the submenu holds ${JSON.stringify(sub)}`);
+      }
+      const before = await driver.getAllWindowHandles();
+      await ctx.chooseSubmenuItem("English Tutor", entry);
+      await ctx.switchToNewTab(before);
+      await waitForPage(driver, "tutor.html");
+      await sizeViewport(driver);
+      await ctx.expectCleanAddress();
+      return text;
+    },
+    /** Fails unless the page's address has no fragment (the hand-off key went from it). */
+    async expectCleanAddress() {
+      await driver.wait(
+        async () => !(await driver.getCurrentUrl()).includes("#"),
+        PAGE_TIMEOUT_MS,
+        `the address still has a fragment: ${await driver.getCurrentUrl()}`,
+      );
+    },
+    /** Fails unless `storage.session` holds exactly `count` hand-off entries (read from the page). */
+    async expectHandoffEntries(count) {
+      const keys = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.storage.session.get(null).then((all) => done(Object.keys(all).filter((k) => k.startsWith("handoff:"))));`,
+      );
+      if (keys.length !== count)
+        throw new Error(`${keys.length} hand-off entries, expected ${count}`);
+    },
+    /** Runs code in the browser's own window, for the harness's tab and button helpers. */
+    async chrome(script, ...args) {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        return await driver.executeAsyncScript(
+          `const done = arguments[arguments.length - 1];
+           const args = [...arguments].slice(0, -1);
+           (async () => { ${script} })().then(done, (e) => done({ error: String(e) }));`,
+          ...args,
+        );
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    /** Brings the n-th tab (0-based) to the front, as a click on it does. */
+    async selectTab(index) {
+      await ctx.chrome("gBrowser.selectedTab = gBrowser.tabs[arguments[0]];", index);
+    },
+    async closeTab(index) {
+      await ctx.chrome("gBrowser.removeTab(gBrowser.tabs[arguments[0]]);", index);
+    },
+    /**
+     * Presses the extension's toolbar button. A headless browser keeps the button in the
+     * extensions panel, which is not built, so the harness puts it on the toolbar first (as a
+     * user can) and clicks that.
+     */
+    async clickToolbarButton() {
+      const result = await ctx.chrome(
+        `const id = "english-tutor_rm4n0s_dev-browser-action";
+         CustomizableUI.addWidgetToArea(id, CustomizableUI.AREA_NAVBAR);
+         await new Promise((r) => setTimeout(r, 200));
+         const node = CustomizableUI.getWidget(id).forWindow(window).node;
+         const button = node.querySelector("toolbarbutton");
+         if (!node.isConnected || !button) return "the toolbar button is not there";
+         button.click();
+         return "ok";`,
+      );
+      if (result !== "ok") throw new Error(String(result?.error ?? result));
+    },
+    /** Fails unless tab `index` is in front and there are `count` tabs (waits for the browser to settle). */
+    async expectSelectedTab(index, count) {
+      let state;
+      await driver
+        .wait(async () => {
+          state = await ctx.chrome(
+            "return { index: gBrowser.tabs.indexOf(gBrowser.selectedTab), count: gBrowser.tabs.length };",
+          );
+          return state.index === index && state.count === count;
+        }, PAGE_TIMEOUT_MS)
+        .catch(() => {
+          throw new Error(
+            `tab ${state?.index} of ${state?.count} is in front, expected tab ${index} of ${count}`,
+          );
+        });
+      // And it stays so: the button did not open another tab a moment later.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      state = await ctx.chrome(
+        "return { index: gBrowser.tabs.indexOf(gBrowser.selectedTab), count: gBrowser.tabs.length };",
+      );
+      if (state.index !== index || state.count !== count) {
+        throw new Error(`later: tab ${state.index} of ${state.count} is in front`);
+      }
+    },
+    async expectTabCount(count) {
+      await driver.wait(
+        async () => (await ctx.chrome("return gBrowser.tabs.length;")) === count,
+        PAGE_TIMEOUT_MS,
+        `there are never ${count} tab(s)`,
+      );
+    },
+    async expectSelectedUrl(page) {
+      await driver.wait(
+        async () =>
+          String(await ctx.chrome("return gBrowser.selectedBrowser.currentURI.spec;")).endsWith(
+            `/${page}`,
+          ),
+        PAGE_TIMEOUT_MS,
+        `the tab in front never showed ${page}`,
+      );
+    },
+    /**
+     * Waits until the extension has exactly `count` notifications showing and returns them (id to
+     * options). Runs in the current page, which must be an extension page.
+     */
+    async waitForNotifications(count) {
+      let last;
+      await driver
+        .wait(async () => {
+          last = await driver.executeAsyncScript(
+            `const done = arguments[arguments.length - 1];
+             browser.notifications.getAll().then(done);`,
+          );
+          return Object.keys(last).length === count;
+        }, PAGE_TIMEOUT_MS)
+        .catch(() => {
+          throw new Error(`the extension has these notifications: ${JSON.stringify(last)}`);
+        });
+      return last;
+    },
+    async clearNotifications() {
+      await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.notifications.getAll().then((all) =>
+           Promise.all(Object.keys(all).map((id) => browser.notifications.clear(id)))).then(() => done());`,
+      );
+    },
+    /** Fails if the extension has a notification, after giving a late one time to arrive. */
+    async expectNoNotifications() {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const all = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.notifications.getAll().then(done);`,
+      );
+      if (Object.keys(all).length > 0) {
+        throw new Error(`a notification was made: ${JSON.stringify(all)}`);
+      }
+    },
+    /** Fails unless the element's computed font is `family` (its first name) at `px` pixels. */
+    async expectFont(id, { family, px }) {
+      const found = await driver.executeScript(
+        `const style = getComputedStyle(document.getElementById(arguments[0]));
+         return { family: style.fontFamily, size: parseFloat(style.fontSize) };`,
+        id,
+      );
+      if (!found.family.startsWith(family) || Math.abs(found.size - px) > 0.05) {
+        throw new Error(
+          `#${id} uses ${found.family} at ${found.size}px, expected ${family} at ${px}px`,
+        );
+      }
+    },
+    /** Fails unless the element's content is taller than its box, so that it scrolls. */
+    async expectOverflows(id) {
+      const overflows = await driver.executeScript(
+        "const e = document.getElementById(arguments[0]); return e.scrollHeight > e.clientHeight + 20;",
+        id,
+      );
+      if (!overflows)
+        throw new Error(`#${id} does not overflow, so the scroll position proves nothing`);
+    },
+    /**
+     * Fails unless the page is in its narrow layout: the right column is under the editor, and
+     * both fill the width.
+     */
+    async expectNarrowLayout() {
+      const found = await driver.executeScript(
+        `const rect = (id) => document.getElementById(id).getBoundingClientRect();
+         const editor = rect("editor-box");
+         const side = rect("side");
+         return { editorBottom: editor.bottom, sideTop: side.top, editorWidth: editor.width,
+                  sideWidth: side.width, page: window.innerWidth };`,
+      );
+      if (found.sideTop < found.editorBottom - 1 || found.sideWidth < found.page - 2) {
+        throw new Error(`the layout is not narrow: ${JSON.stringify(found)}`);
+      }
+    },
+    /** The two pane sizes as percentages: the editor's share of the width, the issues' share of the column. */
+    async paneSizes() {
+      return driver.executeScript(
+        `const rect = (id) => document.getElementById(id).getBoundingClientRect();
+         const panes = rect("panes");
+         const side = rect("side");
+         return { editor: rect("editor-box").width / panes.width * 100,
+                  issues: rect("issues-pane").height / side.height * 100 };`,
+      );
+    },
+    /** Drags a divider by (dx, dy) pixels with the mouse. */
+    async dragDivider(id, dx, dy) {
+      const handle = await driver.findElement(By.id(id));
+      await driver
+        .actions({ async: true })
+        .move({ origin: handle })
+        .press()
+        .move({ origin: handle, x: dx, y: dy })
+        .release()
+        .perform();
+    },
     /** Closes the open context menu without choosing anything. */
     async closeMenu() {
       await driver.setContext(firefox.Context.CHROME);
@@ -2487,6 +3112,10 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
     expectEditorMenu(menu, { checkDisabled = false, absent = false } = {}) {
       const labels = menu.map((e) => e.label);
       const describe = () => JSON.stringify(menu);
+      // The web page menu of the background script is for web pages, not for the tutor page.
+      if (labels.includes("English Tutor")) {
+        throw new Error(`the web page submenu shows in the editor menu: ${describe()}`);
+      }
       if (absent) {
         if (labels.includes("Alternative") || labels.includes("Check")) {
           throw new Error(`the menu shows our entries: ${describe()}`);

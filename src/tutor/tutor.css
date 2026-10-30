@@ -153,14 +153,16 @@ label.inline {
   opacity: 0.6;
 }
 
-/* Below 800 px the right column moves under the editor. */
+/* Below 800 px the right column moves under the editor (SPEC section 4.2). The editor keeps 40% of
+   the height, the results the rest; the vertical divider has no place and goes. */
 @media (max-width: 799px) {
   .panes {
     flex-direction: column;
   }
 
   .editor-pane {
-    flex: 1 1 50%;
+    flex: 0 0 40%;
+    min-height: 0;
   }
 
   #divider-main {
@@ -168,7 +170,8 @@ label.inline {
   }
 
   .side {
-    flex: 1 1 50%;
+    flex: 1 1 0;
+    min-height: 0;
     border-top: 1px solid var(--border);
   }
 }

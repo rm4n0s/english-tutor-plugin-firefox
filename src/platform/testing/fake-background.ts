@@ -4,7 +4,7 @@ import type { Notifier } from "../notifications";
 import type { OptionsOpener } from "../options-page";
 import type { ToolbarButton } from "../toolbar-button";
 import type { TabPlace, TutorPingResponder, TutorTabInfo, TutorTabs } from "../tutor-tabs";
-import type { BackgroundMenus, WebMenuClick, WebMenuItem, WebMenuShown } from "../web-menus";
+import type { BackgroundMenus, WebMenuClick, WebMenuItem } from "../web-menus";
 
 export class FakeButton implements ToolbarButton {
   private handler: (() => void) | undefined;
@@ -155,32 +155,15 @@ export class FakePingResponder implements TutorPingResponder {
 /** The background script's menus in memory, with the user's actions. */
 export class FakeBackgroundMenus implements BackgroundMenus {
   /** The entries made by `install`, by id. */
-  readonly entries = new Map<string, { item: WebMenuItem; visible: boolean }>();
+  readonly entries = new Map<string, WebMenuItem>();
   installs = 0;
-  refreshes = 0;
   failWith: Error | undefined;
   private clicked: ((click: WebMenuClick) => void) | undefined;
-  private shownListener: ((shown: WebMenuShown) => void) | undefined;
 
   install(items: readonly WebMenuItem[]): Promise<void> {
     if (this.failWith !== undefined) return Promise.reject(this.failWith);
     this.installs++;
-    for (const item of items) {
-      this.entries.set(item.id, { item, visible: item.visible ?? true });
-    }
-    return Promise.resolve();
-  }
-
-  update(id: string, changes: { visible?: boolean }): Promise<void> {
-    if (this.failWith !== undefined) return Promise.reject(this.failWith);
-    const entry = this.entries.get(id);
-    if (entry === undefined) return Promise.reject(new Error(`No menu item with id ${id}`));
-    if (changes.visible !== undefined) entry.visible = changes.visible;
-    return Promise.resolve();
-  }
-
-  refresh(): Promise<void> {
-    this.refreshes++;
+    for (const item of items) this.entries.set(item.id, item);
     return Promise.resolve();
   }
 
@@ -188,27 +171,8 @@ export class FakeBackgroundMenus implements BackgroundMenus {
     this.clicked = listener;
   }
 
-  onShown(listener: (shown: WebMenuShown) => void): void {
-    this.shownListener = listener;
-  }
-
-  /** The user opens a menu. */
-  show(shown: Partial<WebMenuShown> = {}): void {
-    this.shownListener?.({
-      contexts: ["selection"],
-      selectionText: undefined,
-      viewType: undefined,
-      ...shown,
-    });
-  }
-
   /** The user chooses an entry. */
   choose(id: string, click: Partial<Omit<WebMenuClick, "id">> = {}): void {
     this.clicked?.({ id, selectionText: undefined, tab: undefined, ...click });
-  }
-
-  /** Whether the entry is made and visible. */
-  isVisible(id: string): boolean {
-    return this.entries.get(id)?.visible === true;
   }
 }
