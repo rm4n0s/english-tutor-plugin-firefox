@@ -16,9 +16,10 @@ English Tutor for Firefox is a browser extension that does in Firefox what the d
 - Test all: `npm test` (vitest, no browser needed)
 - Test one file: `npx vitest run src/core/analysis/locate.test.ts -t "name"`
 - Type check: `npm run typecheck` (`tsc --noEmit`)
-- Lint: `npm run lint` (eslint) and `npm run lint:ext` (`web-ext lint -s dist`, after a build)
+- Lint: `npm run lint` (eslint) and `npm run lint:ext` (`web-ext lint -s dist --self-hosted`, after a build; `--self-hosted` because the manifest has `update_url`, which lint refuses for add-ons hosted by Mozilla)
 - Format: `npm run format` (prettier --write); `npm run format:check` to verify
 - Package: `npm run package` (`web-ext build -s dist`, into `web-ext-artifacts/`)
+- Release (maintainer only, needs the AMO key in the environment or `.env`; never run by an agent): `npm run sign` (signs as unlisted on AMO) and `npm run release-files` (writes `release-out/<version>/` and prints the commands). See `docs/RELEASING.md`. Never open, read or print `.env`
 - Screenshots: `npm run screenshots` (all scenarios) or `npm run screenshots -- <name>` (one). It drives the built extension in headless Firefox against a fake LLM server (fixed port 47811, or `FAKE_LLM_PORT`). It writes a PNG into `docs/screenshots/` only if it does not exist yet, or with `-- --update <name>` (repeatable) or `-- --update-all`; every other PNG goes to the gitignored `screenshots-out/`, so a plain run never changes a committed screenshot
 
 ## Definition of done

@@ -5,3 +5,4 @@ web-ext-artifacts/
 .env
 *.log
 screenshots-out/
+release-out/

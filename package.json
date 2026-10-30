@@ -1,6 +1,6 @@
 {
   "name": "english-tutor-firefox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "English Tutor for Firefox",
   "license": "MIT",
@@ -14,11 +14,13 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:ext": "web-ext lint -s dist",
+    "lint:ext": "web-ext lint -s dist --self-hosted",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "package": "web-ext build -s dist --overwrite-dest",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "sign": "node scripts/sign.mjs",
+    "release-files": "node scripts/release-files.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

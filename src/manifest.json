@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "English Tutor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Write English, let an LLM underline grammar, vocabulary and syntax errors, and learn from each one.",
   "browser_specific_settings": {
     "gecko": {
       "id": "english-tutor@rm4n0s.dev",
+      "update_url": "https://raw.githubusercontent.com/rm4n0s/english-tutor-releases/main/updates.json",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": ["websiteContent"]

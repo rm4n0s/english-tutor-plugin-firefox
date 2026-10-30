@@ -22,7 +22,15 @@ It is the Firefox version of the desktop app [English Tutor](https://github.com/
 
 ## Install
 
-English Tutor needs Firefox 140 or newer. Firefox release builds only install extensions that Mozilla has signed, and this one is not signed yet, so it is loaded from its source for now.
+English Tutor needs Firefox 140 or newer. It is not listed on addons.mozilla.org. Each release is signed by Mozilla and published in the public releases repository, [rm4n0s/english-tutor-releases](https://github.com/rm4n0s/english-tutor-releases) (this code repository is private).
+
+1. Download `english-tutor-<version>.xpi` from the [latest release](https://github.com/rm4n0s/english-tutor-releases/releases/latest).
+2. Open it in Firefox (**File, Open File...**), or drag it onto a Firefox window, and click **Add**. A welcome page opens.
+3. Updates arrive by themselves.
+
+The full guide, with the first steps for each provider, page mode, privacy and how to uninstall, is [docs/INSTALL.md](docs/INSTALL.md). It is also the README of the releases repository.
+
+### From source (for developers)
 
 You need [Node.js](https://nodejs.org) 24 or newer.
 
@@ -42,7 +50,9 @@ To use it in your own Firefox instead:
 2. Open `about:debugging#/runtime/this-firefox`, press **Load Temporary Add-on...** and choose `dist/manifest.json`.
 3. The extension stays until you close Firefox. It does not survive a restart.
 
-`npm run package` makes a zip in `web-ext-artifacts/`. Firefox Developer Edition and Nightly can install an unsigned zip when `xpinstall.signatures.required` is set to `false` in `about:config`.
+`npm run package` makes an unsigned zip in `web-ext-artifacts/`. Firefox Developer Edition, Nightly and ESR can install an unsigned zip when `xpinstall.signatures.required` is set to `false` in `about:config`. Release Firefox cannot: use a signed release.
+
+Releases are made by the maintainer: see [docs/RELEASING.md](docs/RELEASING.md).
 
 The extension does not work in private windows.
 
@@ -141,11 +151,13 @@ npm run typecheck       # tsc --noEmit
 npm run lint            # eslint
 npm run lint:ext        # web-ext lint (after a build)
 npm run format:check    # prettier (npm run format fixes)
-npm run package         # zip into web-ext-artifacts/
+npm run package         # unsigned zip into web-ext-artifacts/
+npm run sign            # sign as unlisted on AMO (needs the AMO key, docs/RELEASING.md)
+npm run release-files   # the files and commands of a release, in release-out/
 npm run screenshots     # drive the built extension in headless Firefox against a fake LLM
 ```
 
-- The design is in [docs/SPEC.md](docs/SPEC.md); the plan and its rules are in [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md), and what has been built is logged in [docs/IMPLEMENTED.md](docs/IMPLEMENTED.md).
+- The design is in [docs/SPEC.md](docs/SPEC.md); the plan and its rules are in [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md), and what has been built is logged in [docs/IMPLEMENTED.md](docs/IMPLEMENTED.md). How a release is made is in [docs/RELEASING.md](docs/RELEASING.md).
 - `npm run screenshots` uses port 47811 on 127.0.0.1 (set `FAKE_LLM_PORT` to change it) and writes a PNG into `docs/screenshots/` only when it does not exist yet. `npm run screenshots -- --update <name>` overwrites one on purpose. Other pictures go to `screenshots-out/`.
 - Tests never call a real LLM. They use the fake `fetch` in `src/core/llm/testing`.
 
