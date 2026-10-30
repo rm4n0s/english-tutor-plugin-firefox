@@ -13,6 +13,9 @@
   --divider: #d5d9e0;
   --divider-hover: #9aa4b2;
   --focus: #1a73e8;
+  --danger: #b3261e;
+  --ok: #1b7a3d;
+  --warn: #8a5a00;
 
   /* Error categories, Okabe-Ito (SPEC section 4.3). */
   --grammar: #d55e00;
@@ -33,6 +36,9 @@
     --divider: #353a42;
     --divider-hover: #6b7380;
     --focus: #6ab0ff;
+    --danger: #ff8a80;
+    --ok: #6fd18f;
+    --warn: #f0c36b;
 
     --grammar: #ff8a4c;
     --vocabulary: #56b4e9;
@@ -42,6 +48,10 @@
 
 * {
   box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 html,
