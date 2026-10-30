@@ -1,0 +1,6 @@
+/* The page-mode frame (SPEC section 4.11). The popover and the dialog of steps 14 and 15 go here. */
+html,
+body {
+  margin: 0;
+  background: transparent;
+}
