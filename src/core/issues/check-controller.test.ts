@@ -378,6 +378,30 @@ describe("CheckController", () => {
       expect(state.issues.length).toBe(stale ? 0 : 1);
     });
 
+    it("tells a selection check that an edit touched the range from other stale results", async () => {
+      const { state, runner, controller } = setupController();
+      const touched = controller.check({ manual: true, selection: { start: 10, end: 15 } });
+      state.applyEdit({ start: 12, removed: 0, added: 1 });
+      runner.finish(0, resultOf([placed(10, 14)]));
+      expect(await touched).toEqual({ kind: "stale", reason: "selection-edited" });
+
+      // Too many edits to rebase across: stale, but not because of the selection.
+      const { clock } = newState();
+      const small = new IssueState(clock, { editLogLimit: 1 });
+      const other = new ManualRunner();
+      const c2 = new CheckController({
+        state: small,
+        runner: other,
+        getModel: () => MODEL,
+        getText: () => FIVE_TEXT,
+      });
+      const overflowed = c2.check({ manual: true, selection: { start: 10, end: 15 } });
+      small.applyEdit({ start: 40, removed: 0, added: 1 });
+      small.applyEdit({ start: 40, removed: 0, added: 1 });
+      other.finish(0, resultOf([placed(10, 14)]));
+      expect(await overflowed).toEqual({ kind: "stale" });
+    });
+
     it("an auto-check result carries the flag on its issues", async () => {
       const { state, runner, controller } = setupController();
       const running = controller.check({ manual: false });
@@ -385,6 +409,55 @@ describe("CheckController", () => {
       await running;
       expect(state.issues.every((i) => !i.manual)).toBe(true);
     });
+  });
+});
+
+describe("CheckController: checking a selection", () => {
+  it("sends only the selection and gives the runner its place in the whole text", async () => {
+    const calls: { text: string; options: CheckOptions | undefined }[] = [];
+    const { state } = newState();
+    const controller = new CheckController({
+      state,
+      runner: {
+        check: (_model, text, options) => {
+          calls.push({ text, options });
+          return Promise.resolve(resultOf([placed(10, 14)]));
+        },
+      },
+      getModel: () => MODEL,
+      getText: () => FIVE_TEXT,
+    });
+    const outcome = await controller.check({ manual: true, selection: { start: 10, end: 19 } });
+    expect(calls.map((c) => c.text)).toEqual(["cccc dddd"]);
+    expect(calls[0]?.options?.selection).toEqual({ offset: 10, fullText: FIVE_TEXT });
+    expect(outcome.kind).toBe("finished");
+  });
+
+  it.each([
+    { name: "only white space", text: "ab \n\t cd", start: 2, end: 6 },
+    { name: "an empty range", text: "abcd", start: 2, end: 2 },
+    { name: "a range past the end", text: "abcd", start: 2, end: 9 },
+    { name: "a negative start", text: "abcd", start: -1, end: 2 },
+  ])("fails with SelectionEmpty for $name, and sends nothing", async ({ text, start, end }) => {
+    const { state } = newState();
+    let calls = 0;
+    const controller = new CheckController({
+      state,
+      runner: {
+        check: () => {
+          calls++;
+          return Promise.resolve(resultOf([]));
+        },
+      },
+      getModel: () => MODEL,
+      getText: () => text,
+    });
+    const outcome = await controller.check({ manual: true, selection: { start, end } });
+    expect(outcome.kind).toBe("failed");
+    const error = (outcome as Extract<CheckOutcome, { kind: "failed" }>).error;
+    expect(error.hasRoute("CheckController.check->SelectionEmpty")).toBe(true);
+    expect(calls).toBe(0);
+    expect(state.pending).toBeNull();
   });
 });
 
@@ -431,5 +504,65 @@ describe("CheckController over the analyzer", () => {
       error.hasRoute("CheckController.check->Analyzer.check->OpenAIClient.generate->LLMCallFailed"),
     ).toBe(true);
     expect(state.outcome).toBe("failed");
+  });
+});
+
+describe("a selection check over the analyzer", () => {
+  const TEXT = "He go home. She dont know. We was late.";
+
+  function twoChecks(selectionReply: string) {
+    const { state } = newState();
+    const full = setup(reply(issuesJson("He go", "She dont", "We was")));
+    const analyzer = new Analyzer({ random: new CountingRandom() });
+    let model = full.model;
+    const controller = new CheckController({
+      state,
+      runner: analyzer,
+      getModel: () => model,
+      getText: () => TEXT,
+    });
+    const part = setup(reply(selectionReply));
+    return {
+      state,
+      controller,
+      useSelectionModel: () => {
+        model = part.model;
+      },
+      part,
+    };
+  }
+
+  it("merges: the issue inside is replaced, the others stay, and fingerprints equal a full check's", async () => {
+    const t = twoChecks(
+      JSON.stringify({ issues: [{ text: "dont know", error_type: "verb_form", message: "n" }] }),
+    );
+    await t.controller.check({ manual: true });
+    const full = [...t.state.issues];
+    expect(full.map((i) => i.snippet)).toEqual(["He go", "She dont", "We was"]);
+
+    t.useSelectionModel();
+    const start = TEXT.indexOf("She dont");
+    const outcome = await t.controller.check({
+      manual: true,
+      selection: { start, end: start + "She dont know.".length },
+    });
+    expect(outcome.kind).toBe("finished");
+    expect(t.state.issues.map((i) => i.snippet)).toEqual(["He go", "dont know", "We was"]);
+    // Outside the selection: the same issues, ids included.
+    expect(t.state.issues[0]).toBe(full[0]);
+    expect(t.state.issues[2]).toBe(full[2]);
+    // Only the selection was sent.
+    const sent = JSON.stringify(t.part.fake.requests[0]?.body);
+    expect(sent).toContain("She dont know.");
+    expect(sent).not.toContain("We was late");
+    // The fingerprint is that of the same words checked in the whole text.
+    const direct = setup(
+      reply(
+        JSON.stringify({ issues: [{ text: "dont know", error_type: "verb_form", message: "n" }] }),
+      ),
+    );
+    const whole = await new Analyzer({ random: new CountingRandom() }).check(direct.model, TEXT);
+    expect(t.state.issues[1]?.fingerprint).toBe(whole.placed[0]?.fingerprint);
+    expect(t.state.issues[1]?.start).toBe(TEXT.indexOf("dont know"));
   });
 });

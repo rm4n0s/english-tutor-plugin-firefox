@@ -1,7 +1,7 @@
 import type { CheckedIssue, Category, ErrorType, Issue } from "../analysis";
 import { CATEGORIES } from "../analysis";
 import type { Clock } from "../clock";
-import { EditLog, rebaseIssues, type Edit } from "./edits";
+import { EditLog, rebaseIssues, rebaseRangeAcross, type Edit, type Ranged } from "./edits";
 
 /**
  * An issue of the text, as the editor and the list show it. Offsets are UTF-16 offsets in the
@@ -218,24 +218,48 @@ export class IssueState {
    * offsets of `placed` point (the snippets are cut from it). `edits` are the ones made to the
    * text since then (`editsDuringCheck`): the issues are rebased across them in order, and the
    * ones an edit touched are dropped.
+   *
+   * With `selection` (the range of `text` that a selection check sent, SPEC section 5.1) the
+   * result is merged instead: the issues that overlap the selection (as it is after `edits`) are
+   * replaced by the new ones and all others stay, with their ids, so a selected issue outside the
+   * selection stays selected. The not-placed count becomes the selection's. `checkId` (the key of
+   * the cached explanations) is kept when an earlier result exists, because the issues that stay
+   * keep their ids and so their explanations; the new issues have new ids, so nothing collides.
+   * It is the check's own id only when there was no result before.
    */
   finishCheck(
     placed: readonly CheckedIssue[],
     text: string,
     unplaced: number,
     edits: readonly Edit[] = [],
+    selection?: Ranged,
   ): void {
     const manual = this.running?.manual ?? true;
-    this.resultCheckId = this.running?.id ?? this.nextCheckId++;
+    const checkId = this.running?.id ?? this.nextCheckId++;
     this.running = null;
     let issues = placed.map((p) => this.toTextIssue(p, text, manual));
     for (const edit of edits) issues = rebaseIssues(issues, edit);
-    this.current = issues;
-    this.selection = null;
+    const changes: IssueChange[] = ["pending", "issues", "selection", "outcome"];
+    if (selection === undefined) {
+      this.resultCheckId = checkId;
+      this.current = issues;
+      this.selection = null;
+    } else {
+      // An edit that touched the selection made the controller discard the result, so the range
+      // is only moved here; if it were not, nothing is replaced.
+      const range = rebaseRangeAcross(selection, edits) ?? selection;
+      if (!this.hasResult) this.resultCheckId = checkId;
+      const overlaps = (i: Ranged): boolean => i.start < range.end && i.end > range.start;
+      const kept = this.current.filter((issue) => !overlaps(issue));
+      this.current = [...kept, ...issues].sort((a, b) => a.start - b.start);
+      const stillSelected = this.selection !== null && kept.some((i) => i.id === this.selection);
+      if (stillSelected) changes.splice(changes.indexOf("selection"), 1);
+      else this.selection = null;
+    }
     this.notPlaced = unplaced;
     this.end = "finished";
     this.hasResult = true;
-    this.emit("pending", "issues", "selection", "outcome");
+    this.emit(...changes);
   }
 
   /** Ends the pending check without a result: the issues stay as they were. */
@@ -327,18 +351,6 @@ export class IssueState {
       this.emit("issues", "selection");
     } else this.emit("issues");
     return true;
-  }
-
-  /**
-   * Replaces the issues with a merged list (step 10) and keeps the selection if that issue is
-   * still there.
-   */
-  replaceIssues(issues: readonly TextIssue[]): void {
-    this.current = issues;
-    if (this.selection !== null && !this.visibleIssues.some((i) => i.id === this.selection)) {
-      this.selection = null;
-      this.emit("issues", "selection");
-    } else this.emit("issues");
   }
 
   private toTextIssue(placed: CheckedIssue, text: string, manual: boolean): TextIssue {

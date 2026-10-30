@@ -1,7 +1,8 @@
-import type { AnalysisModel, CheckOptions, CheckResult } from "../analysis";
+import { trimSpace, type AnalysisModel, type CheckOptions, type CheckResult } from "../analysis";
 import { AppError } from "../errors";
 import { isCancelled, type Usage } from "../llm";
 import type { Logger } from "../log";
+
 import { rebaseRangeAcross, type Edit, type Ranged } from "./edits";
 import type { IssueState } from "./state";
 
@@ -44,7 +45,14 @@ export type CheckOutcome =
    * the result cannot follow (too many edits, a loaded text, or an edit inside a checked
    * selection). The issues the state had stay.
    */
-  | { kind: "stale" }
+  | {
+      kind: "stale";
+      /**
+       * `selection-edited` when an edit touched the range of a selection check, so the page can
+       * say "The text changed while checking" (SPEC section 5.1). Absent otherwise.
+       */
+      reason?: "selection-edited";
+    }
   /** An auto-check was refused because a check is running. Try again after the next pause. */
   | { kind: "busy" }
   | { kind: "no-llm" };
@@ -82,8 +90,10 @@ export class CheckController {
   }
 
   /**
-   * `selection` is the range a check of a selection covers (step 10 sends only that text): an
-   * edit that touches it while the check runs discards the result.
+   * `selection` is the range a check of a selection covers (SPEC section 5.1): only that text is
+   * sent, and the result is merged into the issues (those that overlap the range are replaced).
+   * An edit that touches the range while the check runs discards the result. A range that is
+   * outside the text or only white space fails with `SelectionEmpty` before anything is sent.
    */
   async check(options: { manual: boolean; selection?: Ranged }): Promise<CheckOutcome> {
     const { state } = this.deps;
@@ -98,18 +108,44 @@ export class CheckController {
       return this.failed(err, manual);
     }
     if (model === undefined) return { kind: "no-llm" };
+    const snapshot = this.deps.getText();
+    if (
+      selection !== undefined &&
+      (selection.start < 0 ||
+        selection.start >= selection.end ||
+        selection.end > snapshot.length ||
+        trimSpace(snapshot.slice(selection.start, selection.end)) === "")
+    ) {
+      return this.failed(
+        new AppError("SelectionEmpty", "Select some text first.", {
+          start: selection.start,
+          end: selection.end,
+          text_length: snapshot.length,
+        }),
+        manual,
+      );
+    }
 
     // A manual check replaces a running one: the older check ends as `stale` without touching
     // the state, because it is no longer the pending one.
     this.cancel();
-    const text = this.deps.getText();
+    const text = snapshot;
     const controller = new AbortController();
     this.controller = controller;
     const pending = state.beginCheck(manual);
 
     let result: CheckResult;
     try {
-      result = await this.deps.runner.check(model, text, { signal: controller.signal });
+      result = await this.deps.runner.check(
+        model,
+        selection === undefined ? text : text.slice(selection.start, selection.end),
+        {
+          signal: controller.signal,
+          ...(selection === undefined
+            ? {}
+            : { selection: { offset: selection.start, fullText: text } }),
+        },
+      );
     } catch (err) {
       if (state.pending?.id !== pending.id) return { kind: "stale" };
       if (controller.signal.aborted || isCancelled(err, controller.signal)) {
@@ -130,17 +166,19 @@ export class CheckController {
     if (state.revision !== pending.revision) {
       // The text changed while the check ran: rebase the result across the edits.
       const logged = state.editsDuringCheck;
-      if (
-        logged === undefined ||
-        (selection !== undefined && rebaseRangeAcross(selection, logged) === null)
-      ) {
+      if (logged === undefined) {
         state.discardCheck();
         this.reportUsage(result.usage);
         return { kind: "stale" };
       }
+      if (selection !== undefined && rebaseRangeAcross(selection, logged) === null) {
+        state.discardCheck();
+        this.reportUsage(result.usage);
+        return { kind: "stale", reason: "selection-edited" };
+      }
       edits = logged;
     }
-    state.finishCheck(result.placed, text, result.unplaced, edits);
+    state.finishCheck(result.placed, text, result.unplaced, edits, selection);
     this.reportUsage(result.usage);
     return { kind: "finished", manual, text, result };
   }

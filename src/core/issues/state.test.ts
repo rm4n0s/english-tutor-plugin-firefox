@@ -406,17 +406,113 @@ describe("IssueState", () => {
     });
   });
 
-  describe("replaceIssues (for merging)", () => {
-    it("keeps the selection when its issue is still there and drops it otherwise", () => {
+  describe("finishCheck with a selection (the merge of SPEC section 5.1)", () => {
+    // "aaaa bbbb cccc dddd eeee": the selection 5..14 holds the 2nd and 3rd issue.
+    function merged(selection: { start: number; end: number }, found: ReturnType<typeof placed>[]) {
+      const { state } = newState();
+      const full = state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 3);
+      const before = [...state.issues];
+      const part = state.beginCheck(true);
+      state.finishCheck(found, FIVE_TEXT, 1, [], selection);
+      return { state, before, full, part };
+    }
+
+    it("replaces the issues that overlap the selection and keeps all others as they were", () => {
+      const { state, before } = merged({ start: 5, end: 14 }, [placed(6, 8, "article")]);
+      expect(state.issues.map((i) => [i.start, i.end])).toEqual([
+        [0, 4],
+        [6, 8],
+        [15, 19],
+        [20, 24],
+      ]);
+      // The kept ones are the very same issues (ids included).
+      expect(state.issues[0]).toBe(before[0]);
+      expect(state.issues[2]).toBe(before[3]);
+      expect(state.issues[3]).toBe(before[4]);
+      expect(before.map((i) => i.id)).not.toContain(state.issues[1]?.id);
+    });
+
+    it.each([
+      { name: "touching before is not overlapping", selection: { start: 4, end: 5 }, kept: 5 },
+      { name: "one unit inside the first issue", selection: { start: 3, end: 6 }, kept: 3 },
+      { name: "a selection of a gap", selection: { start: 14, end: 15 }, kept: 5 },
+      { name: "everything", selection: { start: 0, end: 24 }, kept: 0 },
+    ])("$name", ({ selection, kept }) => {
+      const { state } = merged(selection, []);
+      expect(state.issues).toHaveLength(kept);
+    });
+
+    it("sorts the new issues in among the kept ones, and sets the selection's not-placed count", () => {
+      const { state } = merged({ start: 5, end: 14 }, [placed(10, 13, "article"), placed(5, 8)]);
+      expect(state.issues.map((i) => i.start)).toEqual([0, 5, 10, 15, 20]);
+      expect(state.unplaced).toBe(1);
+      expect(state.outcome).toBe("finished");
+      expect(state.checked).toBe(true);
+    });
+
+    it("keeps the selected issue outside the selection without telling the observers", () => {
       const { state } = newState();
       state.beginCheck(true);
       state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
-      const [a, b] = state.issues;
-      state.select(b?.id ?? 0);
-      state.replaceIssues([a!, b!]);
-      expect(state.selected?.snippet).toBe("bbbb");
-      state.replaceIssues([a!]);
+      const first = state.issues[0]?.id ?? 0;
+      state.select(first);
+      state.beginCheck(true);
+      const changes = recorded(state);
+      state.finishCheck([], FIVE_TEXT, 0, [], { start: 5, end: 14 });
+      expect(state.selectedId).toBe(first);
+      expect(changes).not.toContain("selection");
+    });
+
+    it("clears the selection when the selected issue is replaced", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      state.select(state.issues[1]?.id ?? 0);
+      state.beginCheck(true);
+      const changes = recorded(state);
+      state.finishCheck([], FIVE_TEXT, 0, [], { start: 5, end: 14 });
       expect(state.selectedId).toBeNull();
+      expect(changes).toContain("selection");
+    });
+
+    it("keeps checkId of the earlier result, so the cached explanations stay valid", () => {
+      const { state, full } = merged({ start: 5, end: 14 }, [placed(6, 8, "article")]);
+      expect(state.checkId).toBe(full.id);
+    });
+
+    it("takes its own check id when there was no result before", () => {
+      const { state } = newState();
+      const part = state.beginCheck(true);
+      state.finishCheck([placed(0, 4)], FIVE_TEXT, 0, [], { start: 0, end: 4 });
+      expect(state.checkId).toBe(part.id);
+      expect(state.issues).toHaveLength(1);
+    });
+
+    it("moves the selection across the edits made during the check", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      state.beginCheck(true);
+      // "XX" typed at the start touches the first issue (it goes); the others shift by 2, and so
+      // does the selection.
+      const edit = { start: 0, removed: 0, added: 2 };
+      state.applyEdit(edit);
+      state.finishCheck([placed(5, 8, "article")], FIVE_TEXT, 0, [edit], { start: 5, end: 14 });
+      expect(state.issues.map((i) => [i.start, i.end])).toEqual([
+        [7, 10],
+        [17, 21],
+        [22, 26],
+      ]);
+    });
+
+    it("marks the new issues manual and leaves the kept ones' flag", () => {
+      const { state } = newState();
+      state.beginCheck(false);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      state.beginCheck(true);
+      state.finishCheck([placed(6, 8, "article")], FIVE_TEXT, 0, [], { start: 5, end: 14 });
+      expect(state.issues.map((i) => i.manual)).toEqual([false, true, false, false]);
     });
   });
 
