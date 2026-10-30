@@ -38,6 +38,19 @@ export interface FrameLinkHandlers {
   onBlocked(error: AppError): void;
 }
 
+/** Where the frame is shown over the page: a card at a window position, or not at all. */
+export interface FrameView {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+  /** False while the frame is laid out but not yet drawn (it is not shown until it has its size). */
+  readonly visible: boolean;
+}
+
+/** The corner radius of the card; the frame's own card has the same, so no square corner shows. */
+const CARD_RADIUS = "8px";
+
 type LinkState = "idle" | "starting" | "ready" | "blocked" | "closed";
 
 /**
@@ -60,6 +73,7 @@ export class FrameLink {
   private port: PagePort | undefined;
   private cancelTimer: (() => void) | undefined;
   private readonly queue: ContentMessage[] = [];
+  private view: FrameView | undefined;
 
   constructor(deps: FrameLinkDeps, handlers: FrameLinkHandlers) {
     this.deps = deps;
@@ -99,20 +113,56 @@ export class FrameLink {
     const iframe = doc.createElement("iframe");
     iframe.setAttribute("title", "English Tutor");
     iframe.setAttribute("aria-hidden", "true");
-    // Hidden for now: the popover and the dialog (steps 14 and 15) show it.
-    applyCss(iframe, {
-      all: "initial",
-      display: "none",
-      width: "0",
-      height: "0",
-      border: "0",
-    });
+    // Hidden until `setView` shows it (the popover now, the dialog in step 16).
     this.iframe = iframe;
+    this.applyView();
     iframe.addEventListener("load", () => {
       this.connect(id);
     });
     iframe.src = this.deps.frameUrl(id);
     parent.append(iframe);
+  }
+
+  /**
+   * Shows the frame as a card at `view`, or hides it with undefined (SPEC section 4.11). The
+   * content script alone decides where it is and how big: the frame cannot move itself, and the
+   * page cannot reach it (it lives in the closed shadow root, with every property `!important`).
+   * It is the only thing in the layer that takes the pointer.
+   */
+  setView(view: FrameView | undefined): void {
+    this.view = view;
+    this.applyView();
+  }
+
+  private applyView(): void {
+    const iframe = this.iframe;
+    if (iframe === undefined) return;
+    const view = this.view;
+    if (view === undefined) {
+      iframe.setAttribute("aria-hidden", "true");
+      applyCss(iframe, { all: "initial", display: "none", width: "0", height: "0", border: "0" });
+      return;
+    }
+    iframe.setAttribute("aria-hidden", "false");
+    iframe.setAttribute("title", "English Tutor");
+    applyCss(iframe, {
+      all: "initial",
+      display: "block",
+      position: "fixed",
+      left: `${String(view.left)}px`,
+      top: `${String(view.top)}px`,
+      width: `${String(view.width)}px`,
+      height: `${String(view.height)}px`,
+      border: "0",
+      margin: "0",
+      padding: "0",
+      "border-radius": CARD_RADIUS,
+      "box-shadow": "0 4px 18px rgba(0, 0, 0, 0.28)",
+      "pointer-events": view.visible ? "auto" : "none",
+      visibility: view.visible ? "visible" : "hidden",
+      "color-scheme": "normal",
+      overflow: "hidden",
+    });
   }
 
   /** Sends a message to the frame; it waits until the frame says it is ready. */

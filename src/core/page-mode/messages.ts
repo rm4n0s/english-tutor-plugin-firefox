@@ -23,6 +23,13 @@ export const PAGE_MODE_OFF = "page-mode-off";
 /** The background script tells the open pages that a setting changed: ask again. */
 export const SETTINGS_CHANGED = "settings-changed";
 
+/**
+ * The page-mode frame asks the background script to read or change the Not-an-error ignore set
+ * (SPEC section 5.7). The set lives in `storage.session`, which Firefox 159 does not give to an
+ * extension frame inside a web page (checked: `browser.storage.session` is undefined there).
+ */
+export const PAGE_MODE_IGNORE = "page-mode-ignore";
+
 /** The content script tells the background script the id of the frame it is about to make. */
 export const PAGE_FRAME_REGISTER = "page-frame-register";
 /** A page-mode frame asks the background script whether it is the one that was registered. */
@@ -71,6 +78,13 @@ export interface FrameIdRequest {
   id: string;
 }
 
+/** The longest source or fingerprint an ignore-set message carries (`session:<uuid>` is 44). */
+const MAX_IGNORE_PART = 300;
+
+export type IgnoreRequest =
+  | { type: typeof PAGE_MODE_IGNORE; op: "has" | "add"; source: string; fingerprint: string }
+  | { type: typeof PAGE_MODE_IGNORE; op: "move"; from: string; to: string };
+
 /** The type of a message, or undefined when it is not an object with a string `type`. */
 export function messageType(message: unknown): string | undefined {
   if (typeof message !== "object" || message === null) return undefined;
@@ -114,6 +128,33 @@ export function parseOpenTutorRequest(message: unknown): OpenTutorRequest | unde
     return undefined;
   }
   return { type: PAGE_MODE_OPEN_TUTOR, text };
+}
+
+function ignorePart(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" && value.length <= MAX_IGNORE_PART
+    ? value
+    : undefined;
+}
+
+/** An ignore-set request with well-formed parts, or undefined. */
+export function parseIgnoreRequest(message: unknown): IgnoreRequest | undefined {
+  if (messageType(message) !== PAGE_MODE_IGNORE) return undefined;
+  const { op, source, fingerprint, from, to } = message as Record<string, unknown>;
+  if (op === "has" || op === "add") {
+    const s = ignorePart(source);
+    const f = ignorePart(fingerprint);
+    return s === undefined || f === undefined
+      ? undefined
+      : { type: PAGE_MODE_IGNORE, op, source: s, fingerprint: f };
+  }
+  if (op === "move") {
+    const a = ignorePart(from);
+    const b = ignorePart(to);
+    return a === undefined || b === undefined
+      ? undefined
+      : { type: PAGE_MODE_IGNORE, op, from: a, to: b };
+  }
+  return undefined;
 }
 
 /** A register or claim message with a well-formed frame id, or undefined. */

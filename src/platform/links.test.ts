@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "../core/errors";
-import { BrowserLinkOpener } from "./links";
+import { BrowserLinkOpener, WindowLinkOpener } from "./links";
 
 interface Created {
   url?: string;
@@ -52,5 +52,29 @@ describe("BrowserLinkOpener", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).hasRoute("BrowserLinkOpener.open->LinkOpenFailed")).toBe(true);
+  });
+});
+
+describe("WindowLinkOpener", () => {
+  it("opens the address in a new tab with no opener and no referrer", async () => {
+    const calls: unknown[][] = [];
+    await new WindowLinkOpener({
+      open: (...args: unknown[]) => {
+        calls.push(args);
+        return null;
+      },
+    }).open("https://a.example/x");
+    expect(calls).toEqual([["https://a.example/x", "_blank", "noopener,noreferrer"]]);
+  });
+
+  it("fails with LinkOpenFailed when the browser refuses", async () => {
+    const opener = new WindowLinkOpener({
+      open: () => {
+        throw new TypeError("blocked");
+      },
+    });
+    const err = await opener.open("https://a.example/").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).hasRoute("WindowLinkOpener.open->LinkOpenFailed")).toBe(true);
   });
 });

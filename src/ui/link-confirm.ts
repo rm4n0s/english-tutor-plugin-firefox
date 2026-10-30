@@ -95,6 +95,11 @@ export class LinkConfirm {
     });
   }
 
+  /** Closes the box if it is open, as if the user cancelled (it stays in the page). */
+  dismiss(): void {
+    this.close(false);
+  }
+
   /** Closes the box as if the user cancelled. */
   destroy(): void {
     this.close(false);

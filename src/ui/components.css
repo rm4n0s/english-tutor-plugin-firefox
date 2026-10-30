@@ -126,6 +126,13 @@
   animation: spin 0.9s linear infinite;
 }
 
+/* A busy indicator that stands still when the user asks for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

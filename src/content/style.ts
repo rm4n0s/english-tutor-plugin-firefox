@@ -23,6 +23,21 @@ export const COLORS = {
   ink: "#ffffff",
 } as const;
 
+/**
+ * The colours of the underlines (SPEC section 4.3), for a light and a dark page: the page's own
+ * background decides which, not the browser's theme (`isDarkBackdrop` in `underlines.ts`).
+ */
+export const UNDERLINE_COLORS = {
+  light: { grammar: "#d55e00", vocabulary: "#0072b2", syntax: "#009e73" },
+  dark: { grammar: "#ff8a4c", vocabulary: "#56b4e9", syntax: "#2fd3a2" },
+} as const;
+
+/** `#rrggbb` as `rgba(r, g, b, alpha)`: the selected issue's background is 20% of its colour. */
+export function withAlpha(hex: string, alpha: number): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `rgba(${String((n >> 16) & 255)}, ${String((n >> 8) & 255)}, ${String(n & 255)}, ${String(alpha)})`;
+}
+
 export const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** An SVG element with attributes, built with `createElementNS` (no HTML is ever parsed). */

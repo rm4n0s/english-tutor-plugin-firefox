@@ -16,6 +16,7 @@ import {
   BrowserPageModePermission,
   BrowserPageTabs,
 } from "../platform/page-mode";
+import { SessionIgnoreSet } from "../platform/ignore-set";
 import { BrowserSessionStorage } from "../platform/session-storage";
 import { BrowserToolbarButton } from "../platform/toolbar-button";
 import { BrowserTutorTabs } from "../platform/tutor-tabs";
@@ -71,6 +72,7 @@ startBackground({
     log,
   }),
   frameClaims: new FrameClaims(session, new SystemClock()),
+  ignore: new SessionIgnoreSet(session),
   permission,
   messages: new BrowserBackgroundMessages(browser),
   log,

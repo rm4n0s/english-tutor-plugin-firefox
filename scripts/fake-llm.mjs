@@ -28,6 +28,25 @@ export const OK_REPLY = {
 export const PAGE_MODE_TEXT =
   "Yesterday I seen my friend at the market. He go to school every day, and he make a photo of everything.";
 
+/**
+ * A longer text for the scrolled textarea (Step 15): twelve lines, with a mistake in the fourth,
+ * the sixth and the tenth, so that a box of five lines scrolled halfway shows one of them.
+ */
+export const LONG_TEXT = [
+  "Last week my family and I went on a trip to the mountains.",
+  "We packed the car early and drove for almost four hours.",
+  "The road was long, but the views were beautiful.",
+  "My sister seen a deer near the lake, and she was very happy.",
+  "In the evening we cooked dinner together by the fire.",
+  "My father tell us old stories about his childhood.",
+  "Everyone laughed until it was very late at night.",
+  "On Sunday we walked to a small waterfall above the village.",
+  "The water was cold, so we only stayed for a few minutes.",
+  "My brother make a photo of the whole group there.",
+  "Then we ate lunch and started the long drive back home.",
+  "I hope we can visit the mountains again next summer.",
+].join("\n");
+
 /** The head and the plain style shared by the page-mode test pages: nothing varies between runs. */
 const pageHead = (title, extraCss = "") => `<!doctype html>
 <html lang="en">
@@ -144,6 +163,57 @@ export const PAGE_HEADERS = {
   "strict-csp.html": { "content-security-policy": "frame-src 'none'" },
   "blocked-frame.html": { "content-security-policy": "sandbox allow-same-origin" },
 };
+
+// The same page with no blinking caret, for the popover's screenshots (the box keeps the focus
+// while the popover is open, and a caret that blinks would make the picture differ between runs).
+PAGES["textarea-still.html"] = PAGES["textarea.html"]
+  .replace("<title>A message form</title>", "<title>A message form with a still caret</title>")
+  .replace("</style>", "textarea { caret-color: transparent; }\n    </style>");
+
+// A dark page: the underlines use their dark colours on it (SPEC section 4.11).
+PAGES["textarea-dark.html"] =
+  pageHead(
+    "A dark message form",
+    `body { background: #14161a; color: #e6e8eb; }
+      p.note { color: #9aa1ac; }
+      textarea { background: #1e2127; color: #e6e8eb; border-color: #4a505a; }`,
+  ) +
+  `  <body>
+    <h1>Write to us</h1>
+    <p class="note">A plain text box on a dark page.</p>
+    <label for="box">Your message</label>
+    <textarea id="box">${PAGE_MODE_TEXT}</textarea>
+    <p class="note" id="below">Below the text box.</p>
+  </body>
+</html>
+`;
+// A long text in a box of five lines, to scroll.
+PAGES["textarea-long.html"] =
+  pageHead("A long message", "textarea { height: 140px; caret-color: transparent; }") +
+  `  <body>
+    <h1>Write to us</h1>
+    <p class="note">A text box with more text than it shows.</p>
+    <label for="box">Your message</label>
+    <textarea id="box">${LONG_TEXT}</textarea>
+    <p class="note" id="below">Below the text box.</p>
+  </body>
+</html>
+`;
+// The text box is at the bottom of the window, so that the popover goes above the underline.
+PAGES["textarea-bottom.html"] =
+  pageHead(
+    "A message form at the bottom",
+    ".spacer { height: 470px; } textarea { caret-color: transparent; }",
+  ) +
+  `  <body>
+    <h1>Write to us</h1>
+    <p class="note">The text box is at the bottom of the window.</p>
+    <div class="spacer"></div>
+    <label for="box">Your message</label>
+    <textarea id="box">${PAGE_MODE_TEXT}</textarea>
+  </body>
+</html>
+`;
 
 PAGES["strict-csp.html"] = PAGES["textarea.html"].replace(
   "<title>A message form</title>",

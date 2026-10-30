@@ -100,4 +100,15 @@ describe("LinkConfirm", () => {
     expect(await answer).toBe(false);
     expect(host.querySelector("#link-confirm")).toBeNull();
   });
+
+  it("dismiss closes an open box as a cancel, keeps it in the page, and does nothing when closed", async () => {
+    confirm.dismiss();
+    expect(host.querySelector("#link-confirm")).not.toBeNull();
+    const answer = confirm.ask(URL_TEXT);
+    confirm.dismiss();
+    expect(confirm.visible).toBe(false);
+    expect(await answer).toBe(false);
+    expect(host.querySelector("#link-confirm")).not.toBeNull();
+    confirm.dismiss();
+  });
 });

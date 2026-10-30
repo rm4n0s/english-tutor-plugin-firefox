@@ -17,9 +17,12 @@ import { badgeViewOf } from "./badge-view";
 import { BlockedCard } from "./blocked-card";
 import { BoxState } from "./box-state";
 import { FrameLink } from "./frame-link";
+import { issueAt } from "../core/issues/navigation";
 import { OverlayHost } from "./overlay-host";
+import { PopoverController, type PopoverTarget } from "./popover";
 import { SitePrompt } from "./site-prompt";
 import { findTextBox } from "./text-box";
+import { BoxUnderlines } from "./underlines";
 
 export interface PageModeContentDeps {
   /** The page's window. */
@@ -36,7 +39,7 @@ export interface PageModeContentDeps {
   frameTimeoutMs?: number;
 }
 
-/** A text box the badge was clicked on: the seam where step 15 opens the issues dialog. */
+/** A text box the badge or the popover's All issues was clicked on: where step 16 opens the issues dialog. */
 export interface BadgeClick {
   box: BoxState;
 }
@@ -47,6 +50,7 @@ const BADGE_MARGIN = 4;
 interface Tracked {
   state: BoxState;
   badge: Badge;
+  underlines: BoxUnderlines;
 }
 
 /**
@@ -76,8 +80,10 @@ export class PageModeContent {
   private promptShown = false;
   private stopListening: (() => void) | undefined;
   private asks = 0;
-  /** Called when a badge is clicked and the frame is working: step 15 opens the dialog here. */
+  /** Called when a badge is clicked and the frame is working: step 16 opens the dialog here. */
   onBadgeClick: (click: BadgeClick) => void = () => undefined;
+  /** Called when All issues is pressed in the popover: step 16 opens the dialog here (a stub for now). */
+  onAllIssues: (click: BadgeClick) => void = () => undefined;
 
   constructor(deps: PageModeContentDeps) {
     this.deps = deps;
@@ -108,6 +114,17 @@ export class PageModeContent {
   /** Puts every badge where its box is now (a test, or a layout change the observers missed). */
   reposition(): void {
     this.active?.position();
+  }
+
+  /** The underlines of a box, if it has any (for tests). */
+  underlinesOf(box: BoxState): BoxUnderlines | undefined {
+    return this.active?.byId.get(box.id)?.underlines;
+  }
+
+  /** The issue the popover is open for, with its box, or undefined. */
+  get popover(): { box: BoxState; issue: number } | undefined {
+    const open = this.active?.popover.open;
+    return open === undefined ? undefined : { box: open.target.state, issue: open.issue };
   }
 
   /** The badge of a box, if it has one. */
@@ -234,8 +251,13 @@ export class PageModeContent {
 
   private attach(): void {
     if (this.active !== undefined) return;
-    this.active = new Active(this.deps, this.win, this.doc, (click) => {
-      this.onBadgeClick(click);
+    this.active = new Active(this.deps, this.win, this.doc, {
+      badge: (click) => {
+        this.onBadgeClick(click);
+      },
+      allIssues: (click) => {
+        this.onAllIssues(click);
+      },
     });
   }
 
@@ -267,9 +289,15 @@ class Active {
   private readonly host: OverlayHost;
   private readonly link: FrameLink;
   private readonly card: BlockedCard;
-  private readonly onBadgeClick: (click: BadgeClick) => void;
+  private readonly handlers: {
+    badge: (click: BadgeClick) => void;
+    allIssues: (click: BadgeClick) => void;
+  };
+  readonly popover: PopoverController;
   private readonly listeners: (() => void)[] = [];
   private focused: Tracked | undefined;
+  /** Whether the keyboard focus is inside the popover's frame (the page sees a focus on our host). */
+  private cardFocused = false;
   private nextId = 1;
   private frame: number | undefined;
   private resizeObserver: ResizeObserver | undefined;
@@ -279,12 +307,12 @@ class Active {
     deps: PageModeContentDeps,
     win: Window & typeof globalThis,
     doc: Document,
-    onBadgeClick: (click: BadgeClick) => void,
+    handlers: { badge: (click: BadgeClick) => void; allIssues: (click: BadgeClick) => void },
   ) {
     this.deps = deps;
     this.win = win;
     this.doc = doc;
-    this.onBadgeClick = onBadgeClick;
+    this.handlers = handlers;
     this.host = new OverlayHost(doc, deps.overlayMode ?? "closed");
     this.card = new BlockedCard(doc, this.host.layer);
     this.link = new FrameLink(
@@ -307,10 +335,21 @@ class Active {
         onBlocked: (error) => {
           this.blocked = error;
           this.card.close();
+          this.popover.close();
           for (const tracked of this.boxes.values()) this.render(tracked);
         },
       },
     );
+    this.popover = new PopoverController({
+      link: this.link,
+      viewport: () => ({
+        width: this.doc.documentElement.clientWidth || this.win.innerWidth,
+        height: this.doc.documentElement.clientHeight || this.win.innerHeight,
+      }),
+      onChange: () => {
+        for (const tracked of this.boxes.values()) this.drawUnderlines(tracked);
+      },
+    });
     this.listen();
   }
 
@@ -338,6 +377,22 @@ class Active {
     on(this.doc, "input", (event) => {
       if (event.isTrusted) this.onInput(event);
     });
+    // The popover (SPEC section 4.11): a click in an issue opens it, the caret moving to another
+    // issue switches it, and Escape, a click elsewhere or typing closes it.
+    on(this.doc, "mousedown", (event) => {
+      if (event.isTrusted) this.onMouseDown(event as MouseEvent);
+    });
+    on(this.doc, "mouseup", (event) => {
+      if (event.isTrusted) this.onMouseUp(event as MouseEvent);
+    });
+    on(this.doc, "keydown", (event) => {
+      if (event.isTrusted && (event as KeyboardEvent).key === "Escape") this.closePopover(true);
+    });
+    for (const type of ["keyup", "selectionchange", "select"]) {
+      on(this.doc, type, (event) => {
+        if (event.isTrusted) this.onCaretMoved();
+      });
+    }
     // Following a box: scrolling anywhere, resizing, and layout changes.
     on(this.win, "scroll", () => {
       this.schedulePosition();
@@ -367,7 +422,11 @@ class Active {
   }
 
   private onFocusIn(event: FocusEvent): void {
+    // The focus went into the popover's own frame (the event looks like it came from our host), or
+    // somewhere else: the popover stays only for the first, and for the box it belongs to.
+    this.cardFocused = this.host.owns(event.target);
     this.focusTarget(event.composedPath()[0] ?? event.target, event.target);
+    if (!this.cardFocused) this.closePopoverIfFocusLeft();
   }
 
   /**
@@ -395,11 +454,12 @@ class Active {
         `session:${this.deps.random.uuid()}`,
         this.win,
       );
+      const underlines = new BoxUnderlines(this.doc, this.host.layer, state, this.win);
       const badge = new Badge(this.doc, this.host.layer, () => {
         this.onBadge(state);
       });
       badge.setVisible(false);
-      tracked = { state, badge };
+      tracked = { state, badge, underlines };
       this.boxes.set(found.element, tracked);
       this.byId.set(state.id, tracked);
       this.observe();
@@ -428,6 +488,10 @@ class Active {
     if (focused === undefined) return;
     // A box that is no longer a text box (hidden, made read-only) still loses the focus.
     if (found === undefined || found.element === focused.state.element) this.deactivate();
+    // The focus left the box: the popover stays only if it went into the popover's own frame.
+    this.deps.scheduler.after(0, () => {
+      this.closePopoverIfFocusLeft();
+    });
   }
 
   private onInput(event: Event): void {
@@ -441,8 +505,99 @@ class Active {
     }
     const tracked = this.boxes.get(found.element);
     if (tracked === undefined) return;
+    // Typing closes the popover, before the underlines are drawn for the new text.
+    this.popover.forget(tracked);
     this.syncBox(tracked.state);
     this.render(tracked);
+  }
+
+  // The popover
+
+  private onMouseDown(event: MouseEvent): void {
+    const open = this.popover.open;
+    if (open === undefined || this.host.owns(event.target)) return;
+    const target = event.composedPath()[0] ?? event.target;
+    // A press in the same box is judged on release, by where the caret and the point are.
+    if (
+      target !== null &&
+      "nodeType" in target &&
+      open.target.state.element.contains(target as Node)
+    ) {
+      return;
+    }
+    this.popover.close();
+  }
+
+  private onMouseUp(event: MouseEvent): void {
+    if (this.host.owns(event.target) || this.blocked !== undefined) return;
+    const found = findTextBox(event.composedPath()[0] ?? event.target, this.win);
+    const tracked = found === undefined ? undefined : this.boxes.get(found.element);
+    if (tracked === undefined) return;
+    this.evaluate(tracked, { x: event.clientX, y: event.clientY });
+  }
+
+  private onCaretMoved(): void {
+    const open = this.popover.open;
+    if (open === undefined || this.focused?.state !== open.target.state) return;
+    this.evaluate(open.target, undefined);
+  }
+
+  /**
+   * Looks at where the user is in the box: a click whose point is in an issue's underline, or
+   * whose caret is in an issue, opens the popover for it (or switches it). With the popover
+   * open, the caret moving to another issue switches it, and moving out of every issue closes it.
+   */
+  private evaluate(tracked: PopoverTarget, point: { x: number; y: number } | undefined): void {
+    if (this.blocked !== undefined) return;
+    const { state } = tracked;
+    const open = this.popover.isOpenFor(tracked);
+    let id = point === undefined ? undefined : tracked.underlines.issueAt(point.x, point.y);
+    if (id === undefined) {
+      const caret = this.caretOf(tracked);
+      id = caret === undefined ? undefined : issueAt(state.issues, caret)?.id;
+    }
+    if (id === undefined) {
+      if (open) this.popover.close();
+      return;
+    }
+    if (point !== undefined || open) this.popover.show(tracked, id, point);
+  }
+
+  /** The offset of the caret (the start of the selection) in the box's text. */
+  private caretOf(tracked: PopoverTarget): number | undefined {
+    const { element, kind, model } = tracked.state;
+    if (kind !== "editable") {
+      return (element as HTMLInputElement | HTMLTextAreaElement).selectionStart ?? undefined;
+    }
+    const selection = this.win.getSelection();
+    if (selection === null || selection.rangeCount === 0) return undefined;
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.startContainer)) return undefined;
+    return model?.offsetOf(range.startContainer, range.startOffset);
+  }
+
+  /** Closes the popover; after Escape the box gets the focus back if it was in the card. */
+  private closePopover(restoreFocus: boolean): void {
+    const open = this.popover.open;
+    if (open === undefined) return;
+    this.popover.close();
+    if (restoreFocus) this.restoreFocus(open.target.state.element);
+  }
+
+  private restoreFocus(element: HTMLElement): void {
+    if (this.doc.activeElement === this.host.element) element.focus({ preventScroll: true });
+  }
+
+  /** After the focus left a text box: the popover goes unless the focus is in its card. */
+  private closePopoverIfFocusLeft(): void {
+    const open = this.popover.open;
+    if (open === undefined) return;
+    if (this.cardFocused) return;
+    const active = this.doc.activeElement;
+    const element = open.target.state.element;
+    if (active === this.host.element || active === element) return;
+    if (active !== null && element.contains(active)) return;
+    this.popover.close();
   }
 
   /** Reads the box; an edit goes to the frame. */
@@ -473,7 +628,9 @@ class Active {
     this.byId.delete(tracked.state.id);
     this.resizeObserver?.unobserve(tracked.state.element);
     if (this.focused === tracked) this.focused = undefined;
+    this.popover.forget(tracked);
     this.link.post({ type: "forget", box: tracked.state.id });
+    tracked.underlines.remove();
     tracked.badge.remove();
   }
 
@@ -487,6 +644,16 @@ class Active {
       // latest edit.
       if (!tracked.state.apply(message)) return;
       this.render(tracked);
+    } else if (message.type === "popover-size") {
+      this.popover.sized(message.box, message.issue, message.height);
+    } else if (message.type === "popover-closed") {
+      const target = this.popover.open?.target;
+      if (this.popover.closedByFrame(message.box) && target !== undefined) {
+        this.restoreFocus(target.state.element);
+      }
+    } else if (message.type === "all-issues") {
+      const tracked = this.byId.get(message.box);
+      if (tracked !== undefined) this.handlers.allIssues({ box: tracked.state });
     } else if (message.type === "resync") {
       const tracked = this.byId.get(message.box);
       if (tracked === undefined) return;
@@ -516,13 +683,15 @@ class Active {
       });
       return;
     }
-    // The dialog of step 15 opens here.
-    this.onBadgeClick({ box: state });
+    // The dialog of step 16 opens here.
+    this.handlers.badge({ box: state });
   }
 
   private render(tracked: Tracked): void {
     tracked.badge.show(badgeViewOf(tracked.state, this.blocked?.message));
     this.place(tracked);
+    // The issues moved or went: the card follows its issue, or closes with it.
+    if (this.popover.isOpenFor(tracked)) this.popover.place();
   }
 
   // Following the boxes
@@ -538,6 +707,12 @@ class Active {
   /** Puts every badge at the bottom right inside its box. */
   position(): void {
     for (const tracked of [...this.boxes.values()]) this.place(tracked);
+    this.popover.place();
+  }
+
+  /** Draws the underlines of a box; the issue the popover shows has the 20% background. */
+  private drawUnderlines(tracked: PopoverTarget, visible = true): void {
+    tracked.underlines.draw(this.popover.selectedIn(tracked), visible);
   }
 
   /**
@@ -572,6 +747,7 @@ class Active {
       rect.top < this.win.innerHeight &&
       rect.left < this.win.innerWidth;
     badge.setVisible(inView && (state.focused || state.issues.length > 0));
+    this.drawUnderlines(tracked, inView);
   }
 
   destroy(): void {
@@ -581,7 +757,10 @@ class Active {
     if (this.frame !== undefined) this.win.cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.card.close();
-    for (const tracked of this.boxes.values()) tracked.badge.remove();
+    for (const tracked of this.boxes.values()) {
+      tracked.underlines.remove();
+      tracked.badge.remove();
+    }
     this.boxes.clear();
     this.byId.clear();
     this.link.close();

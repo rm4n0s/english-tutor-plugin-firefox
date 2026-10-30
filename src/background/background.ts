@@ -5,15 +5,18 @@ import {
   PAGE_FRAME_REGISTER,
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
+  PAGE_MODE_IGNORE,
   PAGE_MODE_OPEN_TUTOR,
   PAGE_MODE_SITE,
   messageType,
   parseConfigRequest,
   parseFrameIdRequest,
+  parseIgnoreRequest,
   parseOpenTutorRequest,
   parseSiteRequest,
 } from "../core/page-mode/messages";
 import type { FrameClaims } from "../core/page-mode/frame-claims";
+import type { IgnoreSet } from "../core/store";
 import type { Commands } from "../platform/commands";
 import type { Lifecycle } from "../platform/lifecycle";
 import type { Notifier } from "../platform/notifications";
@@ -92,6 +95,8 @@ export interface BackgroundDeps {
   pageMode: PageModeBackend;
   /** Which frame belongs to which tab: a page cannot make a frame of its own (SPEC section 4.11). */
   frameClaims: FrameClaims;
+  /** The Not-an-error ignore set, for the page-mode frame, which has no `storage.session` (SPEC section 5.7). */
+  ignore: IgnoreSet;
   permission: PageModePermission;
   messages: BackgroundMessages;
   log: Logger;
@@ -120,7 +125,7 @@ export function latestTutorTab(tabs: readonly TutorTabInfo[]): TutorTabInfo | un
  */
 export function startBackground(deps: BackgroundDeps): void {
   const { button, commands, menus, tabs, handoff, notifier, lifecycle, options, log } = deps;
-  const { pageMode, frameClaims, permission, messages } = deps;
+  const { pageMode, frameClaims, ignore, permission, messages } = deps;
 
   const report = (message: string) => (err: unknown) => {
     log.error(message, { err });
@@ -246,6 +251,18 @@ export function startBackground(deps: BackgroundDeps): void {
       const request = parseFrameIdRequest(message, PAGE_FRAME_CLAIM);
       if (request === undefined) return undefined;
       return frameClaims.claim(request.id, sender.tab?.id).then((granted) => ({ granted }));
+    }
+    if (type === PAGE_MODE_IGNORE) {
+      // From the page-mode frame (an extension page in a tab): the ignore set it cannot reach.
+      const request = parseIgnoreRequest(message);
+      if (request === undefined || sender.tab === undefined) return undefined;
+      if (request.op === "move") {
+        return ignore.move(request.from, request.to).then(() => ({ ok: true }));
+      }
+      if (request.op === "add") {
+        return ignore.add(request.source, request.fingerprint).then(() => ({ ok: true }));
+      }
+      return ignore.has(request.source, request.fingerprint).then((has) => ({ has }));
     }
     if (type === PAGE_MODE_OPEN_TUTOR) {
       const request = parseOpenTutorRequest(message);

@@ -314,3 +314,64 @@ describe("FrameLink: PageFrameBlocked", () => {
     expect(() => load).not.toThrow();
   });
 });
+
+describe("FrameLink: showing the frame as a card", () => {
+  const iframeOf = (parent: HTMLElement) => parent.querySelector("iframe")!;
+  const css = (element: HTMLElement, name: string) => element.style.getPropertyValue(name);
+
+  it("shows the iframe at the position and size it is given, drawn over the page and catching the pointer", async () => {
+    const { start, link, parent } = setup();
+    await start();
+    link.setView({ left: 160, top: 136, width: 360, height: 180, visible: true });
+    const iframe = iframeOf(parent);
+    expect(css(iframe, "display")).toBe("block");
+    expect(css(iframe, "position")).toBe("fixed");
+    expect(css(iframe, "left")).toBe("160px");
+    expect(css(iframe, "top")).toBe("136px");
+    expect(css(iframe, "width")).toBe("360px");
+    expect(css(iframe, "height")).toBe("180px");
+    expect(css(iframe, "pointer-events")).toBe("auto");
+    expect(css(iframe, "visibility")).toBe("visible");
+    expect(iframe.getAttribute("aria-hidden")).toBe("false");
+    expect(iframe.getAttribute("title")).toBe("English Tutor");
+    // Every property is `!important`, so a page's style sheet cannot move or hide it.
+    expect(iframe.style.getPropertyPriority("left")).toBe("important");
+    expect(iframe.style.getPropertyPriority("display")).toBe("important");
+  });
+
+  it("keeps it laid out but hidden and out of the pointer's way until the card has its size", async () => {
+    const { start, link, parent } = setup();
+    await start();
+    link.setView({ left: 10, top: 20, width: 360, height: 100, visible: false });
+    const iframe = iframeOf(parent);
+    expect(css(iframe, "display")).toBe("block");
+    expect(css(iframe, "visibility")).toBe("hidden");
+    expect(css(iframe, "pointer-events")).toBe("none");
+  });
+
+  it("hides it again with undefined", async () => {
+    const { start, link, parent } = setup();
+    await start();
+    link.setView({ left: 10, top: 20, width: 360, height: 100, visible: true });
+    link.setView(undefined);
+    const iframe = iframeOf(parent);
+    expect(css(iframe, "display")).toBe("none");
+    expect(iframe.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("shows a view that was set before the iframe was made", async () => {
+    const { link, parent, start } = setup();
+    link.setView({ left: 10, top: 20, width: 360, height: 100, visible: true });
+    await start();
+    expect(css(iframeOf(parent), "left")).toBe("10px");
+  });
+
+  it("does nothing once the frame is gone", async () => {
+    const { start, link } = setup();
+    await start();
+    link.close();
+    expect(() => {
+      link.setView({ left: 1, top: 1, width: 1, height: 1, visible: true });
+    }).not.toThrow();
+  });
+});

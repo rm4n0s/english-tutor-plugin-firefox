@@ -7,13 +7,14 @@ import type { FakePort } from "../platform/testing/fake-page-port";
 import { FakeFrameClaim } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { PageFrame, type FrameServices } from "./frame";
+import type { PopoverHost } from "./popover";
 import { FakeRunner, MODEL, settle } from "./testing";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 const TEXT = "Yesterday I seen him. He go home.";
 
-function setup(options: { services?: Promise<FrameServices> } = {}) {
+function setup(options: { services?: Promise<FrameServices>; popover?: PopoverHost } = {}) {
   const bus = new FakePortBus();
   const runner = new FakeRunner();
   const scheduler = new FakeScheduler();
@@ -23,6 +24,7 @@ function setup(options: { services?: Promise<FrameServices> } = {}) {
     scheduler,
     runner,
     settings: { delaySeconds: 3, getModel: () => MODEL, load },
+    ...(options.popover === undefined ? {} : { popover: options.popover }),
   };
   const logged: string[] = [];
   const record = (message: string) => {
@@ -293,5 +295,75 @@ describe("PageFrame: while the store opens", () => {
     await t.frame.idle();
     expect(t.frame.boxes).toBe(0);
     expect(t.logged).toContain("[english-tutor] the page-mode frame could not open the store");
+  });
+});
+
+describe("PageFrame: the explanation popover", () => {
+  /** A card that records what the frame asks of it. */
+  function fakePopover() {
+    const calls: unknown[] = [];
+    const host: PopoverHost = {
+      open: (session, issue, maxHeight, send) => {
+        calls.push(["open", session.id, issue, maxHeight]);
+        send({ type: "popover-size", box: session.id, issue, height: 150 });
+      },
+      close: (box) => {
+        calls.push(["close", box]);
+      },
+    };
+    return { host, calls };
+  }
+
+  it("opens the card for the box's session, and what the card sends goes to the content script", async () => {
+    const popover = fakePopover();
+    const t = setup({ popover: popover.host });
+    t.runner.answer(resultOf([placed(10, 16)]));
+    const { port, received } = await t.connect();
+    port.post(focus());
+    await t.frame.idle();
+    await settle();
+    port.post({ type: "popover-open", box: 1, issue: 1, maxHeight: 300 });
+    await t.frame.idle();
+    expect(popover.calls).toEqual([["open", 1, 1, 300]]);
+    expect(received.at(-1)).toEqual({ type: "popover-size", box: 1, issue: 1, height: 150 });
+  });
+
+  it("closes the card for the box when the content script says so", async () => {
+    const popover = fakePopover();
+    const t = setup({ popover: popover.host });
+    const { port } = await t.connect();
+    port.post(focus());
+    port.post({ type: "popover-close", box: 1 });
+    await t.frame.idle();
+    expect(popover.calls).toEqual([["close", 1]]);
+  });
+
+  it("closes the card of a box that leaves the page, and when the page goes away", async () => {
+    const popover = fakePopover();
+    const t = setup({ popover: popover.host });
+    const { port } = await t.connect();
+    port.post(focus());
+    port.post({ type: "forget", box: 1 });
+    await t.frame.idle();
+    expect(popover.calls).toEqual([["close", 1]]);
+    port.disconnect();
+    expect(popover.calls.at(-1)).toEqual(["close", undefined]);
+  });
+
+  it("answers that the card is closed for a box it does not know, or with no card to draw", async () => {
+    const popover = fakePopover();
+    const withCard = setup({ popover: popover.host });
+    const first = await withCard.connect();
+    first.port.post({ type: "popover-open", box: 9, issue: 1, maxHeight: 300 });
+    await withCard.frame.idle();
+    expect(first.received.at(-1)).toEqual({ type: "popover-closed", box: 9 });
+    expect(popover.calls).toEqual([]);
+
+    const without = setup();
+    const second = await without.connect();
+    second.port.post(focus());
+    second.port.post({ type: "popover-open", box: 1, issue: 1, maxHeight: 300 });
+    await without.frame.idle();
+    expect(second.received.at(-1)).toEqual({ type: "popover-closed", box: 1 });
   });
 });

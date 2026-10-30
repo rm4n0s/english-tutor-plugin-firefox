@@ -1,7 +1,17 @@
-import type { IssueState, TextIssue } from "../core/issues";
+import type { Category } from "../core/analysis";
+import type { IssueState } from "../core/issues";
 
 /** A zero-width space (U+200B): it gives a trailing line break its last, empty line. */
 const END_MARK = String.fromCharCode(0x200b);
+
+/** What the mirror needs of an issue: the editor's `TextIssue` and page mode's `WireIssue` fit. */
+export interface MirrorIssue {
+  readonly id: number;
+  readonly start: number;
+  /** Exclusive. */
+  readonly end: number;
+  readonly category: Category;
+}
 
 /**
  * The nodes of the mirror layer: the text, with each shown issue wrapped in a
@@ -14,7 +24,7 @@ const END_MARK = String.fromCharCode(0x200b);
 export function mirrorNodes(
   doc: Document,
   text: string,
-  issues: readonly TextIssue[],
+  issues: readonly MirrorIssue[],
   selectedId: number | null,
 ): Node[] {
   const nodes: Node[] = [];

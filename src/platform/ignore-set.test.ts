@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ignoreKey, SessionIgnoreSet } from "./ignore-set";
+import { ignoreKey, RuntimeIgnoreSet, SessionIgnoreSet } from "./ignore-set";
 import { BrowserSessionStorage } from "./session-storage";
 import { FakeSessionStorage } from "./testing/fake-session-storage";
 
@@ -121,5 +121,67 @@ describe("BrowserSessionStorage", () => {
       ["set", { a: 1 }],
       ["remove", ["a"]],
     ]);
+  });
+});
+
+describe("RuntimeIgnoreSet (the page-mode frame has no storage.session)", () => {
+  /** A background script that keeps the set in a fake session storage, as the real one does. */
+  function background(storage = new FakeSessionStorage()) {
+    const set = new SessionIgnoreSet(storage);
+    const sent: unknown[] = [];
+    const api = {
+      sendMessage: async (message: {
+        op: string;
+        source: string;
+        fingerprint: string;
+        from: string;
+        to: string;
+      }) => {
+        sent.push(message);
+        if (message.op === "has")
+          return { has: await set.has(message.source, message.fingerprint) };
+        if (message.op === "add") await set.add(message.source, message.fingerprint);
+        else await set.move(message.from, message.to);
+        return { ok: true };
+      },
+    };
+    return { storage, sent, ignore: new RuntimeIgnoreSet(api as never) };
+  }
+
+  it("adds a pair through the background script, into the shared storage", async () => {
+    const { ignore, storage, sent } = background();
+    await ignore.add("session:a", "f1");
+    expect(sent).toEqual([
+      { type: "page-mode-ignore", op: "add", source: "session:a", fingerprint: "f1" },
+    ]);
+    expect([...storage.values.keys()]).toEqual([ignoreKey("session:a", "f1")]);
+    expect(await ignore.has("session:a", "f1")).toBe(true);
+    expect(await ignore.has("session:a", "f2")).toBe(false);
+  });
+
+  it("moves the pairs of a source", async () => {
+    const { ignore, storage } = background();
+    await ignore.add("session:a", "f1");
+    await ignore.move("session:a", "doc:7");
+    expect([...storage.values.keys()]).toEqual([ignoreKey("doc:7", "f1")]);
+  });
+
+  it.each([
+    { name: "no answer", answer: undefined },
+    { name: "an answer that is not ok", answer: { ok: false } },
+    { name: "a text", answer: "ok" },
+  ])("fails when the background script gives $name for a change", async ({ answer }) => {
+    const ignore = new RuntimeIgnoreSet({ sendMessage: () => Promise.resolve(answer) });
+    await expect(ignore.add("session:a", "f1")).rejects.toBeInstanceOf(TypeError);
+    await expect(ignore.move("session:a", "doc:1")).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("says no for an answer that is not a clear yes, and fails when the background script does", async () => {
+    const odd = new RuntimeIgnoreSet({ sendMessage: () => Promise.resolve(undefined) });
+    expect(await odd.has("session:a", "f1")).toBe(false);
+    const broken = new RuntimeIgnoreSet({
+      sendMessage: () => Promise.reject(new Error("gone")),
+    });
+    await expect(broken.has("session:a", "f1")).rejects.toThrow("gone");
   });
 });

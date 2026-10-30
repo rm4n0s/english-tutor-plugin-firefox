@@ -1,6 +1,58 @@
-/* The page-mode frame (SPEC section 4.11). The popover and the dialog of steps 14 and 15 go here. */
+/*
+ * The page-mode frame (SPEC section 4.11). The content script puts this page in an <iframe> over
+ * the web page, as a card just below an underline; the issues dialog of step 16 goes here too.
+ */
 html,
 body {
   margin: 0;
+  overflow: hidden;
   background: transparent;
+}
+
+/*
+ * The explanation popover. The card is as high as its content up to the room the content script
+ * gave it (`max-height`, set by the frame's script), and its explanation scrolls inside. The frame
+ * is clipped to the same rounded corners by its <iframe>.
+ */
+.popover {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 340px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+
+.popover.popover-confirming {
+  min-height: 250px;
+}
+
+.popover-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: 13px;
+}
+
+.popover-body .explain-panel {
+  flex: 0 1 auto;
+  height: auto;
+}
+
+.popover-body .explain-body {
+  flex: 0 1 auto;
+  max-height: 100%;
+}
+
+.popover-error {
+  margin: 0;
+  color: var(--danger);
 }

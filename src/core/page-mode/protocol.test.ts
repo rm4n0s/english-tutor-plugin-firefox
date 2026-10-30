@@ -50,6 +50,8 @@ describe("messages from the content script", () => {
     { type: "text", box: 2, revision: 8, text: "all of it" },
     { type: "blur", box: 5 },
     { type: "forget", box: 6 },
+    { type: "popover-open", box: 2, issue: 7, maxHeight: 340 },
+    { type: "popover-close", box: 2 },
   ])("accepts $type $box", (message) => {
     expect(parseContentMessage(message)).toEqual(message);
   });
@@ -83,6 +85,15 @@ describe("messages from the content script", () => {
       data: { type: "edit", box: 1, revision: 1, start: 0, removed: "0", inserted: "" },
     },
     { name: "a text without revision", data: { type: "text", box: 1, text: "x" } },
+    { name: "a popover without an issue", data: { type: "popover-open", box: 1, maxHeight: 9 } },
+    {
+      name: "a popover with a negative height",
+      data: { type: "popover-open", box: 1, issue: 1, maxHeight: -1 },
+    },
+    {
+      name: "a popover whose issue is a string",
+      data: { type: "popover-open", box: 1, issue: "1", maxHeight: 9 },
+    },
   ])("refuses $name", ({ data }) => {
     expect(parseContentMessage(data)).toBeUndefined();
   });
@@ -94,6 +105,9 @@ describe("messages from the frame", () => {
   it.each([
     { type: "ready" },
     { type: "resync", box: 2 },
+    { type: "popover-size", box: 2, issue: 4, height: 180 },
+    { type: "popover-closed", box: 2 },
+    { type: "all-issues", box: 2 },
     { type: "state", box: 1, revision: 3, status: "idle", issues: [] },
     { type: "state", box: 1, revision: 3, status: "checking", issues: [issue] },
     {
@@ -113,6 +127,13 @@ describe("messages from the frame", () => {
   it.each([
     { name: "null", data: null },
     { name: "an unknown type", data: { type: "boom", box: 1 } },
+    { name: "a popover size without a height", data: { type: "popover-size", box: 1, issue: 1 } },
+    {
+      name: "a popover size with a fractional height",
+      data: { type: "popover-size", box: 1, issue: 1, height: 1.5 },
+    },
+    { name: "a popover size without an issue", data: { type: "popover-size", box: 1, height: 9 } },
+    { name: "a popover closed without a box", data: { type: "popover-closed" } },
     {
       name: "a state without a box",
       data: { type: "state", revision: 0, status: "idle", issues: [] },

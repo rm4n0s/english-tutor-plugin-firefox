@@ -10,6 +10,7 @@ import {
 import type { FrameClaim } from "../platform/page-mode";
 import type { PagePort, PagePortServer } from "../platform/page-port";
 import { BoxSession } from "./box-session";
+import type { PopoverHost } from "./popover";
 
 /** What the frame needs once the store is open. */
 export interface FrameServices {
@@ -21,6 +22,8 @@ export interface FrameServices {
     getModel(): AnalysisModel | undefined;
     load(): Promise<void>;
   };
+  /** The explanation popover's card (SPEC section 4.11); missing in tests that do not draw it. */
+  popover?: PopoverHost;
 }
 
 export interface PageFrameDeps {
@@ -118,6 +121,7 @@ export class PageFrame {
     });
     port.onDisconnect(() => {
       // The page went away: nothing is left to check for.
+      this.services?.popover?.close();
       for (const session of this.sessions.values()) session.dispose();
       this.sessions.clear();
       this.port = undefined;
@@ -170,10 +174,26 @@ export class PageFrame {
         return;
       case "forget": {
         const session = this.sessions.get(message.box);
+        services.popover?.close(message.box);
         session?.dispose();
         this.sessions.delete(message.box);
         return;
       }
+      case "popover-open": {
+        const session = this.sessions.get(message.box);
+        if (session === undefined || services.popover === undefined) {
+          // Nothing to explain: the content script closes its side.
+          port.post({ type: "popover-closed", box: message.box } satisfies FrameMessage);
+          return;
+        }
+        services.popover.open(session, message.issue, message.maxHeight, (reply) => {
+          this.port?.post(reply);
+        });
+        return;
+      }
+      case "popover-close":
+        services.popover?.close(message.box);
+        return;
     }
   }
 }

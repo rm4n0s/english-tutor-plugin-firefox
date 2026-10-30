@@ -64,7 +64,14 @@ export type ContentMessage =
   | { type: "text"; box: number; revision: number; text: string }
   | { type: "blur"; box: number }
   /** The box left the page, or page mode was turned off for it. */
-  | { type: "forget"; box: number };
+  | { type: "forget"; box: number }
+  /**
+   * Show the explanation popover for this issue (or switch it to this issue). `maxHeight` is the
+   * room the card has in the page, in CSS pixels (SPEC section 4.11).
+   */
+  | { type: "popover-open"; box: number; issue: number; maxHeight: number }
+  /** The popover was closed by the page (Escape, a click elsewhere, typing): drop the selection. */
+  | { type: "popover-close"; box: number };
 
 export type BoxStatus = "idle" | "checking" | "checked" | "failed" | "no-llm" | "too-long";
 
@@ -92,7 +99,13 @@ export type FrameMessage =
       issues: WireIssue[];
     }
   /** The frame lost track of the box's text: send it again (`text`). */
-  | { type: "resync"; box: number };
+  | { type: "resync"; box: number }
+  /** The popover for this issue is drawn and is `height` CSS pixels high (and again when that changes). */
+  | { type: "popover-size"; box: number; issue: number; height: number }
+  /** The frame closed the popover (Escape in the card, Not an error, an issue that is gone). */
+  | { type: "popover-closed"; box: number }
+  /** All issues was pressed in the popover (the issues dialog, step 16). */
+  | { type: "all-issues"; box: number };
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -149,6 +162,14 @@ export function parseContentMessage(data: unknown): ContentMessage | undefined {
       return { type: "blur", box };
     case "forget":
       return { type: "forget", box };
+    case "popover-open": {
+      const issue = uint(m.issue);
+      const maxHeight = uint(m.maxHeight);
+      if (issue === undefined || maxHeight === undefined) return undefined;
+      return { type: "popover-open", box, issue, maxHeight };
+    }
+    case "popover-close":
+      return { type: "popover-close", box };
     default:
       return undefined;
   }
@@ -180,6 +201,14 @@ export function parseFrameMessage(data: unknown): FrameMessage | undefined {
   const box = uint(m.box);
   if (box === undefined) return undefined;
   if (m.type === "resync") return { type: "resync", box };
+  if (m.type === "popover-closed") return { type: "popover-closed", box };
+  if (m.type === "all-issues") return { type: "all-issues", box };
+  if (m.type === "popover-size") {
+    const issue = uint(m.issue);
+    const height = uint(m.height);
+    if (issue === undefined || height === undefined) return undefined;
+    return { type: "popover-size", box, issue, height };
+  }
   if (m.type !== "state") return undefined;
   const revision = uint(m.revision);
   const status = STATUSES.find((s) => s === m.status);

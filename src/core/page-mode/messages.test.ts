@@ -5,6 +5,7 @@ import {
   parseBroadcast,
   parseConfigRequest,
   parseFrameIdRequest,
+  parseIgnoreRequest,
   parseOpenTutorRequest,
   parseSiteConfig,
   parseSiteRequest,
@@ -223,5 +224,65 @@ describe("the frame id messages", () => {
     expect(parseFrameIdRequest(message, "page-frame-claim")).toEqual(
       ok ? { type: "page-frame-claim", id: ID } : undefined,
     );
+  });
+});
+
+describe("the ignore-set message", () => {
+  it.each([
+    {
+      name: "has",
+      message: { type: "page-mode-ignore", op: "has", source: "session:a", fingerprint: "f1" },
+      expected: { type: "page-mode-ignore", op: "has", source: "session:a", fingerprint: "f1" },
+    },
+    {
+      name: "add",
+      message: { type: "page-mode-ignore", op: "add", source: "session:a", fingerprint: "f1" },
+      expected: { type: "page-mode-ignore", op: "add", source: "session:a", fingerprint: "f1" },
+    },
+    {
+      name: "move",
+      message: { type: "page-mode-ignore", op: "move", from: "session:a", to: "doc:7" },
+      expected: { type: "page-mode-ignore", op: "move", from: "session:a", to: "doc:7" },
+    },
+    {
+      name: "a source of 300 characters",
+      message: { type: "page-mode-ignore", op: "add", source: "s".repeat(300), fingerprint: "f" },
+      expected: {
+        type: "page-mode-ignore",
+        op: "add",
+        source: "s".repeat(300),
+        fingerprint: "f",
+      },
+    },
+  ])("reads $name", ({ message, expected }) => {
+    expect(parseIgnoreRequest(message)).toEqual(expected);
+  });
+
+  it.each([
+    { name: "another type", message: { type: "x", op: "add", source: "a", fingerprint: "f" } },
+    { name: "no op", message: { type: "page-mode-ignore", source: "a", fingerprint: "f" } },
+    {
+      name: "an unknown op",
+      message: { type: "page-mode-ignore", op: "clear", source: "a", fingerprint: "f" },
+    },
+    {
+      name: "an empty source",
+      message: { type: "page-mode-ignore", op: "add", source: "", fingerprint: "f" },
+    },
+    {
+      name: "a fingerprint that is not text",
+      message: { type: "page-mode-ignore", op: "has", source: "a", fingerprint: 5 },
+    },
+    {
+      name: "a source of 301 characters",
+      message: { type: "page-mode-ignore", op: "add", source: "s".repeat(301), fingerprint: "f" },
+    },
+    {
+      name: "a move without a target",
+      message: { type: "page-mode-ignore", op: "move", from: "a" },
+    },
+    { name: "null", message: null },
+  ])("refuses $name", ({ message }) => {
+    expect(parseIgnoreRequest(message)).toBeUndefined();
   });
 });

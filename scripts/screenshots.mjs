@@ -1900,6 +1900,323 @@ const SCENARIOS = {
       await ctx.waitForLLMRequests(2);
     },
   },
+  // Step 15: underlines in the text boxes of web pages, and the explanation popover (SPEC section
+  // 4.11). The overlay lives in a closed shadow root, so the harness reads where the underlines are
+  // from the pixels of the picture and compares them with the words measured in the page itself.
+  "underlines-textarea": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      await checkedBox(ctx, "textarea.html");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.screenshot();
+    },
+  },
+  "underlines-textarea-dark": {
+    theme: "dark",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      await checkedBox(ctx, "textarea-dark.html");
+      await ctx.expectTheme();
+      await ctx.expectUnderline("I seen", "grammar", { dark: true });
+      await ctx.expectUnderline("He go", "grammar", { dark: true });
+      await ctx.expectUnderline("make a photo", "vocabulary", { dark: true });
+      await ctx.screenshot();
+    },
+  },
+  "underlines-input": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      await checkedBox(ctx, "input.html");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.screenshot();
+    },
+  },
+  "underlines-contenteditable": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      await checkedBox(ctx, "contenteditable.html");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.screenshot();
+    },
+  },
+
+  "popover-loading": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // The explanation is held, so the card stays in its loading state.
+      const card = await openedPopover(ctx, "He go", {
+        explain: { ...EXPLAIN_REPLY, delayMs: 120_000 },
+      });
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectSelectedBackground("He go", "grammar");
+      await ctx.expectBoxFocused();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+      if (card.bounds.top < card.anchor.bottom)
+        throw new Error("the card is not below the underline");
+    },
+  },
+  "popover-ready": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      await openedPopover(ctx, "He go", { explain: EXPLAIN_REPLY });
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectSelectedBackground("He go", "grammar");
+      await ctx.expectBoxFocused();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await ctx.screenshot();
+    },
+  },
+  "popover-above": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // The text box is at the bottom of the window: there is no room below the underline, so
+      // the card goes above it.
+      const card = await openedPopover(ctx, "I seen", {
+        page: "textarea-bottom.html",
+        explain: explanationFor,
+      });
+      if (card.bounds.side !== "above") throw new Error("the card is not above the underline");
+      await ctx.waitForLLMRequests(2);
+      // The card's shadow darkens the word next to it a little, so the colour is judged loosely.
+      await ctx.expectSelectedBackground("I seen", "grammar", { tolerance: 40 });
+      await ctx.expectBoxFocused();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await ctx.screenshot();
+    },
+  },
+  "page-underlines-scrolled": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    // Its PNG is `underlines-scrolled.png` (the Step 6 scenario of that name keeps its own folder).
+    file: "underlines-scrolled",
+    async run(ctx) {
+      // A long text in a box of five lines, scrolled halfway: the underlines follow the text, and
+      // the box's edge cuts them off with it.
+      await checkedBox(ctx, "textarea-long.html", { reply: LONG_REPLY });
+      await ctx.driver.executeScript(
+        `const box = document.getElementById("box");
+         box.scrollTop = Math.round((box.scrollHeight - box.clientHeight) / 2);`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await ctx.expectUnderline("sister seen", "grammar");
+      await ctx.expectUnderline("father tell", "grammar");
+      // "make a photo" is below the box's edge: the overlay does not draw outside the box.
+      await ctx.expectNoUnderlineUnder("make a photo", "vocabulary");
+      await ctx.screenshot();
+      // The overlay follows the page's own scrolling too.
+      await ctx.driver.executeScript("window.scrollTo(0, 40)");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await ctx.expectUnderline("father tell", "grammar");
+    },
+  },
+  "underlines-after-edit": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // Typing moves and removes the underlines at once, before the frame answers: the answer to
+      // the next check is held, so what the picture shows is what the edits did.
+      await checkedBox(ctx, "textarea-still.html");
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 120_000 });
+      // Words at the start of the text move every issue (and wrap the first line differently).
+      await ctx.typeAt("", "So, ");
+      // Words inside "He go" remove that issue and only that one.
+      await ctx.typeAt("He ", "so ");
+      await ctx.waitForBadge("spinner");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.expectNoUnderlineUnder("He so go", "grammar");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "popover-behaviour": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. What the popover does with the keyboard and the mouse (SPEC section 4.11): the box
+      // keeps the focus; Regenerate asks again; Escape in the card closes it and gives the focus
+      // back; a click elsewhere closes it; the caret moving to another issue switches it, and out
+      // of every issue closes it; typing closes it; Not an error removes the underline and puts
+      // the pair in the ignore set under the box's source.
+      const card = await openedPopover(ctx, "He go", { explain: explanationFor });
+      const page = await ctx.driver.getWindowHandle();
+      const options = (await ctx.driver.getAllWindowHandles()).find((h) => h !== page);
+      const heGo = card.anchor;
+      const [iSeen] = await ctx.wordRects("I seen");
+      const [photo] = await ctx.wordRects("make a photo");
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectBoxFocused();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      // Regenerate, with the keyboard inside the card (Tab: the text, its link, Not an error,
+      // Regenerate).
+      let requests = ctx.llmRequests();
+      await ctx.clickCardHeader(card.bounds, heGo);
+      await ctx.pressKeys(Key.TAB, Key.TAB, Key.TAB, Key.TAB, Key.ENTER);
+      await ctx.waitForLLMRequests(requests + 1);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      // Escape in the card closes it, and the box has the focus again.
+      await ctx.pressKeys(Key.ESCAPE);
+      await ctx.waitForNoPopover(heGo);
+      await ctx.expectBoxFocused();
+      await ctx.expectNoSelectedBackground("He go", "grammar");
+
+      // Another issue, then a click elsewhere in the page.
+      await ctx.clickWord("I seen");
+      await ctx.waitForPopover(iSeen);
+      await ctx.expectSelectedBackground("I seen", "grammar", { tolerance: 40 });
+      await ctx.clickAt(1000, 600);
+      await ctx.waitForNoPopover(iSeen);
+
+      // The caret moves with the keys: from one issue to another (the card switches), and out of
+      // every issue (the card closes). The keyboard focus never left the box.
+      await ctx.clickWord("I seen");
+      await ctx.waitForPopover(iSeen);
+      await ctx.setCaretAfter("He g");
+      await ctx.pressKeys(Key.ARROW_LEFT);
+      await ctx.waitForPopover(heGo);
+      await ctx.waitForNoPopover(iSeen, { left: Math.min(Math.max(iSeen.left, 8), WIDTH - 368) });
+      await ctx.expectBoxFocused();
+      await ctx.pressKeys(Key.HOME);
+      await ctx.waitForNoPopover(heGo);
+
+      // Typing closes it, and the underline of the issue typed into goes at once.
+      await ctx.clickWord("He go");
+      await ctx.waitForPopover(heGo);
+      requests = ctx.llmRequests();
+      await ctx.pressKeys("x");
+      await ctx.waitForNoPopover(heGo);
+      // The pause in typing starts a new check; its result (new issues, new ids) comes before
+      // anything else is done here. "Hex go" is no longer found in the text by the locator.
+      await ctx.waitForLLMRequests(requests + 1);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      // Not an error (Tab: the text, Not an error).
+      await ctx.clickWord("make a photo");
+      const bounds = await ctx.waitForPopover(photo);
+      await ctx.waitForLLMRequests(ctx.llmRequests());
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.clickCardHeader(bounds, photo);
+      await ctx.pressKeys(Key.TAB, Key.TAB, Key.ENTER);
+      await ctx.waitForNoPopover(photo);
+      await ctx.expectNoUnderlineUnder("make a photo", "vocabulary");
+      await ctx.driver.switchTo().window(options);
+      const ignored = await ctx.sessionKeys("ignore:session:");
+      if (ignored.length !== 1) throw new Error(`the ignore set holds ${JSON.stringify(ignored)}`);
+      await ctx.expectNoRecordedMistakes();
+    },
+  },
+  "popover-editable": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. The popover of an issue in editable content: the click point is found from the
+      // rectangles of the Range, the card is next to the line, and typing closes it.
+      const card = await openedPopover(ctx, "He go", {
+        page: "contenteditable.html",
+        explain: explanationFor,
+      });
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectBoxFocused();
+      await ctx.expectSelectedBackground("He go", "grammar");
+      await ctx.pressKeys("x");
+      await ctx.waitForNoPopover(card.anchor);
+    },
+  },
+  "popover-input": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. The popover of an issue in a one-line input.
+      const card = await openedPopover(ctx, "I seen", {
+        page: "input.html",
+        explain: explanationFor,
+      });
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectBoxFocused();
+      await ctx.pressKeys(Key.ESCAPE);
+      await ctx.waitForNoPopover(card.anchor);
+    },
+  },
+  "popover-link": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. A link in the explanation never navigates anything: it asks first (inside the card),
+      // and opens in a new tab only after Open link.
+      const card = await openedPopover(ctx, "He go", { explain: EXPLAIN_REPLY });
+      await ctx.waitForLLMRequests(2);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const tabs = (await ctx.driver.getAllWindowHandles()).length;
+      await ctx.clickCardHeader(card.bounds, card.anchor);
+      // Tab: the text, then the link in it, which is scrolled into view.
+      await ctx.pressKeys(Key.TAB, Key.TAB, Key.ENTER);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      if ((await ctx.driver.getAllWindowHandles()).length !== tabs) {
+        throw new Error("the link opened before it was confirmed");
+      }
+      // The card grew to hold the confirmation; Open link has the focus.
+      await ctx.pressKeys(Key.ENTER);
+      await ctx.driver.wait(
+        async () => (await ctx.driver.getAllWindowHandles()).length === tabs + 1,
+        PAGE_TIMEOUT_MS,
+        "the confirmed link never opened in a new tab",
+      );
+    },
+  },
+  "underlines-sites-not-on": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. A site that is not on never gets underlines or a frame, whatever the user types:
+      // not a site that is off, and not a site that has not been asked yet.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "off" } });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+
+      await ctx.openWebPage("textarea.html");
+      const page = await ctx.driver.getWindowHandle();
+      await ctx.focusBox();
+      await ctx.typeInBox(" and some more words to write");
+      await ctx.clickWord("I seen");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await ctx.expectNoUnderlines();
+      if (await ctx.pageModeHostPresent()) throw new Error("an off site has a page-mode element");
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent from an off site");
+
+      // A site with no choice yet: the card asks, and until Turn on there is no frame, no check
+      // and no underline.
+      await ctx.driver.switchTo().window(options);
+      await ctx.seedSites({});
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusUntilPrompt();
+      await ctx.typeInBox(" and some more words to write");
+      await ctx.clickWord("I seen");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await ctx.expectNoUnderlines();
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent before Turn on");
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made before Turn on");
+    },
+  },
   // Step 14: page mode asks on each site (SPEC section 4.11). The prompt card lives in a closed
   // shadow root, so the harness finds its buttons from the pixels of the picture.
   welcome: {
@@ -2393,6 +2710,36 @@ const CHECK_REPLY = {
   usage: { prompt_tokens: 812, completion_tokens: 164 },
 };
 
+/** The canned check of `LONG_TEXT`: a mistake in its fourth, sixth and tenth lines. */
+const LONG_REPLY = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "sister seen",
+        error_type: "verb_form",
+        message: "Use the past tense: sister saw.",
+        context_before: "My ",
+        context_after: " a deer",
+      },
+      {
+        text: "father tell",
+        error_type: "subject_verb_agreement",
+        message: "Use tells with father.",
+        context_before: "My ",
+        context_after: " us old",
+      },
+      {
+        text: "make a photo",
+        error_type: "collocation",
+        message: "Say take a photo.",
+        context_before: "My brother ",
+        context_after: " of the whole",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 600, completion_tokens: 90 },
+};
+
 /** A second text for the statistics scenarios. It repeats two error types of the sample text. */
 const TEXT_B =
   "She dont like apples. I have a apple and a orange. My brother have two cats. I want go to the park.";
@@ -2688,6 +3035,51 @@ function explanationFor(request) {
   };
 }
 
+/**
+ * The page-mode test page `name` with its text box focused, checked (the canned reply), and then
+ * left, so that no caret or focus ring shows: the underlines and the badge of a box that has issues
+ * stay. Returns after the badge has its count.
+ */
+async function checkedBox(ctx, name, { reply = CHECK_REPLY, id = "box" } = {}) {
+  ctx.llm.setReplies(reply);
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.turnOnPageMode();
+  await ctx.openPageModePage(name);
+  await ctx.focusBox(id);
+  await ctx.waitForBadge("grammar", id);
+  await ctx.stabilise();
+  // The focus ring of the box fades out of its own accord.
+  await new Promise((resolve) => setTimeout(resolve, 800));
+}
+
+/**
+ * Page-mode text box with a check done, then a click on `snippet`: the popover opens for it. Uses
+ * the page whose caret does not blink, because the box keeps the focus. `explain` is the reply to
+ * the explanation request. Returns where the underline is and where the card is (its border rows).
+ */
+async function openedPopover(
+  ctx,
+  snippet,
+  { page = "textarea-still.html", explain = EXPLAIN_REPLY, dark = false } = {},
+) {
+  ctx.llm.setReplies((request) =>
+    isExplainRequest(request)
+      ? typeof explain === "function"
+        ? explain(request)
+        : explain
+      : CHECK_REPLY,
+  );
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.turnOnPageMode();
+  await ctx.openPageModePage(page);
+  await ctx.focusBox();
+  await ctx.waitForBadge("grammar");
+  const [anchor] = await ctx.wordRects(snippet);
+  await ctx.clickWord(snippet);
+  const bounds = await ctx.waitForPopover(anchor, { dark });
+  return { anchor, bounds };
+}
+
 /** The width of the narrow window scenarios, below the 800 px where the layout changes. */
 const NARROW_WIDTH = 720;
 
@@ -2969,6 +3361,16 @@ const BADGE_COLORS = {
   spinner: [0xff, 0xff, 0xff],
 };
 
+/** The colours of the underlines (src/content/style.ts), for a light and a dark page. */
+const UNDERLINE_PALETTE = {
+  light: {
+    grammar: [0xd5, 0x5e, 0x00],
+    vocabulary: [0x00, 0x72, 0xb2],
+    syntax: [0x00, 0x9e, 0x73],
+  },
+  dark: { grammar: [0xff, 0x8a, 0x4c], vocabulary: [0x56, 0xb4, 0xe9], syntax: [0x2f, 0xd3, 0xa2] },
+};
+
 function closeTo(pixel, expected, tolerance = 8) {
   return pixel.every((channel, i) => Math.abs(channel - expected[i]) <= tolerance);
 }
@@ -3072,7 +3474,7 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       if (width !== expectedWidth || height !== HEIGHT) {
         throw new Error(`the screenshot is ${width}x${height}, not ${expectedWidth}x${HEIGHT}`);
       }
-      const relative = `${scenario.dir}/${name}.png`;
+      const relative = `${scenario.dir}/${scenario.file ?? name}.png`;
       const committed = `${root}docs/screenshots/${relative}`;
       const toCommitted = policy.updateAll || policy.update.has(name) || !existsSync(committed);
       const base = toCommitted ? "docs/screenshots" : "screenshots-out";
@@ -4191,6 +4593,288 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         throw new Error(`#${id} has a badge (the pixel at ${x},${y - 7} is ${String(pixel)})`);
       }
     },
+    /**
+     * The rectangles (window coordinates, one per line) of the first `snippet` in a text box of the
+     * page, measured in the page itself, without the extension: for a textarea or an input, with a
+     * hidden copy of its text (same font, padding, width and scroll position), for editable content
+     * with a `Range` over the text. The underlines must sit on exactly these.
+     */
+    async wordRects(snippet, id = "box") {
+      return driver.executeScript(
+        `const box = document.getElementById(arguments[1]);
+         const snippet = arguments[0];
+         const out = (rects) => [...rects].map((r) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom }));
+         if (box.isContentEditable) {
+           const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+             const at = node.data.indexOf(snippet);
+             if (at < 0) continue;
+             const range = document.createRange();
+             range.setStart(node, at);
+             range.setEnd(node, at + snippet.length);
+             return out(range.getClientRects());
+           }
+           return [];
+         }
+         const at = box.value.indexOf(snippet);
+         if (at < 0) return [];
+         const style = getComputedStyle(box);
+         const px = (v) => parseFloat(v) || 0;
+         const rect = box.getBoundingClientRect();
+         const copy = document.createElement("div");
+         for (const name of ["font", "line-height", "letter-spacing", "word-spacing", "text-indent",
+           "white-space", "overflow-wrap", "word-break", "tab-size", "text-align", "padding"]) {
+           copy.style.setProperty(name, style.getPropertyValue(name));
+         }
+         if (box.tagName === "INPUT") copy.style.setProperty("white-space", "pre");
+         copy.style.cssText += ";position:fixed;visibility:hidden;box-sizing:border-box;margin:0;border:0;";
+         copy.style.width = box.clientWidth + "px";
+         const before = document.createTextNode(box.value.slice(0, at));
+         const span = document.createElement("span");
+         span.textContent = snippet;
+         copy.append(before, span, document.createTextNode(box.value.slice(at + snippet.length)));
+         document.body.append(copy);
+         let top = rect.top + px(style.borderTopWidth) - box.scrollTop;
+         const left = rect.left + px(style.borderLeftWidth) - box.scrollLeft;
+         if (box.tagName === "INPUT") top += (box.clientHeight - copy.getBoundingClientRect().height) / 2;
+         copy.style.left = left + "px";
+         copy.style.top = top + "px";
+         const rects = out(span.getClientRects());
+         copy.remove();
+         return rects;`,
+        snippet,
+        id,
+      );
+    },
+    /**
+     * Fails unless the underline of `snippet` (the first one in the box) is drawn on every line it
+     * covers, in the colour of `category` (`dark` for a dark page), from its first character to its
+     * last, a little below the text. The colours are read from the picture, as a user sees it.
+     * Returns the rectangles. A wavy, dashed or dotted line has gaps, so only a share of the
+     * pixels of a line have its colour.
+     */
+    async expectUnderline(snippet, category, { id = "box", dark = false } = {}) {
+      const rects = await ctx.wordRects(snippet, id);
+      if (rects.length === 0) throw new Error(`"${snippet}" is not in #${id}`);
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const color = UNDERLINE_PALETTE[dark ? "dark" : "light"][category];
+      for (const rect of rects) {
+        let first = Infinity;
+        let last = -Infinity;
+        let count = 0;
+        const top = Math.round(rect.bottom) - 5;
+        const bottom = Math.round(rect.bottom) + 5;
+        for (let y = Math.max(0, top); y <= bottom; y++) {
+          for (let x = Math.round(rect.left) - 6; x <= Math.round(rect.right) + 6; x++) {
+            if (!closeTo(png.pixel(x, y), color, 40)) continue;
+            count++;
+            first = Math.min(first, x);
+            last = Math.max(last, x);
+          }
+        }
+        const width = rect.right - rect.left;
+        if (count < width * 0.3) {
+          throw new Error(
+            `no ${category} underline under "${snippet}" at ${Math.round(rect.left)},${Math.round(rect.bottom)}: ${count} pixels`,
+          );
+        }
+        // From its first character to its last: within three pixels of the word's rectangle.
+        if (
+          first < rect.left - 3 ||
+          last > rect.right + 3 ||
+          first > rect.left + 6 ||
+          last < rect.right - 6
+        ) {
+          throw new Error(
+            `the ${category} underline of "${snippet}" spans ${first}..${last}, the word is ${Math.round(rect.left)}..${Math.round(rect.right)}`,
+          );
+        }
+      }
+      return rects;
+    },
+    /** The card is gone: no border rows next to the underline `anchor`, above or below it. */
+    async waitForNoPopover(anchor, { left } = {}) {
+      const at = left ?? Math.min(Math.max(anchor.left, 8), WIDTH - 360 - 8);
+      await driver.wait(
+        async () =>
+          (await ctx.popoverBounds(at, [anchor.bottom, Math.min(HEIGHT, anchor.bottom + 360)])) ===
+            undefined &&
+          (await ctx.popoverBounds(at, [Math.max(0, anchor.top - 360), anchor.top])) === undefined,
+        PAGE_TIMEOUT_MS,
+        "the popover never closed",
+      );
+    },
+    /** Clicks the header line of the card (inside it, on text): the card's page has the focus. */
+    async clickCardHeader(bounds, anchor) {
+      const left = Math.min(Math.max(anchor.left, 8), WIDTH - 360 - 8);
+      await ctx.clickAt(Math.round(left + 40), bounds.top + 16);
+    },
+    /** Presses keys where the keyboard focus is (a text box of the page, or inside the card). */
+    async pressKeys(...keys) {
+      const actions = driver.actions({ async: true });
+      for (const key of keys) actions.sendKeys(key);
+      await actions.perform();
+    },
+    /** Puts the caret right after the first `before` of the box, with a script (the keys are the user's). */
+    async setCaretAfter(before, id = "box") {
+      await driver.executeScript(
+        `const box = document.getElementById(arguments[1]);
+         const at = box.value.indexOf(arguments[0]) + arguments[0].length;
+         box.focus();
+         box.setSelectionRange(at, at);`,
+        before,
+        id,
+      );
+    },
+    /** Fails if the first line of `snippet` still has the background of a selected issue. */
+    async expectNoSelectedBackground(snippet, category, { id = "box" } = {}) {
+      const [rect] = await ctx.wordRects(snippet, id);
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const color = UNDERLINE_PALETTE.light[category];
+      const expected = color.map((c) => Math.round(255 * 0.8 + c * 0.2));
+      const y = Math.round(rect.top) + 1;
+      for (let x = Math.round(rect.left) + 1; x < Math.round(rect.right) - 1; x++) {
+        if (closeTo(png.pixel(x, y), expected, 10))
+          throw new Error(`"${snippet}" is still selected`);
+      }
+    },
+    /** Fails if `snippet` has an underline of `category` under it (it was removed by an edit). */
+    async expectNoUnderlineUnder(snippet, category, { id = "box", dark = false } = {}) {
+      const rects = await ctx.wordRects(snippet, id);
+      if (rects.length === 0) throw new Error(`"${snippet}" is not in #${id}`);
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const color = UNDERLINE_PALETTE[dark ? "dark" : "light"][category];
+      for (const rect of rects) {
+        for (let y = Math.round(rect.bottom) - 5; y <= Math.round(rect.bottom) + 5; y++) {
+          for (let x = Math.round(rect.left) + 2; x < Math.round(rect.right) - 2; x++) {
+            if (closeTo(png.pixel(x, y), color, 25)) {
+              throw new Error(`"${snippet}" is still underlined (${x},${y})`);
+            }
+          }
+        }
+      }
+    },
+    /** Fails if a pixel of the box has the colour of an underline, light or dark (the page has none of them). */
+    async expectNoUnderlines(id = "box") {
+      const rect = await driver.executeScript(
+        `const r = document.getElementById(arguments[0]).getBoundingClientRect();
+         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`,
+        id,
+      );
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      for (let y = Math.round(rect.top); y < Math.round(rect.bottom); y++) {
+        for (let x = Math.round(rect.left); x < Math.round(rect.right); x++) {
+          const pixel = png.pixel(x, y);
+          for (const palette of Object.values(UNDERLINE_PALETTE)) {
+            for (const color of Object.values(palette)) {
+              if (closeTo(pixel, color, 12)) {
+                throw new Error(`#${id} has an underline-coloured pixel at ${x},${y}`);
+              }
+            }
+          }
+        }
+      }
+    },
+    /**
+     * Fails unless the first line of `snippet` has the selected-issue background: its category
+     * colour at 20% over the page's colour (`page`, white by default), read along the top edge of
+     * the word's rectangle, where there is no letter.
+     */
+    async expectSelectedBackground(
+      snippet,
+      category,
+      { id = "box", dark = false, page, tolerance = 10 } = {},
+    ) {
+      const [rect] = await ctx.wordRects(snippet, id);
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const color = UNDERLINE_PALETTE[dark ? "dark" : "light"][category];
+      const base = page ?? (dark ? [0x1e, 0x21, 0x27] : [255, 255, 255]);
+      const expected = color.map((c, i) => Math.round(base[i] * 0.8 + c * 0.2));
+      const y = Math.round(rect.top) + 1;
+      let matching = 0;
+      let total = 0;
+      for (let x = Math.round(rect.left) + 1; x < Math.round(rect.right) - 1; x++) {
+        total++;
+        if (closeTo(png.pixel(x, y), expected, tolerance)) matching++;
+      }
+      if (matching < total * 0.8) {
+        throw new Error(
+          `"${snippet}" has no selected background: ${matching} of ${total} pixels at y=${y} are ${String(expected)}`,
+        );
+      }
+    },
+    /** Clicks the middle of the first line of `snippet` in a text box, as a user does. */
+    async clickWord(snippet, id = "box", { dx = 0 } = {}) {
+      const [rect] = await ctx.wordRects(snippet, id);
+      if (rect === undefined) throw new Error(`"${snippet}" is not in #${id}`);
+      await ctx.clickAt(
+        Math.round((rect.left + rect.right) / 2) + dx,
+        Math.round((rect.top + rect.bottom) / 2),
+      );
+    },
+    /**
+     * The border rows of the card of the popover: it is 360 px wide, starts at `left`, and its
+     * border is the frame's border colour on a stretch clear of its rounded corners. Returns `{ top, bottom }`
+     * (the first and the last row of the border), or undefined when there is no card.
+     */
+    async popoverBounds(left, between, { dark = false } = {}) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const border = dark ? [0x3d, 0x42, 0x4a] : [0xc9, 0xce, 0xd6];
+      const rows = [];
+      for (
+        let y = Math.max(0, Math.round(between[0]));
+        y < Math.min(HEIGHT, Math.round(between[1]));
+        y++
+      ) {
+        // A border row is the border colour all along a stretch clear of the rounded corners.
+        let run = true;
+        for (let x = Math.round(left) + 30; x < Math.round(left) + 90 && run; x++) {
+          run = closeTo(png.pixel(x, y), border, 6);
+        }
+        if (run) rows.push(y);
+      }
+      // The card has two border rows (top and bottom).
+      return rows.length >= 2 ? { top: rows[0], bottom: rows[rows.length - 1], rows } : undefined;
+    },
+    /**
+     * Waits until the popover's card is drawn next to the underline `anchor` (a rectangle from
+     * `wordRects`): it is 360 px wide and starts at the underline's left edge, moved to stay in the
+     * window, and is below it or above it. Returns its border rows and where it went.
+     */
+    async waitForPopover(anchor, { dark = false, side } = {}) {
+      const left = Math.min(Math.max(anchor.left, 8), WIDTH - 360 - 8);
+      let found;
+      await driver.wait(
+        async () => {
+          const below = await ctx.popoverBounds(
+            left,
+            [anchor.bottom, Math.min(HEIGHT, anchor.bottom + 360)],
+            { dark },
+          );
+          const above = await ctx.popoverBounds(left, [Math.max(0, anchor.top - 360), anchor.top], {
+            dark,
+          });
+          const rows = side === "above" ? undefined : below;
+          const upRows = side === "below" ? undefined : above;
+          if (rows !== undefined) found = { ...rows, side: "below" };
+          else if (upRows !== undefined) found = { ...upRows, side: "above" };
+          else return false;
+          return true;
+        },
+        PAGE_TIMEOUT_MS,
+        "the popover never showed",
+      );
+      const gap = found.side === "below" ? found.top - anchor.bottom : anchor.top - found.bottom;
+      if (gap < 3 || gap > 10) throw new Error(`the card is ${gap}px from the underline`);
+      return found;
+    },
+    /** Fails unless the text box still has the keyboard focus (the popover never takes it). */
+    async expectBoxFocused(id = "box") {
+      const active = await driver.executeScript(
+        "return document.activeElement?.id ?? document.activeElement?.tagName",
+      );
+      if (active !== id) throw new Error(`the focus is on ${active}, not on #${id}`);
+    },
     /** The number of requests the fake LLM has received since the scenario began. */
     llmRequests() {
       return llm.requests.length;
@@ -4548,6 +5232,16 @@ async function main() {
             await SCENARIOS[name].run(ctx);
           } catch (err) {
             failures.push({ name, err });
+            // What the browser showed when it failed, for the person who has to find out why.
+            try {
+              await mkdir(`${root}screenshots-out/failed`, { recursive: true });
+              await writeFile(
+                `${root}screenshots-out/failed/${name}.png`,
+                Buffer.from(await driver.takeScreenshot(), "base64"),
+              );
+            } catch {
+              // The browser is gone: there is nothing to show.
+            }
           }
         }
       } finally {

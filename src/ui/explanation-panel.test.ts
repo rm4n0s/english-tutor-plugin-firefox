@@ -527,3 +527,23 @@ describe("layout", () => {
     expect(q("#explain-panel").classList.contains("explain-compact")).toBe(compact);
   });
 });
+
+describe("ExplanationPanel: the row of buttons", () => {
+  it("is the row of Not an error, Regenerate and Retry, so the popover can add All issues to it", () => {
+    const panel = mountPanel("compact");
+    panel.showLoading(TARGET);
+    const extra = document.createElement("button");
+    extra.textContent = "All issues";
+    panel.actionRow.append(extra);
+    expect(host.querySelector("#explain-actions")).toBe(panel.actionRow);
+    expect([...panel.actionRow.children].map((b) => b.textContent)).toEqual([
+      "Not an error",
+      "Regenerate",
+      "Retry",
+      "All issues",
+    ]);
+    // It stays when the state changes.
+    panel.showReady("Done.");
+    expect(extra.isConnected).toBe(true);
+  });
+});

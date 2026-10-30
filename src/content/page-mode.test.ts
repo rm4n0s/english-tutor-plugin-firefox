@@ -7,6 +7,7 @@ import type { SiteConfig } from "../core/page-mode/messages";
 import { frameIdOfFragment, type ContentMessage } from "../core/page-mode/protocol";
 import { FakeClock, FakeScheduler } from "../core/testing/fake-clock";
 import { PageFrame } from "../page-ui/frame";
+import type { PopoverHost } from "../page-ui/popover";
 import { FakeRunner, MODEL, settle } from "../page-ui/testing";
 import { FakeFrameClaim, FakePageModeRuntime } from "../platform/testing/fake-page-mode";
 import { FakePortBus } from "../platform/testing/fake-page-port";
@@ -43,6 +44,7 @@ const typeInto = (box: HTMLTextAreaElement | HTMLInputElement, value: string) =>
 };
 
 interface Options {
+  popover?: PopoverHost;
   html?: string;
   config?: SiteConfig;
   frame?: "ok" | "never";
@@ -98,6 +100,7 @@ async function setup(options: Options = {}) {
           scheduler,
           runner,
           settings: { delaySeconds: 3, getModel: () => MODEL, load: () => Promise.resolve() },
+          ...(options.popover === undefined ? {} : { popover: options.popover }),
         }),
         log,
       });
@@ -1301,5 +1304,429 @@ describe("PageModeContent: the prompt", () => {
       focusIn(t.box);
       expect(t.content.promptOpen).toBe(false);
     });
+  });
+});
+
+/** The frame's card, as a fake: it reports a height and records what it was asked. */
+class FakePopover implements PopoverHost {
+  readonly opened: { box: number; issue: number; maxHeight: number }[] = [];
+  readonly closed: (number | undefined)[] = [];
+  height = 180;
+  send: ((message: unknown) => void) | undefined;
+
+  open(
+    session: { id: number },
+    issue: number,
+    maxHeight: number,
+    send: (message: never) => void,
+  ): void {
+    this.opened.push({ box: session.id, issue, maxHeight });
+    this.send = send as (message: unknown) => void;
+    send({ type: "popover-size", box: session.id, issue, height: this.height } as never);
+  }
+
+  close(box?: number): void {
+    this.closed.push(box);
+  }
+}
+
+/** Where each issue's underline is: issue `n` is the rectangle 60 * n + 100 .. 60 * n + 150, y 110..130. */
+function layOutUnderlines(): void {
+  for (const name of ["clientWidth", "clientHeight"] as const) {
+    Object.defineProperty(HTMLElement.prototype, name, {
+      configurable: true,
+      // Only the text boxes have a size here: the document keeps the window's own.
+      get(this: Element) {
+        const isBox = this.tagName === "TEXTAREA" || this.hasAttribute("contenteditable");
+        if (!isBox) return 0;
+        return name === "clientWidth" ? 280 : 130;
+      },
+    });
+  }
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+    const id = Number((this as HTMLElement).dataset.issueId);
+    if (!Number.isInteger(id)) return [] as unknown as DOMRectList;
+    const left = 60 * id + 100;
+    return [{ left, top: 110, right: left + 50, bottom: 130 }] as unknown as DOMRectList;
+  });
+}
+
+const mouse = (type: string, target: Element, x = 0, y = 0) =>
+  target.dispatchEvent(
+    trusted(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, composed: true })),
+  );
+const key = (type: "keydown" | "keyup", key: string, target: Element = document.body) =>
+  target.dispatchEvent(trusted(new KeyboardEvent(type, { key, bubbles: true })));
+const caretTo = (box: HTMLTextAreaElement, at: number) => {
+  box.setSelectionRange(at, at);
+};
+
+describe("PageModeContent: underlines and the explanation popover", () => {
+  afterEach(() => {
+    for (const name of ["clientWidth", "clientHeight"] as const) {
+      Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  });
+
+  async function checked(extra: Options = {}) {
+    const popover = new FakePopover();
+    const t = await setup({ popover, ...extra });
+    layOutUnderlines();
+    t.runner.answer(resultOf(ISSUES));
+    await t.focusAndLoad();
+    t.clearSent();
+    const spans = () => [...(t.layer()?.querySelectorAll<HTMLElement>("span.issue") ?? [])];
+    const view = () => {
+      const frame = t.iframe();
+      return frame === null
+        ? undefined
+        : {
+            display: frame.style.getPropertyValue("display"),
+            visibility: frame.style.getPropertyValue("visibility"),
+            left: frame.style.getPropertyValue("left"),
+            top: frame.style.getPropertyValue("top"),
+            width: frame.style.getPropertyValue("width"),
+            height: frame.style.getPropertyValue("height"),
+          };
+    };
+    /** Clicks the underline of an issue (by number) and lets the frame answer. */
+    const clickIssue = async (n: number) => {
+      mouse("mouseup", t.box, 60 * n + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+    };
+    return { ...t, popover, spans, view, clickIssue };
+  }
+
+  it("draws an underline for each issue as soon as the frame has answered, in the category's style", async () => {
+    const t = await checked();
+    expect(t.spans().map((s) => s.textContent)).toEqual(["I seen", "He go"]);
+    expect(t.spans().map((s) => s.style.getPropertyValue("text-decoration-style"))).toEqual([
+      "wavy",
+      "wavy",
+    ]);
+    expect(t.box.value).toBe(TEXT);
+  });
+
+  it("moves and removes the underlines at once on an edit, before the frame answers", async () => {
+    const t = await checked();
+    // Typing inside "I seen" removes it; the other underline stays (it moved by the added letter).
+    typeInto(t.box, "Yesterday I sXeen him. He go home.");
+    expect(t.spans().map((s) => s.textContent)).toEqual(["He go"]);
+    expect(t.content.boxes[0]?.issues.map((i) => [i.start, i.end])).toEqual([[23, 28]]);
+    // Words before them move both.
+    typeInto(t.box, `Oh, so Yesterday I sXeen him. He go home.`);
+    expect(t.content.boxes[0]?.issues.map((i) => [i.start, i.end])).toEqual([[30, 35]]);
+    expect(t.spans().map((s) => s.textContent)).toEqual(["He go"]);
+  });
+
+  it("draws nothing for a box that is out of the window", async () => {
+    const t = await checked();
+    expect(t.spans()).toHaveLength(2);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      () =>
+        ({ left: 100, top: -500, right: 400, bottom: -350, width: 300, height: 150 }) as DOMRect,
+    );
+    t.content.reposition();
+    expect(t.spans()).toHaveLength(0);
+  });
+
+  it("redraws at most once per animation frame while the page scrolls", async () => {
+    const t = await checked();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const drawn = vi.spyOn(t.content.underlinesOf(t.content.boxes[0] as never) as never, "draw");
+    for (let i = 0; i < 5; i++) window.dispatchEvent(trusted(new Event("scroll")));
+    expect(frames).toHaveLength(1);
+    expect(drawn).not.toHaveBeenCalled();
+    frames[0]?.(0);
+    expect(drawn).toHaveBeenCalledTimes(1);
+  });
+
+  describe("opening", () => {
+    it("opens when the click is inside an underline: the frame is asked, and shown below it once it has its size", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      expect(t.sent()).toEqual([{ type: "popover-open", box: 1, issue: 1, maxHeight: 340 }]);
+      expect(t.popover.opened).toEqual([{ box: 1, issue: 1, maxHeight: 340 }]);
+      expect(t.view()).toEqual({
+        display: "block",
+        visibility: "visible",
+        left: "160px",
+        top: "136px",
+        width: "360px",
+        height: "180px",
+      });
+      expect(t.content.popover?.issue).toBe(1);
+      // The selected issue has its background (20% of the colour of its category).
+      expect(t.spans()[0]?.style.getPropertyValue("background-color")).toBe(
+        "rgba(213, 94, 0, 0.2)",
+      );
+      expect(t.spans()[1]?.style.getPropertyValue("background-color")).toBe("");
+    });
+
+    it("opens when the caret lands inside an issue even if the point is not on an underline", async () => {
+      const t = await checked();
+      caretTo(t.box, 12);
+      mouse("mouseup", t.box, 700, 700);
+      await t.getFrame()?.idle();
+      expect(t.popover.opened.map((o) => o.issue)).toEqual([1]);
+    });
+
+    it("does not open for a click outside every issue", async () => {
+      const t = await checked();
+      caretTo(t.box, 3);
+      mouse("mouseup", t.box, 700, 700);
+      await t.getFrame()?.idle();
+      expect(t.popover.opened).toEqual([]);
+      expect(t.content.popover).toBeUndefined();
+      expect(t.view()?.display).toBe("none");
+    });
+
+    it("does not open for a caret that only moves (keys) when no popover is open", async () => {
+      const t = await checked();
+      caretTo(t.box, 12);
+      key("keyup", "ArrowRight", t.box);
+      document.dispatchEvent(trusted(new Event("selectionchange")));
+      await t.getFrame()?.idle();
+      expect(t.popover.opened).toEqual([]);
+    });
+
+    it("ignores a click that a script of the page dispatched", async () => {
+      const t = await checked();
+      t.box.dispatchEvent(
+        new MouseEvent("mouseup", { bubbles: true, clientX: 180, clientY: 120, composed: true }),
+      );
+      await t.getFrame()?.idle();
+      expect(t.popover.opened).toEqual([]);
+    });
+
+    it("never takes the focus from the text box", async () => {
+      const t = await checked();
+      t.box.focus();
+      await t.clickIssue(1);
+      expect(document.activeElement).toBe(t.box);
+    });
+
+    it("does not open when the frame is blocked", async () => {
+      const t = await setup({ frame: "never" });
+      layOutUnderlines();
+      focusIn(t.box);
+      await settle();
+      t.loadFrame();
+      t.scheduler.advance(FRAME_TIMEOUT_MS);
+      mouse("mouseup", t.box, 180, 120);
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("puts the card above the underline when there is no room below", async () => {
+      const t = await checked();
+      t.popover.height = 90;
+      vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(200);
+      await t.clickIssue(1);
+      // The underline is at y 110..130 and the window is 200 high: 90 px does not fit below
+      // (136 + 90 > 192) but does above it (110 - 6 - 90).
+      expect(t.view()?.top).toBe("14px");
+      expect(t.view()?.height).toBe("90px");
+    });
+  });
+
+  describe("switching and closing", () => {
+    it("switches to another issue when the caret moves into it, and closes when it leaves them all", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      t.clearSent();
+      caretTo(t.box, 24);
+      key("keyup", "ArrowRight", t.box);
+      await t.getFrame()?.idle();
+      expect(t.sent()).toEqual([{ type: "popover-open", box: 1, issue: 2, maxHeight: 340 }]);
+      expect(t.view()?.left).toBe("220px");
+      expect(t.spans()[1]?.style.getPropertyValue("background-color")).not.toBe("");
+      expect(t.spans()[0]?.style.getPropertyValue("background-color")).toBe("");
+      t.clearSent();
+      caretTo(t.box, 2);
+      key("keyup", "ArrowLeft", t.box);
+      await t.getFrame()?.idle();
+      expect(t.sent()).toEqual([{ type: "popover-close", box: 1 }]);
+      expect(t.view()?.display).toBe("none");
+      expect(t.content.popover).toBeUndefined();
+      expect(t.spans().every((s) => s.style.getPropertyValue("background-color") === "")).toBe(
+        true,
+      );
+    });
+
+    it("keeps the card while the caret stays in the same issue", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      t.clearSent();
+      caretTo(t.box, 14);
+      key("keyup", "ArrowRight", t.box);
+      document.dispatchEvent(trusted(new Event("selectionchange")));
+      await t.getFrame()?.idle();
+      expect(t.sent()).toEqual([]);
+      expect(t.content.popover?.issue).toBe(1);
+    });
+
+    it("closes on Escape, and not on an Escape a script of the page made", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(t.content.popover?.issue).toBe(1);
+      key("keydown", "Escape");
+      await t.getFrame()?.idle();
+      expect(t.content.popover).toBeUndefined();
+      expect(t.popover.closed).toEqual([1]);
+      expect(t.view()?.display).toBe("none");
+    });
+
+    it("closes on a press outside the box, but not on a press in the box", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      mouse("mousedown", t.box, 300, 200);
+      expect(t.content.popover?.issue).toBe(1);
+      mouse("mousedown", document.body, 900, 700);
+      await t.getFrame()?.idle();
+      expect(t.content.popover).toBeUndefined();
+      expect(t.popover.closed).toEqual([1]);
+    });
+
+    it("does not close on a press on its own host (the badge, or the card)", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      const host = t.host()!;
+      mouse("mousedown", host, 900, 700);
+      expect(t.content.popover?.issue).toBe(1);
+    });
+
+    it("closes when the user types, before the underlines are drawn again", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      t.clearSent();
+      typeInto(t.box, "Yesterday I seen him. He go home.!");
+      expect(t.content.popover).toBeUndefined();
+      expect(t.sent().map((m) => m.type)).toEqual(["popover-close", "edit"]);
+      expect(t.spans().every((s) => s.style.getPropertyValue("background-color") === "")).toBe(
+        true,
+      );
+    });
+
+    it("closes with the issue when an edit removes it", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      typeInto(t.box, "Yesterday I sXeen him. He go home.");
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("closes when the focus goes to another element of the page, and stays when it goes into the card", async () => {
+      const other =
+        '<textarea id="a">Yesterday I seen him. He go home.</textarea><button id="b">x</button>';
+      const t = await checked({ html: other });
+      await t.clickIssue(1);
+      // The focus goes into the card's frame: the page sees a focus on our host.
+      focusOut(t.box);
+      const host = t.host()!;
+      host.dispatchEvent(trusted(new FocusEvent("focusin", { bubbles: true })));
+      t.scheduler.advance(0);
+      expect(t.content.popover?.issue).toBe(1);
+      // Then to a button of the page.
+      const button = document.getElementById("b") as Element;
+      button.dispatchEvent(trusted(new FocusEvent("focusin", { bubbles: true })));
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("closes when the box loses the focus to nothing", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      focusOut(t.box);
+      t.scheduler.advance(0);
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("closes when the frame says so (Escape in the card, Not an error), and gives the focus back", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      // The focus is in the card: the page's active element is our host.
+      vi.spyOn(document, "activeElement", "get").mockReturnValue(t.host()!);
+      const focus = vi.spyOn(t.box, "focus");
+      t.popover.send?.({ type: "popover-closed", box: 1 });
+      expect(t.content.popover).toBeUndefined();
+      expect(t.view()?.display).toBe("none");
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      // It did not echo the close to the frame.
+      expect(t.popover.closed).toEqual([]);
+    });
+
+    it("closes when the underline leaves the box (it scrolls out of sight)", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      vi.spyOn(Element.prototype, "getClientRects").mockImplementation(
+        () => [{ left: 160, top: 400, right: 210, bottom: 420 }] as unknown as DOMRectList,
+      );
+      t.content.reposition();
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("follows its underline when the page moves", async () => {
+      const t = await checked();
+      await t.clickIssue(1);
+      vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+        return ((this as HTMLElement).dataset.issueId === "1"
+          ? [{ left: 160, top: 150, right: 210, bottom: 170 }]
+          : []) as unknown as DOMRectList;
+      });
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+        () =>
+          ({ left: 100, top: 140, right: 400, bottom: 290, width: 300, height: 150 }) as DOMRect,
+      );
+      t.content.reposition();
+      expect(t.view()?.top).toBe("176px");
+    });
+  });
+
+  it("opens the issues dialog's seam when All issues is pressed in the card", async () => {
+    const t = await checked();
+    const pressed = vi.fn<(click: { box: { id: number } }) => void>();
+    t.content.onAllIssues = pressed;
+    await t.clickIssue(1);
+    t.popover.send?.({ type: "all-issues", box: 1 });
+    expect(pressed).toHaveBeenCalledTimes(1);
+    expect(pressed.mock.calls[0]?.[0].box.id).toBe(1);
+    // Nothing else happens in this step: the card stays.
+    expect(t.content.popover?.issue).toBe(1);
+  });
+
+  it("closes the card and draws nothing when page mode is turned off", async () => {
+    const t = await checked();
+    await t.clickIssue(1);
+    t.runtime.broadcast("page-mode-off");
+    expect(t.host()).toBeUndefined();
+    expect(t.content.popover).toBeUndefined();
+  });
+
+  it("draws editable content from the rectangles of a Range over each issue", async () => {
+    const popover = new FakePopover();
+    const t = await setup({
+      popover,
+      html: `<div id="box" contenteditable="true"><p>Yesterday I seen him.</p><p>He go home.</p></div>`,
+    });
+    layOutUnderlines();
+    vi.spyOn(Range.prototype, "getClientRects").mockImplementation(function (this: Range) {
+      const left = this.toString() === "I seen" ? 160 : 220;
+      return [
+        { left, top: 110, right: left + 50, bottom: 130, width: 50, height: 20 },
+      ] as unknown as DOMRectList;
+    });
+    // "Yesterday I seen him.\nHe go home.": "I seen" is 10..16 and "He go" is 22..27.
+    t.runner.answer(resultOf(ISSUES));
+    await t.focusAndLoad();
+    const clip = t.layer()?.firstElementChild as HTMLElement;
+    expect([...clip.querySelectorAll("path")]).toHaveLength(2);
+    // A click in the second underline opens the popover for it.
+    mouse("mouseup", t.box, 240, 120);
+    await t.getFrame()?.idle();
+    expect(popover.opened.map((o) => o.issue)).toEqual([2]);
   });
 });

@@ -66,6 +66,7 @@ export class ExplanationPanel implements ExplanationView {
   private readonly regenerateButton: HTMLButtonElement;
   private readonly retryButton: HTMLButtonElement;
   private readonly notError: HTMLButtonElement;
+  private readonly actions: HTMLElement;
   private hasLLM = true;
   private mode: Mode = "idle";
   private label = "";
@@ -121,7 +122,7 @@ export class ExplanationPanel implements ExplanationView {
       "Regenerate",
     ]);
     this.retryButton = el(doc, "button", { type: "button", id: "explain-retry" }, ["Retry"]);
-    const actions = el(doc, "div", { class: "explain-actions", id: "explain-actions" }, [
+    this.actions = el(doc, "div", { class: "explain-actions", id: "explain-actions" }, [
       this.notError,
       this.regenerateButton,
       this.retryButton,
@@ -133,7 +134,7 @@ export class ExplanationPanel implements ExplanationView {
         class: options.layout === "compact" ? "explain-panel explain-compact" : "explain-panel",
         id: "explain-panel",
       },
-      [this.header, this.target, this.progress, this.body, actions],
+      [this.header, this.target, this.progress, this.body, this.actions],
     );
 
     this.cancelButton.addEventListener("click", () => {
@@ -168,6 +169,11 @@ export class ExplanationPanel implements ExplanationView {
   /** The **Not an error** button (SPEC section 5.7), shown in every state but idle. The page handles its click. */
   get notErrorButton(): HTMLButtonElement {
     return this.notError;
+  }
+
+  /** The row of buttons: the page-mode popover adds **All issues** to it (SPEC section 4.11). */
+  get actionRow(): HTMLElement {
+    return this.actions;
   }
 
   // The states.

@@ -31,6 +31,7 @@ import {
 } from "./background";
 import { PageModeBackend } from "./page-mode";
 import { FrameClaims } from "../core/page-mode/frame-claims";
+import { ignoreKey, SessionIgnoreSet } from "../platform/ignore-set";
 
 const NOW = 1_000_000;
 
@@ -90,6 +91,7 @@ function setup(
     options,
     pageMode,
     frameClaims: new FrameClaims(session, clock),
+    ignore: new SessionIgnoreSet(session),
     permission,
     messages: messageBus,
     log,
@@ -973,6 +975,56 @@ describe("page mode", () => {
         { ownExtension: false },
       );
       expect(s.tabs.opened).toEqual([]);
+    });
+  });
+
+  describe("the ignore set for the page-mode frame", () => {
+    const inTab = { tab: { id: 5, windowId: 1, index: 0 } };
+    const ask = (s: ReturnType<typeof setup>, message: object, sender: object = inTab) =>
+      s.messageBus.send({ type: "page-mode-ignore", ...message }, sender);
+
+    it("adds a pair to the ignore set in storage.session, which the tutor pages read too", async () => {
+      const s = setup();
+      expect((await ask(s, { op: "add", source: "session:a", fingerprint: "f1" })).answer).toEqual({
+        ok: true,
+      });
+      expect(s.session.values.get(ignoreKey("session:a", "f1"))).toBe(true);
+      expect((await ask(s, { op: "has", source: "session:a", fingerprint: "f1" })).answer).toEqual({
+        has: true,
+      });
+      expect((await ask(s, { op: "has", source: "session:a", fingerprint: "f2" })).answer).toEqual({
+        has: false,
+      });
+    });
+
+    it("moves the pairs of a source", async () => {
+      const s = setup();
+      await ask(s, { op: "add", source: "session:a", fingerprint: "f1" });
+      expect((await ask(s, { op: "move", from: "session:a", to: "doc:7" })).answer).toEqual({
+        ok: true,
+      });
+      expect([...s.session.values.keys()].filter((k) => k.startsWith("ignore:"))).toEqual([
+        ignoreKey("doc:7", "f1"),
+      ]);
+    });
+
+    it.each([
+      { name: "a bad op", message: { op: "clear", source: "a", fingerprint: "f" }, sender: inTab },
+      {
+        name: "an empty source",
+        message: { op: "add", source: "", fingerprint: "f" },
+        sender: inTab,
+      },
+      { name: "no tab", message: { op: "add", source: "a", fingerprint: "f" }, sender: {} },
+      {
+        name: "a sender that is not the extension's own code",
+        message: { op: "add", source: "a", fingerprint: "f" },
+        sender: { ...inTab, ownExtension: false },
+      },
+    ])("ignores $name", async ({ message, sender }) => {
+      const s = setup();
+      expect((await ask(s, message, sender)).answered).toBe(false);
+      expect([...s.session.values.keys()].filter((k) => k.startsWith("ignore:"))).toEqual([]);
     });
   });
 
