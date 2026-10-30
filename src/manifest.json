@@ -49,6 +49,19 @@
     "extension_pages": "script-src 'self'; style-src 'self'"
   },
   "incognito": "not_allowed",
-  "permissions": ["storage", "menus", "menus.overrideContext", "notifications", "downloads"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"]
+  "permissions": [
+    "storage",
+    "menus",
+    "menus.overrideContext",
+    "notifications",
+    "downloads",
+    "scripting"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*", "<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-ui.html", "page-ui.js", "page-ui.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

@@ -5,6 +5,7 @@ import { Logger } from "../../core/log";
 import type { LLMConfigInput } from "../../core/store";
 import { freshStore } from "../../core/store/testing/db";
 import { FakeChannelBus } from "../../platform/testing/fake-channel";
+import { FakeBackendLink, FakePageModePermission } from "../../platform/testing/fake-page-mode";
 import { FakePermissions } from "../../platform/testing/fake-permissions";
 import { el } from "../../ui/dom";
 import type { OptionsDeps } from "../deps";
@@ -23,6 +24,8 @@ export interface OptionsHarness {
   page: OptionsPage;
   doc: Document;
   permissions: FakePermissions;
+  pageMode: FakePageModePermission;
+  background: FakeBackendLink;
   fetch: FakeFetch;
   clock: FakeClock;
   /** A second page on the same channel, as another tab. */
@@ -60,6 +63,8 @@ export async function mountForTest(
     received.push(message.type);
   });
   const permissions = new FakePermissions();
+  const pageMode = new FakePageModePermission();
+  const background = new FakeBackendLink();
   const fake = new FakeFetch(script);
   const clock = new FakeClock(1_000);
   const logged: string[] = [];
@@ -70,6 +75,8 @@ export async function mountForTest(
     store,
     channel: bus.connect(),
     permissions,
+    pageMode,
+    background,
     fetch: fake.fetch,
     clock,
     log: new Logger({ debug: record, info: record, warn: record, error: record }),
@@ -82,6 +89,8 @@ export async function mountForTest(
     page,
     doc,
     permissions,
+    pageMode,
+    background,
     fetch: fake,
     clock,
     otherPage: {

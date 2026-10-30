@@ -40,3 +40,25 @@ export function privacyNote(provider: Provider, baseUrl: string): string | null 
       : url.host;
   return `The text you write is sent to ${server} when you check it, ask for an explanation or ask for alternatives.`;
 }
+
+/**
+ * The note under the page-mode box of the options page (SPEC section 4.11): where what the user
+ * types on websites goes. A server on this computer keeps it there. Without an LLM it says that
+ * an LLM has to be chosen first.
+ */
+export function pageModeNote(llm: { provider: Provider; base_url: string } | undefined): string {
+  const subject = "What you type in text boxes on websites";
+  if (llm === undefined) {
+    return `${subject} is sent to the server of the selected LLM to be checked. Add an LLM first.`;
+  }
+  const url = parseHttpUrl(effectiveBaseUrl(llm.provider, llm.base_url));
+  if (url === undefined) {
+    return `${subject} is sent to the server of the selected LLM to be checked.`;
+  }
+  if (isLocalHost(url.hostname)) return `${subject} is checked by ${url.host}, on this computer.`;
+  const server =
+    llm.provider === "anthropic" && llm.base_url.trim() === ""
+      ? `${PROVIDER_LABELS.anthropic}'s server (${url.host})`
+      : url.host;
+  return `${subject} is sent to ${server} to be checked.`;
+}

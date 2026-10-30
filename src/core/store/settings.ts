@@ -21,6 +21,10 @@ export interface Settings {
   results_font_family: string;
   results_font_size: number;
   pane_sizes: PaneSizes;
+  /** Whether page mode is on (SPEC section 4.11). */
+  page_mode: boolean;
+  /** Host names page mode is turned off on, each at most 253 characters. */
+  page_mode_off_hosts: string[];
 }
 
 export type SettingKey = keyof Settings;
@@ -41,6 +45,8 @@ const FONT_SIZE_MAX = 48;
 const DELAY_MIN = 1;
 const DELAY_MAX = 60;
 const FAMILY_MAX_LENGTH = 100;
+/** The longest host name there is (DNS). */
+export const HOST_MAX_LENGTH = 253;
 
 function inRange(raw: unknown, min: number, max: number): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) && raw >= min && raw <= max
@@ -65,6 +71,16 @@ const fontFamily: SettingDefinition<string> = {
   decode: (raw) => (typeof raw === "string" && raw.length <= FAMILY_MAX_LENGTH ? raw : undefined),
   encode: (value) => value,
 };
+
+function hostList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const hosts: string[] = [];
+  for (const host of raw as unknown[]) {
+    if (typeof host !== "string" || host === "" || host.length > HOST_MAX_LENGTH) return undefined;
+    hosts.push(host);
+  }
+  return hosts;
+}
 
 export const SETTING_DEFINITIONS: { readonly [K in SettingKey]: SettingDefinition<Settings[K]> } = {
   selected_llm_id: {
@@ -106,6 +122,20 @@ export const SETTING_DEFINITIONS: { readonly [K in SettingKey]: SettingDefinitio
       return typeof candidate === "object" && candidate !== null
         ? [value.editor, value.issues]
         : undefined;
+    },
+  },
+  page_mode: {
+    default: false,
+    decode: (raw) => (typeof raw === "boolean" ? raw : undefined),
+    encode: (value) => value,
+  },
+  page_mode_off_hosts: {
+    default: [],
+    decode: hostList,
+    // A copy, so that a later change of the caller's array cannot change what is stored.
+    encode: (value) => {
+      const candidate: unknown = value;
+      return Array.isArray(candidate) ? [...(candidate as unknown[])] : undefined;
     },
   },
 };

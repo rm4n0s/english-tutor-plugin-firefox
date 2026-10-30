@@ -4,7 +4,7 @@ import type { Notifier } from "../notifications";
 import type { OptionsOpener } from "../options-page";
 import type { ToolbarButton } from "../toolbar-button";
 import type { TabPlace, TutorPingResponder, TutorTabInfo, TutorTabs } from "../tutor-tabs";
-import type { BackgroundMenus, WebMenuClick, WebMenuItem } from "../web-menus";
+import type { BackgroundMenus, WebMenuClick, WebMenuItem, WebMenuShown } from "../web-menus";
 
 export class FakeButton implements ToolbarButton {
   private handler: (() => void) | undefined;
@@ -158,7 +158,10 @@ export class FakeBackgroundMenus implements BackgroundMenus {
   readonly entries = new Map<string, WebMenuItem>();
   installs = 0;
   failWith: Error | undefined;
+  /** Every `update` and `refresh`, in order, as "update id title/visible" and "refresh". */
+  readonly changes: string[] = [];
   private clicked: ((click: WebMenuClick) => void) | undefined;
+  private shown: ((shown: WebMenuShown) => void) | undefined;
 
   install(items: readonly WebMenuItem[]): Promise<void> {
     if (this.failWith !== undefined) return Promise.reject(this.failWith);
@@ -174,5 +177,33 @@ export class FakeBackgroundMenus implements BackgroundMenus {
   /** The user chooses an entry. */
   choose(id: string, click: Partial<Omit<WebMenuClick, "id">> = {}): void {
     this.clicked?.({ id, selectionText: undefined, tab: undefined, ...click });
+  }
+
+  onShown(listener: (shown: WebMenuShown) => void): void {
+    this.shown = listener;
+  }
+
+  update(id: string, change: { title?: string; visible?: boolean }): Promise<void> {
+    if (this.failWith !== undefined) return Promise.reject(this.failWith);
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.entries.set(id, {
+        ...entry,
+        ...(change.title === undefined ? {} : { title: change.title }),
+        ...(change.visible === undefined ? {} : { visible: change.visible }),
+      });
+    }
+    this.changes.push(`update ${id} ${change.title ?? ""}/${String(change.visible)}`);
+    return Promise.resolve();
+  }
+
+  refresh(): Promise<void> {
+    this.changes.push("refresh");
+    return Promise.resolve();
+  }
+
+  /** A menu is about to show. */
+  show(shown: Partial<WebMenuShown> = {}): void {
+    this.shown?.({ contexts: ["action"], tabUrl: undefined, ...shown });
   }
 }

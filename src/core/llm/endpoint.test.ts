@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effectiveBaseUrl, isLocalHost, parseHttpUrl, privacyNote } from "./endpoint";
+import { effectiveBaseUrl, isLocalHost, pageModeNote, parseHttpUrl, privacyNote } from "./endpoint";
 import type { Provider } from "./provider";
 
 describe("effectiveBaseUrl", () => {
@@ -98,4 +98,41 @@ describe("privacyNote", () => {
       expect(privacyNote(provider, base)).toBe(expected);
     },
   );
+});
+
+describe("pageModeNote", () => {
+  const subject = "What you type in text boxes on websites";
+  it.each([
+    {
+      name: "a remote server",
+      llm: { provider: "openai-compatible", base_url: "https://api.example.com/v1" },
+      expected: `${subject} is sent to api.example.com to be checked.`,
+    },
+    {
+      name: "Anthropic without a base URL",
+      llm: { provider: "anthropic", base_url: "" },
+      expected: `${subject} is sent to Anthropic's server (api.anthropic.com) to be checked.`,
+    },
+    {
+      name: "a server on this computer",
+      llm: { provider: "ollama", base_url: "http://localhost:11434" },
+      expected: `${subject} is checked by localhost:11434, on this computer.`,
+    },
+    {
+      name: "a malformed address",
+      llm: { provider: "openai-compatible", base_url: "nope" },
+      expected: `${subject} is sent to the server of the selected LLM to be checked.`,
+    },
+    {
+      name: "no LLM",
+      llm: undefined,
+      expected: `${subject} is sent to the server of the selected LLM to be checked. Add an LLM first.`,
+    },
+  ] as {
+    name: string;
+    llm: { provider: Provider; base_url: string } | undefined;
+    expected: string;
+  }[])("$name", ({ llm, expected }) => {
+    expect(pageModeNote(llm)).toBe(expected);
+  });
 });

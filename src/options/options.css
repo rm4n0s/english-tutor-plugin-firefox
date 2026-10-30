@@ -240,3 +240,39 @@ label.inline {
 .font-controls input[type="number"] {
   width: 70px;
 }
+
+/* Page mode (SPEC section 4.11): the sites it is turned off on. */
+.host-list {
+  margin: 4px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.host-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 420px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.host-row + .host-row {
+  margin-top: 4px;
+}
+
+.page-mode-hosts-heading {
+  margin-bottom: 2px;
+}
+
+/* Space around the page-mode block, which sits between the auto-check and the font rows. */
+#page-mode-hosts-empty {
+  margin-bottom: 14px;
+}
+
+.host-list {
+  margin-bottom: 14px;
+}

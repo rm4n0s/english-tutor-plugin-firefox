@@ -1,12 +1,22 @@
 import { handoffFragment, type HandoffAction, type HandoffStore } from "../core/handoff";
 import type { Logger } from "../core/log";
+import {
+  PAGE_MODE_APPLY,
+  PAGE_MODE_CONFIG,
+  PAGE_MODE_OPEN_TUTOR,
+  messageType,
+  parseConfigRequest,
+  parseOpenTutorRequest,
+} from "../core/page-mode/messages";
 import type { Commands } from "../platform/commands";
 import type { Lifecycle } from "../platform/lifecycle";
 import type { Notifier } from "../platform/notifications";
 import type { OptionsOpener } from "../platform/options-page";
+import type { BackgroundMessages, PageModePermission } from "../platform/page-mode";
 import type { ToolbarButton } from "../platform/toolbar-button";
 import type { TabPlace, TutorTabInfo, TutorTabs } from "../platform/tutor-tabs";
 import type { BackgroundMenus, WebMenuClick, WebMenuItem } from "../platform/web-menus";
+import type { PageModeBackend } from "./page-mode";
 
 export const TUTOR_PAGE = "tutor.html";
 /** The command of the manifest that brings the tutor page to the front. */
@@ -18,6 +28,8 @@ export const MENU_IDS = {
   webAlternatives: "english-tutor-web-alternatives",
   newTab: "english-tutor-action-new-tab",
   preferences: "english-tutor-action-preferences",
+  /** Turn off / Turn on page mode on the active tab's host (SPEC section 4.11). */
+  pageModeSite: "english-tutor-action-page-mode-site",
 } as const;
 
 /**
@@ -50,6 +62,13 @@ export const MENU_ITEMS: readonly WebMenuItem[] = [
   },
   { id: MENU_IDS.newTab, title: "New tutor tab", contexts: ["action"] },
   { id: MENU_IDS.preferences, title: "Preferences", contexts: ["action"] },
+  // Made hidden; `menus.onShown` gives it its title and shows it while page mode is on.
+  {
+    id: MENU_IDS.pageModeSite,
+    title: "Page mode on this site",
+    contexts: ["action"],
+    visible: false,
+  },
 ];
 
 const CHECK_NOTIFICATION = /^check-(\d+)$/;
@@ -63,6 +82,10 @@ export interface BackgroundDeps {
   notifier: Notifier;
   lifecycle: Lifecycle;
   options: OptionsOpener;
+  /** Page mode: registration, the per-site list and the content script's questions. */
+  pageMode: PageModeBackend;
+  permission: PageModePermission;
+  messages: BackgroundMessages;
   log: Logger;
 }
 
@@ -89,6 +112,7 @@ export function latestTutorTab(tabs: readonly TutorTabInfo[]): TutorTabInfo | un
  */
 export function startBackground(deps: BackgroundDeps): void {
   const { button, commands, menus, tabs, handoff, notifier, lifecycle, options, log } = deps;
+  const { pageMode, permission, messages } = deps;
 
   const report = (message: string) => (err: unknown) => {
     log.error(message, { err });
@@ -112,8 +136,21 @@ export function startBackground(deps: BackgroundDeps): void {
   const install = (): void => {
     menus.install(MENU_ITEMS).catch(report("could not make the menus"));
   };
-  lifecycle.onInstalled(install);
-  lifecycle.onStartup(install);
+  // Page mode: the registration follows the setting and the permission (SPEC section 4.11).
+  const syncPageMode = (notify: boolean): void => {
+    pageMode.sync({ notify }).catch(report("could not bring page mode in step with its setting"));
+  };
+  lifecycle.onInstalled(() => {
+    install();
+    syncPageMode(false);
+  });
+  lifecycle.onStartup(() => {
+    install();
+    syncPageMode(false);
+  });
+  permission.onRemoved(() => {
+    syncPageMode(true);
+  });
 
   // The hand-off: the text goes through `storage.session`, never through the address.
   async function sendToTutor(
@@ -147,8 +184,48 @@ export function startBackground(deps: BackgroundDeps): void {
       tabs.open().catch(report("could not open the tutor page"));
     } else if (click.id === MENU_IDS.preferences) {
       options.open().catch(report("could not open the options page"));
+    } else if (click.id === MENU_IDS.pageModeSite) {
+      pageMode.toggleSite(click.tab?.url).catch(report("could not change page mode for the site"));
     }
   });
+  // The toolbar button's menu names the active tab's host (SPEC section 4.11). The entry is
+  // changed and the open menu drawn again once the setting has been read.
+  menus.onShown(({ contexts, tabUrl }) => {
+    if (!contexts.includes("action")) return;
+    const show = async (): Promise<void> => {
+      const entry = await pageMode.siteEntry(tabUrl);
+      await menus.update(
+        MENU_IDS.pageModeSite,
+        entry.visible ? { title: entry.title, visible: true } : { visible: false },
+      );
+      await menus.refresh();
+    };
+    show().catch(report("could not update the page mode menu entry"));
+  });
+
+  // Messages from the options page and from the page-mode content script. Anything that is not
+  // ours is left alone (undefined): the content script never answers, and tutor pages answer pings.
+  messages.onMessage((message, sender) => {
+    if (!sender.ownExtension) return undefined;
+    const type = messageType(message);
+    if (type === PAGE_MODE_APPLY) {
+      return pageMode.sync({ notify: true }).then(() => ({ ok: true }));
+    }
+    if (type === PAGE_MODE_CONFIG) {
+      const request = parseConfigRequest(message);
+      if (request === undefined) return undefined;
+      return pageMode.enabledOn(request.host).then((enabled) => ({ enabled }));
+    }
+    if (type === PAGE_MODE_OPEN_TUTOR) {
+      const request = parseOpenTutorRequest(message);
+      if (request === undefined) return undefined;
+      // A text box that was blocked from showing its panel: the text goes to a new tutor tab,
+      // right after the tab it came from, through the hand-off of SPEC section 4.1.
+      return sendToTutor("check", request.text, sender.tab).then(() => ({ ok: true }));
+    }
+    return undefined;
+  });
+
   // A click on the notification of a finished check: its tab and window come to the front.
   notifier.onClicked((id) => {
     const match = CHECK_NOTIFICATION.exec(id);

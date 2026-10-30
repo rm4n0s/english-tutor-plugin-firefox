@@ -21,6 +21,8 @@ const DEFAULTS: Settings = {
   results_font_family: "",
   results_font_size: 11,
   pane_sizes: { editor: 65, issues: 40 },
+  page_mode: false,
+  page_mode_off_hosts: [],
 };
 
 /** Writes a raw value, bypassing the setter, as an older or damaged database might hold it. */
@@ -32,7 +34,7 @@ async function writeRaw(db: IDBDatabase, key: string, value: unknown): Promise<v
 describe("Store settings", () => {
   it("has a default for every key of SPEC section 9", () => {
     expect([...SETTING_KEYS].sort()).toEqual(Object.keys(DEFAULTS).sort());
-    expect(SETTING_KEYS).toHaveLength(10);
+    expect(SETTING_KEYS).toHaveLength(12);
   });
 
   it("returns the defaults on an empty database", async () => {
@@ -65,6 +67,10 @@ describe("Store settings", () => {
     { key: "results_font_family" as const, value: "Georgia" },
     { key: "results_font_size" as const, value: 12.5 },
     { key: "pane_sizes" as const, value: { editor: 50, issues: 30.5 } },
+    { key: "page_mode" as const, value: true },
+    { key: "page_mode_off_hosts" as const, value: ["example.com", "a.b.example.org"] },
+    { key: "page_mode_off_hosts" as const, value: ["x".repeat(253)] },
+    { key: "page_mode_off_hosts" as const, value: [] },
   ])("set and get $key = $value", ({ key, value }) => {
     it("round-trips and changes no other setting", async () => {
       const { store } = await freshStore();
@@ -100,6 +106,20 @@ describe("Store settings", () => {
     { key: "editor_font_size", invalid: [5, 5.9, 49, 0, -13, NaN, Infinity, "13", null] },
     { key: "button_font_size", invalid: [5, 49, NaN, "11", null] },
     { key: "results_font_size", invalid: [5, 49, NaN, "11", null] },
+    { key: "page_mode", invalid: ["true", 1, 0, null, []] },
+    {
+      key: "page_mode_off_hosts",
+      invalid: [
+        "example.com",
+        [1],
+        [null],
+        [""],
+        ["x".repeat(254)],
+        ["example.com", 5],
+        { 0: "example.com" },
+        null,
+      ],
+    },
     {
       key: "pane_sizes",
       invalid: [
@@ -147,6 +167,14 @@ describe("Store settings", () => {
         expect(await store.getSettings()).toEqual(DEFAULTS);
       },
     );
+  });
+
+  it("copies the host list it stores", async () => {
+    const { store } = await freshStore();
+    const hosts = ["example.com"];
+    await store.setSetting("page_mode_off_hosts", hosts);
+    hosts.push("other.org");
+    expect(await store.getSetting("page_mode_off_hosts")).toEqual(["example.com"]);
   });
 
   it("ignores stored keys it does not know", async () => {

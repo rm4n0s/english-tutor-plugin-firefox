@@ -3,6 +3,14 @@ import { CountingRandom } from "../core/analysis/testing/helpers";
 import { HANDOFF_MAX_AGE_MS, HandoffStore, parseHandoffFragment } from "../core/handoff";
 import { Logger, type LogFields } from "../core/log";
 import { FakeClock } from "../core/testing/fake-clock";
+import { freshStore } from "../core/store/testing/db";
+import { FakeChannelBus } from "../platform/testing/fake-channel";
+import {
+  FakeBackgroundMessages,
+  FakeContentScripts,
+  FakePageModePermission,
+  FakePageTabs,
+} from "../platform/testing/fake-page-mode";
 import {
   FakeBackgroundMenus,
   FakeButton,
@@ -21,6 +29,7 @@ import {
   OPEN_TUTOR_COMMAND,
   startBackground,
 } from "./background";
+import { PageModeBackend } from "./page-mode";
 
 const NOW = 1_000_000;
 
@@ -29,7 +38,15 @@ function tab(tabId: number, overrides: Partial<TutorTabInfo> = {}): TutorTabInfo
 }
 
 /** Everything the background script gets, as fakes. Calling it again is a restart of the event page. */
-function setup(shared: { session?: FakeSessionStorage; clock?: FakeClock } = {}) {
+function setup(
+  shared: {
+    session?: FakeSessionStorage;
+    clock?: FakeClock;
+    store?: ReturnType<typeof freshStore>;
+    permission?: FakePageModePermission;
+    scripts?: FakeContentScripts;
+  } = {},
+) {
   const session = shared.session ?? new FakeSessionStorage();
   const clock = shared.clock ?? new FakeClock(NOW);
   const button = new FakeButton();
@@ -45,8 +62,52 @@ function setup(shared: { session?: FakeSessionStorage; clock?: FakeClock } = {})
   };
   const log = new Logger({ debug: record, info: record, warn: record, error: record });
   const handoff = new HandoffStore(session, clock, new CountingRandom());
-  startBackground({ button, commands, menus, tabs, handoff, notifier, lifecycle, options, log });
-  return { session, clock, button, commands, menus, tabs, notifier, lifecycle, options, logged };
+  // Page mode: a store that is opened when first needed, as the real script does.
+  const stored = shared.store ?? freshStore();
+  const permission = shared.permission ?? new FakePageModePermission();
+  const scripts = shared.scripts ?? new FakeContentScripts();
+  const pageTabs = new FakePageTabs();
+  const bus = new FakeChannelBus();
+  const messageBus = new FakeBackgroundMessages();
+  const pageMode = new PageModeBackend({
+    settings: async () => (await stored).store,
+    permission,
+    scripts,
+    tabs: pageTabs,
+    channel: bus.connect(),
+    log,
+  });
+  startBackground({
+    button,
+    commands,
+    menus,
+    tabs,
+    handoff,
+    notifier,
+    lifecycle,
+    options,
+    pageMode,
+    permission,
+    messages: messageBus,
+    log,
+  });
+  return {
+    session,
+    clock,
+    button,
+    commands,
+    menus,
+    tabs,
+    notifier,
+    lifecycle,
+    options,
+    logged,
+    stored,
+    permission,
+    scripts,
+    pageTabs,
+    messageBus,
+  };
 }
 
 const messages = (logged: { message: string }[]) =>
@@ -186,6 +247,7 @@ describe("menus", () => {
       ],
       [MENU_IDS.newTab, "New tutor tab", "action", undefined],
       [MENU_IDS.preferences, "Preferences", "action", undefined],
+      [MENU_IDS.pageModeSite, "Page mode on this site", "action", undefined],
     ]);
   });
 
@@ -231,7 +293,7 @@ describe("the web page menu", () => {
       MENU_ITEMS.filter((item) => item.contexts.includes("action")).map(
         (item) => item.documentUrlPatterns,
       ),
-    ).toEqual([undefined, undefined]);
+    ).toEqual([undefined, undefined, undefined]);
   });
 
   describe.each([
@@ -404,5 +466,385 @@ describe("updates", () => {
     await settle();
     expect(s.lifecycle.reloads).toBe(0);
     expect(messages(s.logged)).toEqual(["could not ask the tutor pages about the update"]);
+  });
+});
+
+describe("page mode", () => {
+  const SITE = "https://www.Example.com/some/page?x=1";
+
+  /** Page mode on, with the permission, as the options page leaves it. */
+  async function turnedOn(s: ReturnType<typeof setup>): Promise<void> {
+    (await s.stored).store.setSetting("page_mode", true).catch(() => undefined);
+    await settle();
+    s.permission.granted = true;
+  }
+
+  const settings = async (s: ReturnType<typeof setup>) => (await s.stored).store;
+
+  describe("keeping the registration in step with the setting and the permission", () => {
+    describe.each([
+      {
+        event: "the extension is installed",
+        fire: (s: ReturnType<typeof setup>) => {
+          s.lifecycle.install();
+        },
+      },
+      {
+        event: "the browser starts",
+        fire: (s: ReturnType<typeof setup>) => {
+          s.lifecycle.startBrowser();
+        },
+      },
+    ])("when $event", ({ fire }) => {
+      it.each([
+        {
+          name: "page mode on with the permission registers the script",
+          on: true,
+          granted: true,
+          registered: false,
+          expected: ["register"],
+        },
+        {
+          name: "an already registered script is left alone",
+          on: true,
+          granted: true,
+          registered: true,
+          expected: [],
+        },
+        {
+          name: "page mode off unregisters a script that is there",
+          on: false,
+          granted: true,
+          registered: true,
+          expected: ["unregister"],
+        },
+        {
+          name: "page mode off with no script does nothing",
+          on: false,
+          granted: false,
+          registered: false,
+          expected: [],
+        },
+      ])("$name", async ({ on, granted, registered, expected }) => {
+        const s = setup();
+        await (await settings(s)).setSetting("page_mode", on);
+        s.permission.granted = granted;
+        s.scripts.registered = registered;
+        fire(s);
+        await settle();
+        await settle();
+        expect(s.scripts.calls).toEqual(expected);
+        // Nobody is told at start-up: no page has the script yet.
+        expect(s.pageTabs.sent).toEqual([]);
+      });
+
+      it("switches page mode off when the permission was withdrawn while the browser was closed", async () => {
+        const s = setup();
+        await (await settings(s)).setSetting("page_mode", true);
+        s.permission.granted = false;
+        s.scripts.registered = true;
+        fire(s);
+        await settle();
+        await settle();
+        expect(await (await settings(s)).getSetting("page_mode")).toBe(false);
+        expect(s.scripts.registered).toBe(false);
+      });
+    });
+
+    it("on permissions.onRemoved switches page mode off and tells the open pages", async () => {
+      const s = setup();
+      await turnedOn(s);
+      s.scripts.registered = true;
+      s.permission.withdraw();
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode")).toBe(false);
+      expect(s.scripts.calls).toEqual(["unregister"]);
+      expect(s.pageTabs.sent).toEqual(["page-mode-off"]);
+    });
+
+    it("logs a failed registration instead of leaving a rejected promise", async () => {
+      const s = setup();
+      await turnedOn(s);
+      s.scripts.failWith = new Error("no scripting");
+      s.lifecycle.install();
+      await settle();
+      await settle();
+      expect(messages(s.logged)).toContain("could not bring page mode in step with its setting");
+    });
+  });
+
+  describe("the options page's request to apply the setting", () => {
+    it("registers the script and tells the pages to ask again when page mode is on", async () => {
+      const s = setup();
+      await turnedOn(s);
+      const reply = await s.messageBus.send({ type: "page-mode-apply" });
+      expect(reply).toEqual({ answered: true, answer: { ok: true } });
+      expect(s.scripts.calls).toEqual(["register"]);
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+    });
+
+    it("unregisters the script and sends page-mode-off when it is off", async () => {
+      const s = setup();
+      s.scripts.registered = true;
+      s.permission.granted = true;
+      await s.messageBus.send({ type: "page-mode-apply" });
+      expect(s.scripts.calls).toEqual(["unregister"]);
+      expect(s.pageTabs.sent).toEqual(["page-mode-off"]);
+    });
+
+    it("is answered only for the extension's own senders", async () => {
+      const s = setup();
+      await turnedOn(s);
+      const reply = await s.messageBus.send({ type: "page-mode-apply" }, { ownExtension: false });
+      expect(reply.answered).toBe(false);
+      expect(s.scripts.calls).toEqual([]);
+    });
+  });
+
+  describe("the content script's questions", () => {
+    it.each([
+      {
+        name: "page mode on, host not listed",
+        on: true,
+        off: [],
+        host: "example.com",
+        expected: true,
+      },
+      { name: "page mode off", on: false, off: [], host: "example.com", expected: false },
+      {
+        name: "a host in the list",
+        on: true,
+        off: ["example.com"],
+        host: "example.com",
+        expected: false,
+      },
+      {
+        name: "the list compares in lower case",
+        on: true,
+        off: ["example.com"],
+        host: "EXAMPLE.com",
+        expected: false,
+      },
+      {
+        name: "another host in the list",
+        on: true,
+        off: ["other.org"],
+        host: "example.com",
+        expected: true,
+      },
+      {
+        name: "a subdomain of a listed host",
+        on: true,
+        off: ["example.com"],
+        host: "www.example.com",
+        expected: true,
+      },
+    ])("$name", async ({ on, off, host, expected }) => {
+      const s = setup();
+      const store = await settings(s);
+      await store.setSetting("page_mode", on);
+      await store.setSetting("page_mode_off_hosts", off);
+      const reply = await s.messageBus.send({ type: "page-mode-config", host });
+      expect(reply).toEqual({ answered: true, answer: { enabled: expected } });
+    });
+
+    it.each([
+      { name: "no host", message: { type: "page-mode-config" } },
+      { name: "a host that is not a string", message: { type: "page-mode-config", host: 5 } },
+      {
+        name: "a host that is too long",
+        message: { type: "page-mode-config", host: "x".repeat(254) },
+      },
+    ])("leaves $name unanswered", async ({ message }) => {
+      const s = setup();
+      expect((await s.messageBus.send(message)).answered).toBe(false);
+    });
+
+    it.each([
+      { name: "tutor-ping", message: { type: "tutor-ping" } },
+      { name: "a string", message: "page-mode-config" },
+      { name: "null", message: null },
+      { name: "an unknown type", message: { type: "something" } },
+    ])("never answers $name", async ({ message }) => {
+      const s = setup();
+      expect((await s.messageBus.send(message)).answered).toBe(false);
+    });
+  });
+
+  describe("Open in English Tutor from a blocked badge", () => {
+    it("stores the text as a hand-off and opens a tutor tab after the sender's tab", async () => {
+      const s = setup();
+      const reply = await s.messageBus.send(
+        { type: "page-mode-open-tutor", text: "I has a idea." },
+        { tab: { windowId: 4, index: 2 } },
+      );
+      expect(reply.answer).toEqual({ ok: true });
+      expect(s.tabs.opened).toHaveLength(1);
+      expect(s.tabs.opened[0]?.after).toEqual({ windowId: 4, index: 2 });
+      expect([...s.session.values.values()]).toEqual([
+        { text: "I has a idea.", action: "check", at: NOW },
+      ]);
+    });
+
+    it.each([
+      { name: "an empty text", text: "" },
+      { name: "white space", text: " \n " },
+      { name: "a text that is too long", text: "x".repeat(200_001) },
+      { name: "a text that is not a string", text: 5 },
+    ])("ignores $name", async ({ text }) => {
+      const s = setup();
+      const reply = await s.messageBus.send({ type: "page-mode-open-tutor", text });
+      expect(reply.answered).toBe(false);
+      expect(s.tabs.opened).toEqual([]);
+    });
+
+    it("ignores a sender that is not the extension's own code", async () => {
+      const s = setup();
+      await s.messageBus.send(
+        { type: "page-mode-open-tutor", text: "Some text." },
+        { ownExtension: false },
+      );
+      expect(s.tabs.opened).toEqual([]);
+    });
+  });
+
+  describe("the toolbar button's menu entry for the site", () => {
+    const entry = (s: ReturnType<typeof setup>) => s.menus.entries.get(MENU_IDS.pageModeSite);
+
+    it("is made hidden", async () => {
+      const s = setup();
+      s.lifecycle.install();
+      await settle();
+      expect(entry(s)?.visible).toBe(false);
+    });
+
+    it.each([
+      {
+        name: "Turn off on the host while page mode is on",
+        on: true,
+        off: [],
+        url: SITE,
+        title: "Turn off on www.example.com",
+        visible: true,
+      },
+      {
+        name: "Turn on on the host when it is in the list",
+        on: true,
+        off: ["www.example.com"],
+        url: SITE,
+        title: "Turn on on www.example.com",
+        visible: true,
+      },
+      {
+        name: "nothing while page mode is off",
+        on: false,
+        off: [],
+        url: SITE,
+        title: undefined,
+        visible: false,
+      },
+      {
+        name: "nothing for a page that is not http or https",
+        on: true,
+        off: [],
+        url: "about:preferences",
+        title: undefined,
+        visible: false,
+      },
+      {
+        name: "nothing for a file",
+        on: true,
+        off: [],
+        url: "file:///home/me/a.html",
+        title: undefined,
+        visible: false,
+      },
+      {
+        name: "nothing when the address is not known",
+        on: true,
+        off: [],
+        url: undefined,
+        title: undefined,
+        visible: false,
+      },
+    ])("shows $name", async ({ on, off, url, title, visible }) => {
+      const s = setup();
+      s.lifecycle.install();
+      await settle();
+      const store = await settings(s);
+      await store.setSetting("page_mode", on);
+      await store.setSetting("page_mode_off_hosts", off);
+      s.menus.show({ contexts: ["action"], tabUrl: url });
+      await settle();
+      await settle();
+      expect(entry(s)?.visible).toBe(visible);
+      if (title !== undefined) expect(entry(s)?.title).toBe(title);
+      expect(s.menus.changes.at(-1)).toBe("refresh");
+    });
+
+    it("is left alone when another menu is shown", async () => {
+      const s = setup();
+      s.menus.show({ contexts: ["selection"], tabUrl: SITE });
+      await settle();
+      expect(s.menus.changes).toEqual([]);
+    });
+  });
+
+  describe("turning page mode off and on for a site from the menu", () => {
+    const choose = (s: ReturnType<typeof setup>, url: string | undefined) => {
+      s.menus.choose(MENU_IDS.pageModeSite, {
+        tab: { tabId: 1, windowId: 1, index: 0, url },
+      });
+    };
+
+    it("adds the host to the list, announces it and tells the open pages", async () => {
+      const s = setup();
+      choose(s, SITE);
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual([
+        "www.example.com",
+      ]);
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+    });
+
+    it("takes the host out of the list when it is there", async () => {
+      const s = setup();
+      await (await settings(s)).setSetting("page_mode_off_hosts", ["www.example.com", "other.org"]);
+      choose(s, SITE);
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual(["other.org"]);
+    });
+
+    it.each([
+      { name: "an unknown address", url: undefined },
+      { name: "a page that is not http or https", url: "about:blank" },
+    ])("does nothing for $name", async ({ url }) => {
+      const s = setup();
+      choose(s, url);
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual([]);
+      expect(s.pageTabs.sent).toEqual([]);
+    });
+  });
+
+  it("registers its message and menu listeners synchronously, and keeps no state between runs", async () => {
+    const first = setup();
+    await turnedOn(first);
+    // A restart of the event page: the same store, permission and registration.
+    const second = setup({
+      store: first.stored,
+      permission: first.permission,
+      scripts: first.scripts,
+    });
+    const reply = await second.messageBus.send({ type: "page-mode-config", host: "example.com" });
+    expect(reply.answer).toEqual({ enabled: true });
+    second.permission.withdraw();
+    await settle();
+    await settle();
+    expect(await (await settings(second)).getSetting("page_mode")).toBe(false);
   });
 });

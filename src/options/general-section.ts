@@ -2,6 +2,7 @@ import { AppError } from "../core/errors";
 import type { SettingKey, Settings } from "../core/store";
 import { el, setHidden, setText } from "../ui/dom";
 import type { OptionsDeps } from "./deps";
+import { PageModeSection } from "./page-mode-section";
 
 type FontGroup = "editor" | "button" | "results";
 
@@ -29,6 +30,8 @@ export class GeneralSection {
   private readonly autoCheck: HTMLInputElement;
   private readonly delay: HTMLInputElement;
   private readonly delayError: HTMLElement;
+  /** The page-mode box and the list of sites it is off on (SPEC section 4.11). */
+  readonly pageMode: PageModeSection;
   private readonly families = new Map<FontGroup, HTMLInputElement>();
   private readonly sizes = new Map<FontGroup, HTMLInputElement>();
   private readonly fontErrors = new Map<FontGroup, HTMLElement>();
@@ -60,6 +63,11 @@ export class GeneralSection {
         this.delayError,
       ]),
     );
+
+    this.pageMode = new PageModeSection(doc, host, deps, report);
+    this.pageMode.onChange = () => {
+      this.syncDelay();
+    };
 
     for (const { group, label } of FONT_ROWS) {
       const family = el(doc, "input", {
@@ -98,7 +106,7 @@ export class GeneralSection {
     );
 
     this.autoCheck.addEventListener("change", () => {
-      this.delay.disabled = !this.autoCheck.checked;
+      this.syncDelay();
       void this.save("auto_check", this.autoCheck.checked, this.delayError);
     });
     this.delay.addEventListener("change", () => {
@@ -109,8 +117,16 @@ export class GeneralSection {
   /** Reads the settings from the store into the controls. */
   async load(): Promise<void> {
     try {
-      const settings = await this.deps.store.getSettings();
+      const [settings, configs] = await Promise.all([
+        this.deps.store.getSettings(),
+        this.deps.store.listConfigs(),
+      ]);
       this.show(settings);
+      // The LLM the privacy note names: the selected one, or the first by name, as the tutor page.
+      this.pageMode.load(
+        settings,
+        configs.find((c) => c.id === settings.selected_llm_id) ?? configs[0],
+      );
     } catch (err) {
       this.report(err);
     }
@@ -119,13 +135,18 @@ export class GeneralSection {
   private show(settings: Settings): void {
     this.autoCheck.checked = settings.auto_check;
     this.delay.value = String(settings.auto_check_delay_s);
-    this.delay.disabled = !settings.auto_check;
+    this.syncDelay();
     for (const { group } of FONT_ROWS) {
       const family = this.families.get(group);
       const size = this.sizes.get(group);
       if (family) family.value = settings[`${group}_font_family`];
       if (size) size.value = String(settings[`${group}_font_size`]);
     }
+  }
+
+  /** The delay is used by auto-check, and by page mode (SPEC section 4.7). */
+  private syncDelay(): void {
+    this.delay.disabled = !this.autoCheck.checked && !this.pageMode.on;
   }
 
   private errorLine(id: string): HTMLElement {
