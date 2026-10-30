@@ -374,7 +374,114 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "selected-from-text": {
+    theme: "light",
+    dir: "step-07-selection",
+    async run(ctx) {
+      await checkedSample(ctx);
+      // The caret goes into "He go" with the keyboard: its row is selected, the issue highlighted,
+      // and the caret stays where it is.
+      const offset = SAMPLE_TEXT.indexOf("He go") + 2;
+      await ctx.keys("editor", TO_START, Key.ARROW_RIGHT.repeat(offset));
+      await ctx.waitForCount('#issues .issue-row[aria-selected="true"]', 1);
+      await ctx.expectText("issues", "He go");
+      await ctx.expectSelectedRow(2, "He go");
+      await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.expectCaret("editor", offset);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "selected-from-list": {
+    theme: "light",
+    dir: "step-07-selection",
+    async run(ctx) {
+      // A long text, so that the issues are below the fold: choosing a row by keyboard scrolls the
+      // editor to its issue. The list keeps the focus (its outline shows), and the editor shows the
+      // highlight.
+      const filler = Array.from(
+        { length: 24 },
+        (_, i) => `Paragraph ${i + 1} is only here to make the text long. It has no mistakes.`,
+      ).join("\n\n");
+      ctx.llm.setReplies(CHECK_REPLY);
+      await openTutorWithText(ctx, `${filler}\n\n${SAMPLE_TEXT}`);
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.waitForCount("#mirror span.issue", 5);
+      // Typing the text left the editor scrolled to its end: scroll it back to the top.
+      await ctx.wheelScroll("editor", -5000);
+      await ctx.waitForScrollTop("editor", 0);
+      await ctx.keys("issues", Key.ARROW_DOWN, Key.ARROW_DOWN, Key.ARROW_DOWN);
+      await ctx.expectSelectedRow(3, "make a photo");
+      await ctx.waitForCount("#mirror .issue-selected", 1);
+      await ctx.expectScrolled("editor");
+      await ctx.expectFocus("issues");
+      await ctx.expectCaret("editor", `${filler}\n\n${SAMPLE_TEXT}`.indexOf("make a photo"));
+      await ctx.expectTheme();
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  tooltip: {
+    theme: "light",
+    dir: "step-07-selection",
+    async run(ctx) {
+      await checkedSample(ctx);
+      await ctx.hoverIssue("make a photo");
+      await ctx.waitForVisible("issue-tooltip");
+      await ctx.expectText("issue-tooltip", "Collocation · Vocabulary");
+      await ctx.expectText("issue-tooltip", "Say take a photo.");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "after-edit": {
+    theme: "light",
+    dir: "step-07-selection",
+    async run(ctx) {
+      await checkedSample(ctx);
+      // Fix "He go" by typing right after it ("He goes"): that issue goes at once. Then type at the
+      // very start, before every other issue: all of them move, and stay under their words.
+      const goEnd = SAMPLE_TEXT.indexOf("He go") + "He go".length;
+      await ctx.keys("editor", TO_START, Key.ARROW_RIGHT.repeat(goEnd), "es", TO_START, "Hello! ");
+      await ctx.waitForCount("#mirror span.issue", 4);
+      await ctx.expectUnderlined(["I seen", "make a photo", "I very like", "boring"]);
+      await ctx.expectText("issues-header", "Issues (4)");
+      await ctx.expectNoText("issues", "He go");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "auto-check": {
+    theme: "light",
+    dir: "step-07-selection",
+    async run(ctx) {
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "Fake LLM");
+      // Auto-check on, then typing and a pause: no Check button, no loading layer.
+      await ctx.click("auto-check");
+      await ctx.expectChecked("auto-check");
+      await ctx.fill("editor", SAMPLE_TEXT);
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.waitForCount("#mirror span.issue", 5);
+      await ctx.waitForText("status-tokens", "last: 812 in / 164 out");
+      await ctx.expectHidden("loading");
+      await ctx.expectNoCountBadges();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
 };
+
+/** Keys that put the caret at the start of a short text (the sample wraps to two lines). */
+const TO_START = Key.ARROW_UP.repeat(6) + Key.HOME;
 
 /** The text of the Step 6 scenarios, and the issues the fake LLM finds in it (all three categories). */
 const SAMPLE_TEXT =
@@ -720,14 +827,100 @@ function makeContext(name, scenario, driver, llm, policy) {
      * Harness only: removes what changes between runs of the same page. The focus goes (no
      * blinking caret), and animations (the busy indicator) stop at their first frame.
      */
-    async stabilise() {
+    async stabilise({ keepFocus = false } = {}) {
       await driver.executeScript(
-        `if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        `if (!arguments[0] && document.activeElement instanceof HTMLElement) {
+           document.activeElement.blur();
+         }
          for (const animation of document.getAnimations()) {
            animation.pause();
            animation.currentTime = 0;
          }`,
+        keepFocus,
       );
+    },
+    /** Sends keys to the element with this id, as a user typing into it. */
+    async keys(id, ...keys) {
+      await driver.findElement(By.id(id)).sendKeys(...keys);
+    },
+    /** Moves the mouse over the first line of the underline with this text. */
+    async hoverIssue(snippet) {
+      const point = await driver.executeScript(
+        `const span = [...document.querySelectorAll("#mirror span.issue")]
+           .find((s) => s.textContent === arguments[0]);
+         const rect = span.getClientRects()[0];
+         return { x: Math.round(rect.left + 12), y: Math.round(rect.top + rect.height / 2) };`,
+        snippet,
+      );
+      await driver.actions({ async: true }).move({ x: point.x, y: point.y }).perform();
+    },
+    /** Fails unless the n-th row (1-based) is the only selected one and shows this snippet. */
+    async expectSelectedRow(n, snippet) {
+      const rows = await driver.findElements(By.css("#issues .issue-row"));
+      const flags = await Promise.all(rows.map((r) => r.getAttribute("aria-selected")));
+      const expected = rows.map((_, i) => String(i === n - 1));
+      if (JSON.stringify(flags) !== JSON.stringify(expected)) {
+        throw new Error(`selected rows are ${flags.join(",")}, expected row ${n} only`);
+      }
+      const text = await rows[n - 1].getText();
+      if (!text.includes(snippet)) throw new Error(`row ${n} shows ${JSON.stringify(text)}`);
+    },
+    async expectCaret(id, offset) {
+      const caret = await driver.executeScript(
+        "return document.getElementById(arguments[0]).selectionStart",
+        id,
+      );
+      if (caret !== offset) throw new Error(`#${id} has its caret at ${caret}, not ${offset}`);
+    },
+    async waitForScrollTop(id, top) {
+      await driver.wait(
+        async () =>
+          (await driver.executeScript(
+            "return document.getElementById(arguments[0]).scrollTop",
+            id,
+          )) === top,
+        PAGE_TIMEOUT_MS,
+        `#${id} never scrolled to ${top}`,
+      );
+    },
+    /** Waits until the element is scrolled down, and fails if the selected issue is out of view. */
+    async expectScrolled(id) {
+      await driver.wait(
+        () =>
+          driver.executeScript(
+            `const e = document.getElementById(arguments[0]);
+             const view = e.getBoundingClientRect();
+             const span = document.querySelector("#mirror .issue-selected");
+             const rect = span.getClientRects()[0];
+             return e.scrollTop > 0 && rect.top >= view.top && rect.bottom <= view.bottom;`,
+            id,
+          ),
+        PAGE_TIMEOUT_MS,
+        `#${id} never scrolled to the selected issue`,
+      );
+    },
+    async expectFocus(id) {
+      const focused = await driver.executeScript("return document.activeElement.id");
+      if (focused !== id) throw new Error(`the focus is in #${focused || "(nothing)"}, not #${id}`);
+    },
+    async expectChecked(id) {
+      if (!(await driver.findElement(By.id(id)).isSelected())) throw new Error(`#${id} is off`);
+    },
+    /** Fails unless the mirror underlines exactly these words, in order. */
+    async expectUnderlined(words) {
+      const shown = await driver.executeScript(
+        'return [...document.querySelectorAll("#mirror span.issue")].map((s) => s.textContent)',
+      );
+      if (JSON.stringify(shown) !== JSON.stringify(words)) {
+        throw new Error(`underlined ${JSON.stringify(shown)}, expected ${JSON.stringify(words)}`);
+      }
+    },
+    /** Auto-check issues get no count badge (step 9 shows them for manual checks only). */
+    async expectNoCountBadges() {
+      const shown = await driver.executeScript(
+        'return [...document.querySelectorAll("#issues .count-badge")].filter((b) => !b.hidden).length',
+      );
+      if (shown !== 0) throw new Error(`${shown} count badge(s) shown`);
     },
     /** Scrolls an element with the mouse wheel, as a user does. */
     async wheelScroll(id, deltaY) {
