@@ -420,9 +420,9 @@ All data stays in the user's Firefox profile and is removed when the extension i
 | `llm_usage` | `id` (auto) | `llm_name`, `kind`, `input_tokens`, `output_tokens`, `estimated`, `created_at` | `created_at` |
 | `settings` | `key` | `value` | |
 
-Migration 1 creates all five stores.
+Migration 1 creates all five stores. An index is named after its key path fields joined by `_`, so the compound ones are `source_key_fingerprint` and `error_type_created_at`. `line_ending` is `"lf"` or `"crlf"`. Optional numbers (`temperature`, `timeout_seconds`) are `null` when not set; `base_url` and `api_key` are `""` when not set.
 
-**Settings keys:** `selected_llm_id`, `auto_check`, `auto_check_delay_s`, `editor_font_family`, `editor_font_size`, `button_font_family`, `button_font_size`, `results_font_family`, `results_font_size`, `pane_sizes`. `pane_sizes` holds two percentages as JSON: the editor's share of the width, and the issues list's share of the right column. A missing or invalid value gives the default: auto-check off, delay 3, sizes 13 / 11 / 11 (outside 6 to 48 is invalid), default font families, no selected LLM, panes 65 / 40.
+**Settings keys:** `selected_llm_id`, `auto_check`, `auto_check_delay_s`, `editor_font_family`, `editor_font_size`, `button_font_family`, `button_font_size`, `results_font_family`, `results_font_size`, `pane_sizes`. `pane_sizes` holds two percentages, stored as the array `[editor, issues]`: the editor's share of the width, and the issues list's share of the right column (each above 0 and below 100). A missing or invalid value gives the default: auto-check off, delay 3 (1 to 60), sizes 13 / 11 / 11 (outside 6 to 48 is invalid), default font families (a family over 100 characters is invalid), no selected LLM (anything but a positive integer is invalid), panes 65 / 40. Reading never fails on a bad stored value; setting a setting to a value that would read back as invalid is refused with `SettingInvalid`.
 
 **`storage.session`:** hand-off entries (section 4.1) and the Not-an-error ignore set (section 5.7). Cleared when the browser closes.
 
@@ -430,7 +430,7 @@ Migration 1 creates all five stores.
 
 **API keys** are stored as plain text in IndexedDB, inside the Firefox profile. The options page says so. Keys are never logged, put in error metadata or messages, or sent anywhere except the LLM's own server.
 
-The `Store` class is constructed with an open `IDBDatabase`, so tests use `fake-indexeddb` and a fresh database per test. There is no module-level database variable.
+The `Store` class is constructed with an open `IDBDatabase` and a `Clock`, so tests use `fake-indexeddb` and a fresh database per test. The store does not check the values of an LLM configuration: the `llm` package supplies a validator (`LLMConfigInvalid`) that is passed to the store's constructor. There is no module-level database variable.
 
 ### 9.1 Logging
 
@@ -448,6 +448,7 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 | `LLMConfigNameTaken` | `store` | duplicate LLM name |
 | `LLMConfigInvalid` | `llm` / `store` | missing name or model; missing or malformed base URL; missing key for the provider; temperature outside 0 to 2; timeout outside 10 to 3600 s; parallel requests outside 1 to 16 |
 | `LLMConfigNotFound` | `store` | the selected LLM id does not exist |
+| `SettingInvalid` | `store` | a setting is set to a value its key does not allow (for example a size outside 6 to 48) |
 | `DocumentNotFound` | `store` | the library document does not exist |
 | `ErrorEventSaveFailed` | `store` | recording mistakes or moving a source fails (the underlines are still shown) |
 | `StatsQueryFailed` | `store` | reading counts for the header, badges or the Statistics dialog fails |

@@ -13,13 +13,7 @@ const tags = parseErrorTags(spec);
  * is already covered, so the list only shrinks.
  */
 const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
-  "DatabaseOpenFailed",
-  "MigrationFailed",
-  "DatabaseQueryFailed",
-  "LLMConfigNameTaken",
   "LLMConfigInvalid",
-  "LLMConfigNotFound",
-  "DocumentNotFound",
   "ErrorEventSaveFailed",
   "StatsQueryFailed",
   "StatsResetFailed",
