@@ -2316,8 +2316,9 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-14-page-mode-sites",
     async run(ctx) {
-      // A site with no choice: the first focus of a text box opens the card under the box. The LLM
-      // is on another computer, so the note names its server.
+      // A site with no choice: the focus of a text box shows the dimmed badge, and a click on it
+      // opens the card under the box (step 18: icon first). The LLM is on another computer, so the
+      // note names its server.
       await ctx.configureFakeLLM({
         name: "Remote LLM",
         baseUrl: "https://llm.example.com/v1",
@@ -2329,15 +2330,17 @@ const SCENARIOS = {
       });
       const options = await ctx.driver.getWindowHandle();
       await ctx.watchFrameRegistrations();
-      await ctx.openWebPage("textarea.html");
+      // The page whose caret does not blink: the box keeps the focus while the card is open (the
+      // badge and the card go when it loses it).
+      await ctx.openWebPage("textarea-still.html");
       await ctx.focusUntilPrompt();
       // The card did not take the focus from the text box, and nothing was sent.
       await ctx.expectFocus("box");
       if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
-      // The box's caret blinks and its focus ring fades: leave the box (the card stays) and wait.
-      await ctx.stabilise();
+      // The box's focus ring fades out of its own accord: wait for it.
+      await ctx.stabilise({ keepFocus: true });
       await new Promise((resolve) => setTimeout(resolve, 800));
-      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      if (!(await ctx.promptShowing())) throw new Error("the card went away by itself");
       await ctx.screenshot();
       await ctx.driver.switchTo().window(options);
       if ((await ctx.frameRegistrations()) !== 0)
@@ -2355,12 +2358,12 @@ const SCENARIOS = {
         state: "ask",
         llm: { server: new URL(ctx.llm.baseUrl).host, local: true },
       });
-      await ctx.openWebPage("textarea.html");
+      await ctx.openWebPage("textarea-still.html");
       await ctx.focusUntilPrompt();
       await ctx.expectFocus("box");
-      await ctx.stabilise();
+      await ctx.stabilise({ keepFocus: true });
       await new Promise((resolve) => setTimeout(resolve, 800));
-      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      if (!(await ctx.promptShowing())) throw new Error("the card went away by itself");
       await ctx.screenshot();
     },
   },
@@ -2372,12 +2375,12 @@ const SCENARIOS = {
       await ctx.open("options.html");
       await ctx.turnOnPageMode({ sites: {} });
       await ctx.expectSiteConfig(TEST_HOST, { state: "ask", llm: null });
-      await ctx.openWebPage("textarea.html");
+      await ctx.openWebPage("textarea-still.html");
       await ctx.focusUntilPrompt();
       await ctx.expectFocus("box");
-      await ctx.stabilise();
+      await ctx.stabilise({ keepFocus: true });
       await new Promise((resolve) => setTimeout(resolve, 800));
-      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      if (!(await ctx.promptShowing())) throw new Error("the card went away by itself");
       await ctx.screenshot();
     },
   },
@@ -2448,9 +2451,10 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-14-page-mode-sites",
     async run(ctx) {
-      // No PNG. On a site that is off, and on a site answered Not now, the content script shows no
-      // card, makes no frame, reads no text and sends nothing; an excluded field never opens the
-      // prompt on a site that is asked about.
+      // No PNG. On a site that is off, the content script shows no badge and no card, makes no
+      // frame, reads no text and sends nothing. A site answered Not now (version 0.2.0's `later`,
+      // which the card no longer offers) behaves like a site with no choice: the dimmed badge.
+      // An excluded field never gets a badge.
       ctx.llm.setReplies(CHECK_REPLY);
       await ctx.configureFakeLLM({ name: "Fake LLM" });
       await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "off" } });
@@ -2470,7 +2474,8 @@ const SCENARIOS = {
       if (await ctx.pageModeHostPresent()) throw new Error("an off site has a page-mode element");
       if (ctx.llmRequests() !== 0) throw new Error("text was sent from an off site");
 
-      // Remove on the options page: the site is asked again (the open page hears it).
+      // Remove on the options page: the site is asked again (the open page hears it), and the
+      // focus now shows the dimmed badge.
       await ctx.driver.switchTo().window(options);
       await ctx.click("page-mode-sites", ".host-remove");
       await ctx.waitForCount("#page-mode-sites li", 0);
@@ -2478,42 +2483,51 @@ const SCENARIOS = {
       await ctx.driver.executeScript("document.activeElement.blur()");
       await ctx.focusUntilPrompt();
 
-      // Not now: the card goes and the site is not asked again, even after a reload.
-      await ctx.clickPrompt("later");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      if (await ctx.pageModeHostPresent()) throw new Error("Not now left a page-mode element");
-      await ctx.driver.navigate().refresh();
-      await ctx.expectNoPrompt();
-      if (await ctx.pageModeHostPresent()) throw new Error("a later site has a page-mode element");
-      if (ctx.llmRequests() !== 0) throw new Error("text was sent from a later site");
+      // Escape closes the card without a choice: the badge stays, and nothing was stored.
+      await ctx.driver.findElement(By.id("box")).sendKeys(Key.ESCAPE);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (await ctx.promptShowing()) throw new Error("Escape did not close the card");
+      if (!(await ctx.badgeShows("dimmed"))) throw new Error("Escape took the badge away");
       await ctx.driver.switchTo().window(options);
-      const later = await ctx.sessionKeys("page-mode-later:");
-      if (JSON.stringify(later) !== JSON.stringify([`page-mode-later:${TEST_HOST}`])) {
-        throw new Error(`storage.session holds ${JSON.stringify(later)}`);
+      if ((await ctx.sessionKeys("page-mode-later:")).length !== 0) {
+        throw new Error("closing the card stored Not now");
       }
       if (
         (await ctx.driver.executeScript(
           "return document.getElementById('page-mode-sites').hidden",
         )) !== true
       ) {
-        throw new Error("Not now was stored as a choice");
+        throw new Error("closing the card was stored as a choice");
       }
 
-      // The content script was running on that page all the time: when Not now is forgotten (the
-      // browser restarts, which empties storage.session) and the page is told, it asks.
-      await ctx.clearLater();
+      // A site answered Not now by version 0.2.0 (`storage.session` holds its key) is still
+      // understood, and shows the dimmed badge like a site with no choice.
+      await ctx.driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.storage.session.set({ ["page-mode-later:" + arguments[0]]: true })
+           .then(() => browser.runtime.sendMessage({ type: "page-mode-apply" }))
+           .then(() => done());`,
+        TEST_HOST,
+      );
+      await ctx.expectSiteConfig(TEST_HOST, {
+        state: "later",
+        llm: { server: new URL(ctx.llm.baseUrl).host, local: true },
+      });
       await ctx.driver.switchTo().window(page);
-      await ctx.focusUntilPrompt();
-      await ctx.clickPrompt("later");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusUntilBadge();
+      await ctx.driver.navigate().refresh();
+      await ctx.focusUntilBadge();
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent from a later site");
+
+      // An excluded field never gets the badge, on a page that is asked about; the plain text box
+      // does.
       await ctx.driver.switchTo().window(options);
-      // The same, before a page that has excluded fields: it asks, and an excluded field never
-      // opens the prompt, while the plain text box does.
       await ctx.clearLater();
       await ctx.openWebPage("excluded.html");
       const excluded = ["password", "email", "nospell", "card", "optout"];
       for (const id of excluded) await ctx.expectNoPrompt(id, id === excluded[0] ? 2500 : 800);
-      await ctx.focusUntilPrompt("control");
+      await ctx.focusUntilBadge("control");
       if (ctx.llmRequests() !== 0) throw new Error("text was sent before Turn on");
       await ctx.driver.switchTo().window(options);
       if ((await ctx.frameRegistrations()) !== 0)
@@ -2877,6 +2891,334 @@ const SCENARIOS = {
       await ctx.waitForNoPageDialog();
     },
   },
+
+  // Step 18: page mode, icon first, and editors as real sites build them (SPEC section 4.11).
+  // The badge, the card and the underlines are in a closed shadow root, so the harness finds them
+  // from the pixels of the picture, as in the earlier steps.
+  "badge-dimmed": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // A site with no choice: the focused text box has the dimmed badge at its bottom right
+      // corner. No card opens by itself, nothing is read, and nothing is sent.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+      await ctx.openWebPage("textarea-still.html");
+      await ctx.focusUntilBadge();
+      await ctx.expectFocus("box");
+      // It stays dimmed, and nothing else shows by itself.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (await ctx.promptShowing()) throw new Error("a card opened by itself");
+      if (!(await ctx.badgeShows("dimmed"))) throw new Error("the dimmed badge went away");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made before Turn on");
+    },
+  },
+  "badge-dimmed-card": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // A click on the dimmed badge opens the card under the box (the LLM is on this computer).
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.openWebPage("textarea-still.html");
+      await ctx.focusUntilPrompt();
+      await ctx.expectFocus("box");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (!(await ctx.promptShowing())) throw new Error("the card went away by itself");
+      await ctx.screenshot();
+    },
+  },
+  "off-no-badge": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. A site that is off (Never on this site) has no badge, no card, no element in the
+      // page, no frame and no request, on a text box and on editable content.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "off" } });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+      for (const name of ["textarea.html", "contenteditable.html"]) {
+        await ctx.openWebPage(name);
+        await ctx.expectNoPrompt("box", 2500);
+        await ctx.typeInBox(" and some more words to write");
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await ctx.expectNoBadge("box");
+        if (await ctx.pageModeHostPresent()) throw new Error(`${name} has a page-mode element`);
+      }
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent from an off site");
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made on an off site");
+    },
+  },
+  "ask-sends-nothing": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. On a site with no choice the dimmed badge, the card and typing send nothing: no
+      // frame is made, no request goes out, nothing is underlined. Never on this site then takes
+      // the badge away.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      await ctx.typeInBox(" and some more words to write");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await ctx.expectNoUnderlines();
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent before Turn on");
+      // The card is still open (leaving the tab would blur the box, and the card goes with it).
+      // Never on this site: the badge and the card go, and nothing of page mode is left.
+      await ctx.clickPrompt("off");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (await ctx.promptShowing()) throw new Error("the card stayed after Never");
+      if (await ctx.badgeShows("dimmed")) throw new Error("the badge stayed after Never");
+      if (await ctx.pageModeHostPresent()) throw new Error("Never left a page-mode element");
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made before Turn on");
+      await ctx.expectSiteConfig(TEST_HOST, { state: "off" });
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent");
+    },
+  },
+  "dimmed-badge-blur": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. The dimmed badge is on the focused box only: it goes when the box loses the focus,
+      // when the focus moves to a field that is never read, and with the card that it opened.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.openWebPage("excluded.html");
+      await ctx.focusUntilBadge("control");
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.waitForNoDimmedBadge("control");
+      if (await ctx.pageModeHostPresent()) throw new Error("the badge left its element behind");
+      // The focus moves from the text box to a password field: the badge goes.
+      await ctx.focusUntilBadge("control");
+      await ctx.focusBox("password");
+      await ctx.waitForNoDimmedBadge("control");
+      await ctx.expectNoBadge("password");
+      // The card goes with the badge when the box is left.
+      await ctx.focusUntilPrompt("control");
+      await ctx.focusBox("password");
+      await ctx.waitForNoPrompt();
+      await ctx.waitForNoDimmedBadge("control");
+      if (await ctx.pageModeHostPresent()) throw new Error("the card left its element behind");
+    },
+  },
+  "focused-at-start": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. A text box that is already focused when the content script starts (`autofocus`)
+      // is taken up without another click: the dimmed badge on a site with no choice, and the
+      // checked badge on a site that is on.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openWebPage("autofocus.html");
+      await ctx.expectFocus("box");
+      await ctx.waitForBadgeKind("dimmed");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
+      // The same page on a site that is on: checked at once.
+      await ctx.driver.switchTo().window(options);
+      await ctx.seedSites({ [TEST_HOST]: "on" });
+      await ctx.openWebPage("autofocus.html");
+      await ctx.expectFocus("box");
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+    },
+  },
+  "editor-rules": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. Which editors count (SPEC section 4.11): a prose editor with spellcheck="false"
+      // does, and so does one inside a form with it; CodeMirror, Monaco, Ace, a native textarea
+      // with spellcheck off and an editable pre are left alone.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.openWebPage("editors.html");
+      for (const id of ["prose", "form"]) {
+        await ctx.focusUntilBadge(id);
+        await ctx.driver.executeScript("document.activeElement.blur()");
+        await ctx.waitForNoDimmedBadge(id);
+      }
+      for (const id of ["cm6", "cm5", "monaco", "ace", "native", "pre"]) {
+        await ctx.expectNoPrompt(id, id === "cm6" ? 1500 : 800);
+      }
+    },
+  },
+  "page-already-open": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // No PNG. A page that was open before page mode was allowed works without a reload: the
+      // background script runs the content script in the open tabs when it registers it. It runs
+      // once, whether the page was reloaded or not.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openWebPage("textarea.html");
+      const page = await ctx.driver.getWindowHandle();
+      await ctx.driver.switchTo().window(options);
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.driver.switchTo().window(page);
+      await ctx.focusUntilBadge();
+      if ((await ctx.pageModeHostCount()) !== 1) throw new Error("page mode started twice");
+      // After a reload the registered script starts, and still only one.
+      await ctx.driver.navigate().refresh();
+      await ctx.focusUntilBadge();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if ((await ctx.pageModeHostCount()) !== 1) throw new Error("page mode started twice");
+      // The script is run in the page once more, as the background script does for the open tabs
+      // (here the registered copy is running already): the second copy stops at once.
+      await ctx.driver.switchTo().window(options);
+      await ctx.driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.tabs.query({ url: ["http://*/*"] }).then((tabs) => Promise.all(tabs.map((t) =>
+           browser.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ["page.js"] }))))
+           .then(() => done("ok"), (e) => done("failed: " + e));`,
+      );
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusUntilBadge();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if ((await ctx.pageModeHostCount()) !== 1)
+        throw new Error("a second copy of the script started");
+    },
+  },
+  "quill-editor": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // A Quill editor (LinkedIn's post composer) that the page inserts into a modal after load
+      // and focuses by script while the modal is still growing into place: it is found without a
+      // click, checked, and underlined, though the modal says spellcheck="false".
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("quill.html");
+      await ctx.waitForElement("box");
+      // The modal grows into place for a third of a second; the harness measures the box after it.
+      await ctx.waitForStillBox("box");
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      // The modal's own transition has ended by now. (The harness's `stabilise` would reset it:
+      // it pauses every animation at its start. The editor has no caret and no focus ring.)
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.screenshot();
+    },
+  },
+  "spa-message-box": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // A message box that a single-page app adds to the page later: a contenteditable div with
+      // role="textbox", `<p><br></p>` when it is empty, inside a form with spellcheck="false". The
+      // empty box has the icon; what the user types is checked and underlined.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("spa-message.html");
+      await ctx.waitForElement("box");
+      await ctx.focusBox();
+      await ctx.waitForBadge("icon");
+      if (ctx.llmRequests() !== 0) throw new Error("an empty box was checked");
+      await ctx.typeInBox(PAGE_MODE_TEXT);
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForBadge("grammar");
+      await ctx.expectUnderline("I seen", "grammar");
+      await ctx.expectUnderline("He go", "grammar");
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.screenshot();
+    },
+  },
+  "shadow-editor": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // An editor inside an open shadow root (a Lit or other web component): the focus is found
+      // through the event's composed path, the badge sits on the editor, and it is underlined.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("shadow.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.waitForBadge("grammar");
+      // The picture has underlines of both categories inside the component, besides the badge.
+      const rect = await ctx.driver.executeScript(
+        `const r = document.getElementById("box").getBoundingClientRect();
+         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`,
+      );
+      const badge = await ctx.badgeCenter();
+      for (const category of ["grammar", "vocabulary"]) {
+        const n = await ctx.underlinePixels(rect, category, badge);
+        if (n < 60) throw new Error(`only ${n} ${category} underline pixels in the component`);
+      }
+      await ctx.screenshot();
+    },
+  },
+  "iframe-editor": {
+    theme: "light",
+    dir: "step-18-page-icon",
+    async run(ctx) {
+      // Editors in iframes: one that the page wrote into an about:blank document (TinyMCE and
+      // CKEditor 4 do this), one in a srcdoc iframe, and one from another origin. The script runs
+      // in each (`matchOriginAsFallback`), and each frame is a site of its own: the same server
+      // under the name localhost is turned on next to 127.0.0.1.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "on", [OTHER_HOST]: "on" } });
+      await ctx.openWebPage("iframes.html");
+      for (const frame of ["blank", "srcdoc", "cross"]) {
+        await ctx.focusUntilFrameBadge(frame, "grammar");
+      }
+      await ctx.waitForLLMRequests(3);
+      // Blur the frames' boxes (their carets do not blink, and the badges stay on boxes with
+      // issues), and wait for the focus rings to fade.
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      for (const frame of ["blank", "srcdoc", "cross"]) {
+        await ctx.waitForFrameBadge(frame, "grammar");
+        const rect = await ctx.frameRect(frame);
+        const badge = await ctx.frameBadgeCenter(frame);
+        for (const category of ["grammar", "vocabulary"]) {
+          const n = await ctx.underlinePixels(rect, category, badge);
+          if (n < 120)
+            throw new Error(`only ${n} ${category} underline pixels in the ${frame} frame`);
+        }
+      }
+      await ctx.screenshot();
+    },
+  },
 };
 
 /** The colour of the link in the explanation panel and the no-LLM hint (`--accent`, light). */
@@ -2997,12 +3339,12 @@ const BLOCKED_CARD_BUTTON = [0x0b, 0x5c, 0xad];
 /**
  * What the buttons of the site prompt look like (SPEC section 4.11): the card lives in a closed
  * shadow root that Selenium cannot reach, so the harness finds a button from the pixels of the
- * screenshot, as it does for the badge. Turn on is filled blue, Not now is filled grey-blue, and
- * Never on this site has a red border.
+ * screenshot, as it does for the badge. Turn on is filled blue, and Never on this site has a red
+ * border (the card has no Not now: the dimmed badge opens it, and its close button and Escape
+ * dismiss it).
  */
 const PROMPT_COLORS = {
   on: [0x0b, 0x5c, 0xad],
-  later: [0xd9, 0xe2, 0xec],
   off: [0xb3, 0x26, 0x1e],
 };
 
@@ -3820,6 +4162,8 @@ const BADGE_COLORS = {
   warning: [0xb3, 0x26, 0x1e],
   icon: [0x00, 0x72, 0xb2],
   spinner: [0xff, 0xff, 0xff],
+  // The dimmed badge of a site that is not on: #6b7785 at 60% opacity over a white page.
+  dimmed: [166, 173, 182],
 };
 
 /** The colours of the underlines (src/content/style.ts), for a light and a dark page. */
@@ -5576,6 +5920,146 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       );
       await driver.findElement(By.id(id)).sendKeys(text);
     },
+
+    /** Waits until the page has an element with this id (a page that builds its editor later). */
+    async waitForElement(id) {
+      await driver.wait(until.elementLocated(By.id(id)), PAGE_TIMEOUT_MS);
+    },
+    /** Waits until the box has stopped moving (its rectangle is the same for 600 ms). */
+    async waitForStillBox(id) {
+      let last = "";
+      let since = Date.now();
+      await driver.wait(
+        async () => {
+          const now = await driver.executeScript(
+            `const r = document.getElementById(arguments[0]).getBoundingClientRect();
+             return [r.left, r.top, r.width, r.height].join();`,
+            id,
+          );
+          if (now !== last) {
+            last = now;
+            since = Date.now();
+          }
+          return Date.now() - since > 600;
+        },
+        PAGE_TIMEOUT_MS,
+        `#${id} never stopped moving`,
+      );
+    },
+    /** How many elements the overlay has put directly into `<html>` (page mode makes one per frame). */
+    async pageModeHostCount() {
+      return driver.executeScript(
+        "return [...document.documentElement.children].filter((c) => c.tagName === 'DIV').length",
+      );
+    },
+    /** Waits until the badge of the box (default #box) shows `kind`, without clicking anything. */
+    async waitForBadgeKind(kind, id = "box") {
+      await driver.wait(
+        () => ctx.badgeShows(kind, id),
+        PAGE_TIMEOUT_MS,
+        `the badge of #${id} never showed ${kind}`,
+      );
+    },
+    /** Waits until the box has no dimmed badge any more. */
+    async waitForNoDimmedBadge(id = "box") {
+      await driver.wait(
+        async () => !(await ctx.badgeShows("dimmed", id)),
+        PAGE_TIMEOUT_MS,
+        `the dimmed badge of #${id} never went`,
+      );
+    },
+    /** Waits until no prompt card shows. */
+    async waitForNoPrompt() {
+      await driver.wait(
+        async () => !(await ctx.promptShowing()),
+        PAGE_TIMEOUT_MS,
+        "the prompt never went",
+      );
+    },
+    /**
+     * How many pixels in `rect` (window coordinates) have the colour of the underlines of
+     * `category`, leaving out the 26 px square round `except` (the badge, which has the colour of
+     * the category too).
+     */
+    async underlinePixels(rect, category, except) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const color = UNDERLINE_PALETTE.light[category];
+      let n = 0;
+      for (let y = Math.max(0, Math.round(rect.top)); y < Math.round(rect.bottom); y++) {
+        for (let x = Math.max(0, Math.round(rect.left)); x < Math.round(rect.right); x++) {
+          if (
+            except !== undefined &&
+            Math.abs(x - except.x) <= 13 &&
+            Math.abs(y - except.y) <= 13
+          ) {
+            continue;
+          }
+          if (closeTo(png.pixel(x, y), color, 40)) n++;
+        }
+      }
+      return n;
+    },
+    /** The rectangle of an iframe of the page, in window coordinates (inside its border). */
+    async frameRect(frameId) {
+      await driver.switchTo().defaultContent();
+      return driver.executeScript(
+        `const f = document.getElementById(arguments[0]);
+         const r = f.getBoundingClientRect();
+         return { left: r.left + f.clientLeft, top: r.top + f.clientTop,
+                  right: r.left + f.clientLeft + f.clientWidth, bottom: r.top + f.clientTop + f.clientHeight };`,
+        frameId,
+      );
+    },
+    /** The middle of the badge of #box inside an iframe, in window coordinates. */
+    async frameBadgeCenter(frameId) {
+      const origin = await ctx.frameRect(frameId);
+      await driver.switchTo().frame(await driver.findElement(By.id(frameId)));
+      try {
+        const inside = await ctx.badgeCenter("box");
+        return { x: inside.x + origin.left, y: inside.y + origin.top };
+      } finally {
+        await driver.switchTo().defaultContent();
+      }
+    },
+    /** Whether the badge in the iframe shows `kind`, from the pixels of the window. */
+    async frameBadgeShows(frameId, kind) {
+      const { x, y } = await ctx.frameBadgeCenter(frameId);
+      return closeTo(await ctx.pixelAt(x, y - 7), BADGE_COLORS[kind]);
+    },
+    async waitForFrameBadge(frameId, kind) {
+      await driver.wait(
+        () => ctx.frameBadgeShows(frameId, kind),
+        PAGE_TIMEOUT_MS,
+        `the badge in the ${frameId} frame never showed ${kind}`,
+      );
+    },
+    /**
+     * Clicks into the editor of an iframe, until its badge shows `kind` (the content script of the
+     * frame starts a moment after the frame has loaded).
+     */
+    async focusUntilFrameBadge(frameId, kind) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await driver.switchTo().defaultContent();
+        await driver.switchTo().frame(await driver.findElement(By.id(frameId)));
+        try {
+          await driver.findElement(By.id("box")).click();
+        } finally {
+          await driver.switchTo().defaultContent();
+        }
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          if (await ctx.frameBadgeShows(frameId, kind)) return;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        await driver.switchTo().frame(await driver.findElement(By.id(frameId)));
+        try {
+          await driver.executeScript("document.activeElement.blur()");
+        } finally {
+          await driver.switchTo().defaultContent();
+        }
+      }
+      throw new Error(`the badge in the ${frameId} frame never showed ${kind}`);
+    },
     /** Whether the page's overlay host (a `div` directly in `<html>`) is there. */
     async pageModeHostPresent() {
       return driver.executeScript(
@@ -5690,27 +6174,48 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       await ctx.waitForColor(PROMPT_COLORS.on);
     },
     /**
-     * Clicks the text box, as the user does to start writing in it, until the prompt shows. The
-     * content script starts listening a moment after the page has loaded (it asks the background
-     * script first), so a focus that comes too early is repeated: the box is left and clicked again.
+     * Clicks the text box, as the user does to start writing in it, until its dimmed badge shows
+     * (SPEC section 4.11, a site that is not on). The content script starts listening a moment
+     * after the page has loaded (it asks the background script first), so a focus that comes too
+     * early is repeated: the box is left and clicked again.
      */
-    async focusUntilPrompt(id = "box") {
+    async focusUntilBadge(id = "box") {
       for (let attempt = 0; attempt < 8; attempt++) {
         await ctx.focusBox(id);
         const deadline = Date.now() + 1500;
         while (Date.now() < deadline) {
-          if (await ctx.promptShowing()) return;
+          if (await ctx.badgeShows("dimmed", id)) return;
           await new Promise((resolve) => setTimeout(resolve, 150));
         }
         await driver.executeScript("document.activeElement.blur()");
       }
-      throw new Error(`the prompt never showed on #${id}`);
+      throw new Error(`the dimmed badge never showed on #${id}`);
     },
-    /** Focuses the box and fails if the prompt shows within `ms`; the box is left again. */
+    /** Whether the badge of the box shows `kind` right now, read from the pixels of the picture. */
+    async badgeShows(kind, id = "box") {
+      const { x, y } = await ctx.badgeCenter(id);
+      return closeTo(await ctx.pixelAt(x, y - 7), BADGE_COLORS[kind]);
+    },
+    /**
+     * Focuses the box, and then clicks its dimmed badge until the prompt card shows. The badge
+     * ignores clicks in its first 500 ms (SPEC section 4.11), so the harness waits a little longer.
+     */
+    async focusUntilPrompt(id = "box") {
+      await ctx.focusUntilBadge(id);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const { x, y } = await ctx.badgeCenter(id);
+      await ctx.clickAt(x, y);
+      await ctx.waitForColor(PROMPT_COLORS.on);
+    },
+    /**
+     * Focuses the box and fails if a dimmed badge or the prompt shows within `ms`; the box is left
+     * again. For an excluded field, and for a site that is off.
+     */
     async expectNoPrompt(id = "box", ms = 2500) {
       await ctx.focusBox(id);
       await new Promise((resolve) => setTimeout(resolve, ms));
       if (await ctx.promptShowing()) throw new Error(`the prompt showed on #${id}`);
+      if (await ctx.badgeShows("dimmed", id)) throw new Error(`a dimmed badge showed on #${id}`);
       await driver.executeScript("document.activeElement.blur()");
     },
     /**

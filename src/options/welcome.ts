@@ -7,7 +7,7 @@ export const WELCOME_INTRO =
 export const WELCOME_OFFER =
   "Offer to check what you write on websites. English Tutor asks on each site first, and reads nothing on a site until you say yes.";
 export const WELCOME_ALLOWED =
-  "Allowed. English Tutor will ask the first time you click into a text box on a site.";
+  "Allowed. On a site you have not turned on, a small icon appears on a text box you click into, and English Tutor asks before it reads anything.";
 
 export interface WelcomeDeps {
   /** The page-mode section whose permission request Allow makes (the same code as its box). */

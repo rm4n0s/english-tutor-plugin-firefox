@@ -62,7 +62,7 @@ Small local models sometimes answer in a form the extension cannot read. It retr
 Page mode does in a web page's text boxes what the editor does: it underlines the errors in the box, shows a badge with their number, explains one when you click it, and has a dialog with the list of issues. It is **off everywhere until you turn it on**, because it sends what you type to your language model.
 
 - Turn it on once: press **Allow** on the welcome page, or tick **Offer to check text boxes on websites** in **Prefs**. Firefox asks for access to all websites. This only lets English Tutor see which site a tab shows; it reads nothing yet.
-- The first time you click into a text box on a site, a small card asks about that site: **Turn on**, **Not now** or **Never on this site**. A site you did not turn on gets nothing read and nothing sent.
+- On a site you did not turn on, a text box you click into gets a small greyed icon at its bottom right corner. Click it and a card asks about that site: **Turn on** or **Never on this site**. Until you turn a site on, nothing is read and nothing is sent. The icon is not shown on a site you chose **Never** for.
 - Password, payment, one-time code, search and other non-text fields, and code editors, are never read. English Tutor never writes a correction into the page: you fix the text yourself.
 - Right-click the toolbar button to turn page mode off or on for the page you are on. Unticking the box in **Prefs** turns it off everywhere and gives the access back.
 

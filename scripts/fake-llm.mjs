@@ -215,6 +215,218 @@ PAGES["textarea-bottom.html"] =
 </html>
 `;
 
+// Step 18: editors as real sites build them (SPEC section 4.11, "Which text boxes"). Each one is
+// made by the page's own script after load, as a single-page app does.
+
+/** The text of the editors, as paragraphs. */
+const PARAGRAPHS = [
+  "Yesterday I seen my friend at the market.",
+  "He go to school every day, and he make a photo of everything.",
+];
+
+// A Quill editor (LinkedIn's post composer is built with Quill) in a modal that the page inserts
+// after load and focuses by script, while the modal is still growing into place. The modal has
+// `spellcheck="false"`, as sites set it on a whole form, and the editor has `data-gramm="false"`.
+PAGES["quill.html"] =
+  pageHead(
+    "A Quill editor in a modal",
+    `.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); }
+      .modal { position: fixed; left: 160px; top: 90px; width: 640px; background: #fff; border-radius: 8px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); padding: 18px 20px 22px; transform: scale(0.04);
+        transition: transform 0.3s ease-out; transform-origin: top left; }
+      .modal.shown { transform: scale(1); }
+      .modal h2 { margin: 0 0 12px; font-size: 18px; }
+      .ql-container { font: 16px/1.42 sans-serif; }
+      .ql-editor { box-sizing: border-box; min-height: 180px; padding: 12px 15px; outline: none; caret-color: transparent; }
+      .ql-editor p { margin: 0; }
+      .ql-editor.ql-blank::before { content: attr(data-placeholder); color: #888; position: absolute; }`,
+  ) +
+  `  <body>
+    <h1>Your feed</h1>
+    <p class="note">A page whose post composer opens in a modal.</p>
+    <script>
+      setTimeout(() => {
+        const backdrop = document.createElement("div");
+        backdrop.className = "backdrop";
+        const modal = document.createElement("div");
+        modal.className = "modal";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("spellcheck", "false");
+        const title = document.createElement("h2");
+        title.textContent = "Create a post";
+        const container = document.createElement("div");
+        container.className = "ql-container";
+        const editor = document.createElement("div");
+        editor.id = "box";
+        editor.className = "ql-editor";
+        editor.setAttribute("contenteditable", "true");
+        editor.setAttribute("role", "textbox");
+        editor.setAttribute("aria-multiline", "true");
+        editor.setAttribute("aria-label", "Text editor for creating content");
+        editor.setAttribute("data-gramm", "false");
+        editor.setAttribute("data-placeholder", "What do you want to talk about?");
+        for (const text of ${JSON.stringify(PARAGRAPHS)}) {
+          const p = document.createElement("p");
+          p.textContent = text;
+          editor.append(p);
+        }
+        container.append(editor);
+        modal.append(title, container);
+        document.body.append(backdrop, modal);
+        // Focused by script right after it is inserted, while it is still growing.
+        editor.focus();
+        requestAnimationFrame(() => modal.classList.add("shown"));
+      }, 400);
+    </script>
+  </body>
+</html>
+`;
+
+// A message box like the one in LinkedIn's messaging: a form that a single-page app adds later,
+// with a `contenteditable` div whose empty state is `<p><br></p>`, inside `spellcheck="false"`.
+PAGES["spa-message.html"] =
+  pageHead(
+    "A message box added by a single-page app",
+    `.msg { width: 560px; border: 1px solid #8a919c; border-radius: 6px; padding: 0; }
+      .msg-form__contenteditable { box-sizing: border-box; min-height: 120px; padding: 10px 12px; outline: none; font: 16px/1.5 sans-serif; }
+      .msg-form__contenteditable p { margin: 0; }
+      .msg-form__contenteditable p:only-child:has(> br:only-child)::before { content: "Write a message..."; color: #888; position: absolute; }
+      .msg-footer { display: flex; justify-content: flex-end; padding: 6px 10px; border-top: 1px solid #d5d9df; }
+      .msg-footer button { font: 600 14px sans-serif; padding: 4px 14px; }`,
+  ) +
+  `  <body>
+    <h1>Messaging</h1>
+    <p class="note">The form is not in the page when it loads.</p>
+    <div id="app"></div>
+    <script>
+      setTimeout(() => {
+        const form = document.createElement("form");
+        form.className = "msg";
+        form.setAttribute("spellcheck", "false");
+        const box = document.createElement("div");
+        box.id = "box";
+        box.className = "msg-form__contenteditable";
+        box.setAttribute("contenteditable", "true");
+        box.setAttribute("role", "textbox");
+        box.setAttribute("aria-multiline", "true");
+        box.setAttribute("aria-label", "Write a message...");
+        const p = document.createElement("p");
+        p.append(document.createElement("br"));
+        box.append(p);
+        const footer = document.createElement("div");
+        footer.className = "msg-footer";
+        const send = document.createElement("button");
+        send.type = "button";
+        send.textContent = "Send";
+        footer.append(send);
+        form.append(box, footer);
+        document.getElementById("app").append(form);
+      }, 500);
+    </script>
+  </body>
+</html>
+`;
+
+// A web component with an open shadow root (Lit and others): the editor is inside it.
+PAGES["shadow.html"] =
+  pageHead(
+    "A web component editor",
+    "message-box { display: block; width: 560px; height: 160px; background: #f1f4f8; border-radius: 6px; }",
+  ) +
+  `  <body>
+    <h1>Write a note</h1>
+    <p class="note">The editor is inside an open shadow root.</p>
+    <message-box id="box"></message-box>
+    <script>
+      class MessageBox extends HTMLElement {
+        constructor() {
+          super();
+          const root = this.attachShadow({ mode: "open" });
+          const style = document.createElement("style");
+          style.textContent = ".editor { box-sizing: border-box; width: 100%; height: 100%; padding: 8px 10px; background: #fff; color: #1d2024; font: 16px/1.5 sans-serif; outline: none; overflow: auto; caret-color: transparent; }";
+          const editor = document.createElement("div");
+          editor.className = "editor";
+          editor.setAttribute("contenteditable", "true");
+          editor.setAttribute("role", "textbox");
+          editor.setAttribute("aria-multiline", "true");
+          for (const text of ${JSON.stringify(PARAGRAPHS)}) {
+            const p = document.createElement("p");
+            p.style.margin = "0";
+            p.textContent = text;
+            editor.append(p);
+          }
+          root.append(style, editor);
+        }
+      }
+      customElements.define("message-box", MessageBox);
+    </script>
+  </body>
+</html>
+`;
+
+// A text box that has the focus from the start: `autofocus` focuses it while the page loads, long
+// before the content script starts at document_idle.
+PAGES["autofocus.html"] = PAGES["textarea.html"]
+  .replace("<title>A message form</title>", "<title>An autofocused text box</title>")
+  .replace('<textarea id="box">', '<textarea id="box" autofocus>')
+  .replace("</style>", "textarea { caret-color: transparent; }\n    </style>");
+
+// Three editors in iframes, as sites embed them: one `about:blank` document that the page writes
+// (TinyMCE, CKEditor 4), one `srcdoc`, and one from another origin (the same server under the
+// name `localhost`). Each has a `contenteditable` body, the way those editors do.
+const IFRAME_BODY_CSS =
+  "html { height: 100%; } body { box-sizing: border-box; height: 100%; margin: 0; padding: 8px 10px; font: 16px/1.5 sans-serif; color: #1d2024; background: #fff; outline: none; caret-color: transparent; } p { margin: 0; }";
+const iframeDocument = (title) =>
+  `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>${IFRAME_BODY_CSS}</style></head><body id="box" contenteditable="true">${PARAGRAPHS.map((t) => `<p>${t}</p>`).join("")}</body></html>`;
+PAGES["iframe-inner.html"] = iframeDocument("An editor from another origin");
+PAGES["iframes.html"] =
+  pageHead(
+    "Editors in iframes",
+    `.frames { display: flex; gap: 14px; }
+      iframe { box-sizing: border-box; width: 390px; height: 230px; border: 1px solid #8a919c; border-radius: 4px; }
+      .caption { font: 600 13px sans-serif; margin: 0 0 4px; color: #333; }`,
+  ).replace("padding: 40px 60px", "padding: 30px 30px") +
+  `  <body>
+    <h1>Editors in iframes</h1>
+    <div class="frames">
+      <div><p class="caption">about:blank, written by the page</p><iframe id="blank" title="about blank editor"></iframe></div>
+      <div><p class="caption">srcdoc</p><iframe id="srcdoc" title="srcdoc editor"></iframe></div>
+      <div><p class="caption">another origin</p><iframe id="cross" title="cross origin editor" src="{{OTHER_ORIGIN}}/pages/iframe-inner.html"></iframe></div>
+    </div>
+    <script>
+      const html = ${JSON.stringify(iframeDocument("An editor"))};
+      const blank = document.getElementById("blank").contentDocument;
+      blank.open();
+      blank.write(html);
+      blank.close();
+      document.getElementById("srcdoc").srcdoc = html;
+    </script>
+  </body>
+</html>
+`;
+
+// Editors that say "I am code" in different ways, and prose editors that set spellcheck="false".
+const field = (id, label, markup) => `<div class="row"><label>${label}</label>${markup}</div>`;
+PAGES["editors.html"] =
+  pageHead(
+    "Which editors count",
+    `.row { margin-bottom: 4px; } label { margin: 6px 0 2px; font-size: 13px; }
+      textarea, .ed { box-sizing: border-box; width: 560px; height: 44px; font: 15px/1.4 sans-serif; padding: 4px 8px; border: 1px solid #8a919c; background: #fff; display: block; overflow: hidden; }`,
+  ).replace("padding: 40px 60px", "padding: 16px 60px") +
+  `  <body>
+    <h1 style="font-size: 18px">Which editors count</h1>
+    ${field("prose", "Prose editor (Quill) with spellcheck=false", `<div id="prose" class="ed ql-editor" contenteditable="true" role="textbox" spellcheck="false" data-gramm="false"><p>${PARAGRAPHS[0]}</p></div>`)}
+    ${field("form", "Editable inside a form with spellcheck=false", `<form spellcheck="false"><div id="form" class="ed" contenteditable="true" role="textbox">${PARAGRAPHS[0]}</div></form>`)}
+    ${field("cm6", "CodeMirror 6 (spellcheck, autocorrect, autocapitalize off)", `<div class="cm-editor"><div id="cm6" class="ed cm-content" contenteditable="true" role="textbox" spellcheck="false" autocorrect="off" autocapitalize="off">${PARAGRAPHS[0]}</div></div>`)}
+    ${field("cm5", "CodeMirror 5 (hidden textarea)", `<div class="CodeMirror"><textarea id="cm5">${PARAGRAPHS[0]}</textarea></div>`)}
+    ${field("monaco", "Monaco (input area)", `<div class="monaco-editor"><textarea id="monaco" class="inputarea">${PARAGRAPHS[0]}</textarea></div>`)}
+    ${field("ace", "Ace (text input)", `<div class="ace_editor"><textarea id="ace" class="ace_text-input">${PARAGRAPHS[0]}</textarea></div>`)}
+    ${field("native", "Plain textarea with spellcheck=false", `<textarea id="native" spellcheck="false">${PARAGRAPHS[0]}</textarea>`)}
+    ${field("pre", "A pre that is editable", `<pre id="pre" class="ed" contenteditable="true" style="margin: 0">${PARAGRAPHS[0]}</pre>`)}
+  </body>
+</html>
+`;
+
 PAGES["strict-csp.html"] = PAGES["textarea.html"].replace(
   "<title>A message form</title>",
   "<title>A strict page</title>",
@@ -318,7 +530,9 @@ export class FakeLLMServer {
         "content-type": "text/html; charset=utf-8",
         ...(PAGE_HEADERS[url.pathname.slice(7)] ?? {}),
       });
-      res.end(page);
+      // The same server under another name is another origin (`{{OTHER_ORIGIN}}`).
+      const port = (req.headers.host ?? "").split(":")[1] ?? "80";
+      res.end(page.replaceAll("{{OTHER_ORIGIN}}", `http://localhost:${port}`));
       return;
     }
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {

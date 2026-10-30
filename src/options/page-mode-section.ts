@@ -57,7 +57,7 @@ export class PageModeSection {
     ]);
     this.siteList = el(doc, "ul", { id: "page-mode-sites", class: "host-list" });
     this.sitesEmpty = el(doc, "p", { id: "page-mode-sites-empty", class: "note" }, [
-      "No site has a choice yet. English Tutor asks the first time you click into a text box on a site.",
+      "No site has a choice yet. On a site you have not turned on, a small icon appears on a text box you click into, and English Tutor asks when you click it.",
     ]);
     host.append(
       el(doc, "div", { class: "form-row single" }, [

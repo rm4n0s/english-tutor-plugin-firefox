@@ -20,6 +20,7 @@ import { BoxState } from "./box-state";
 import { DialogController } from "./dialog";
 import { FrameLink } from "./frame-link";
 import { issueAt } from "../core/issues/navigation";
+import { LayoutWatcher } from "./layout-watch";
 import { OverlayHost } from "./overlay-host";
 import { PopoverController, type PopoverTarget } from "./popover";
 import { SiteOffer } from "./site-offer";
@@ -245,6 +246,7 @@ export class PageModeContent {
         clock: this.deps.clock,
         host: this.siteHost,
         finder: this.finder,
+        scheduler: this.deps.scheduler,
         ...(this.deps.overlayMode === undefined ? {} : { overlayMode: this.deps.overlayMode }),
         onChoose: (choice) => {
           this.offer = undefined;
@@ -320,6 +322,7 @@ class Active {
   private frame: number | undefined;
   private resizeObserver: ResizeObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
+  private readonly layout: LayoutWatcher;
 
   constructor(
     deps: PageModeContentDeps,
@@ -331,6 +334,13 @@ class Active {
     this.win = win;
     this.doc = doc;
     this.finder = finder;
+    this.layout = new LayoutWatcher({
+      scheduler: deps.scheduler,
+      elements: () => [...this.boxes.keys()],
+      onMoved: () => {
+        this.schedulePosition();
+      },
+    });
     this.host = new OverlayHost(doc, deps.overlayMode ?? "closed");
     this.card = new BlockedCard(doc, this.host.layer);
     this.link = new FrameLink(
@@ -430,6 +440,12 @@ class Active {
     on(this.win, "resize", () => {
       this.schedulePosition();
     });
+    // A modal that grows into place, a box that slides: the end of the movement is exact.
+    for (const type of ["transitionend", "animationend"]) {
+      on(this.doc, type, () => {
+        this.schedulePosition();
+      });
+    }
   }
 
   /**
@@ -504,6 +520,7 @@ class Active {
       this.byId.set(state.id, tracked);
       this.observe();
       this.resizeObserver?.observe(found.element);
+      this.layout.start();
       this.link.start();
     } else {
       // The text may have changed while the box was not focused (a script wrote to it).
@@ -811,6 +828,7 @@ class Active {
   }
 
   destroy(): void {
+    this.layout.stop();
     for (const remove of this.listeners.splice(0)) remove();
     this.mutationObserver?.disconnect();
     this.resizeObserver?.disconnect();

@@ -1,8 +1,9 @@
-import type { Clock } from "../core/clock";
+import type { Clock, Scheduler } from "../core/clock";
 import type { PromptChoice, PromptServer } from "../core/page-mode/messages";
 import { Badge } from "./badge";
 import { dimmedView } from "./badge-view";
 import { badgeSpot } from "./badge-place";
+import { LayoutWatcher } from "./layout-watch";
 import { OverlayHost } from "./overlay-host";
 import { CLICK_GUARD_MS, PromptCard } from "./prompt-card";
 import { deepActiveElement, type TextBoxFinder } from "./text-box-finder";
@@ -14,6 +15,7 @@ export interface SiteOfferDeps {
   /** The site's host name (`location.hostname`, or the host of the origin of a frame with no address). */
   host: string;
   finder: TextBoxFinder;
+  scheduler: Scheduler;
   /** `open` lets a test look inside the shadow root; the extension always uses `closed`. */
   overlayMode?: "closed" | "open";
   /** The user chose Turn on or Never in the card. The badge and the card are already gone. */
@@ -43,12 +45,20 @@ export class SiteOffer {
   private shownAt = 0;
   private frame: number | undefined;
   private resizeObserver: ResizeObserver | undefined;
+  private readonly layout: LayoutWatcher;
   private started = false;
 
   constructor(deps: SiteOfferDeps) {
     this.deps = deps;
     this.win = deps.win;
     this.doc = deps.win.document;
+    this.layout = new LayoutWatcher({
+      scheduler: deps.scheduler,
+      elements: () => (this.box === undefined ? [] : [this.box]),
+      onMoved: () => {
+        this.schedule();
+      },
+    });
   }
 
   /** Whether the card is showing. */
@@ -98,6 +108,12 @@ export class SiteOffer {
     this.on(this.win, "resize", () => {
       this.schedule();
     });
+    // A modal that grows into place, a box that slides: the end of the movement is exact.
+    for (const type of ["transitionend", "animationend"]) {
+      this.on(this.doc, type, () => {
+        this.schedule();
+      });
+    }
     if (this.doc.hasFocus()) this.focusTarget(deepActiveElement(this.doc));
   }
 
@@ -156,6 +172,7 @@ export class SiteOffer {
       this.resizeObserver.observe(box);
     }
     this.follow();
+    this.layout.start();
   }
 
   /** A click on the dimmed badge opens the card, and a second click closes it. */
@@ -214,6 +231,7 @@ export class SiteOffer {
 
   /** Removes the badge, the card and their element: nothing of page mode is left on the page. */
   private clear(): void {
+    this.layout.stop();
     if (this.frame !== undefined) this.win.cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.resizeObserver?.disconnect();

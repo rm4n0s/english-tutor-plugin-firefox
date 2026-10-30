@@ -1086,7 +1086,10 @@ describe("PageModeContent: the dimmed badge and the prompt (icon first)", () => 
       },
       {
         name: "a site answered Not now",
-        config: { state: "later", llm: { server: "api.example.com", local: false } },
+        config: {
+          state: "later",
+          llm: { server: "api.example.com", local: false },
+        } satisfies SiteConfig,
         note: "What you type here is sent to api.example.com to be checked.",
       },
     ])(
@@ -1684,6 +1687,56 @@ describe("PageModeContent: real-world editors (SPEC section 4.11)", () => {
       t.box.focus();
       focusIn(t.box);
       expect(t.scheduler.pending).toBe(0);
+    });
+  });
+
+  describe("a box that moves without scrolling or resizing (a modal that grows with a CSS transform)", () => {
+    /** The box is at `top()`: nothing tells the page, as a transform animation does not. */
+    function slide(): { moveTo: (top: number) => void } {
+      let top = 100;
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+        () =>
+          ({ left: 100, top, right: 400, bottom: top + 150, width: 300, height: 150 }) as DOMRect,
+      );
+      return {
+        moveTo: (value) => {
+          top = value;
+        },
+      };
+    }
+
+    it("moves the badge of a site that is on at the next look, and again at the end of a transition", async () => {
+      const t = await setup();
+      const place = slide();
+      await t.focusAndLoad();
+      expect(t.badge()?.style.getPropertyValue("top")).toBe("224px");
+      place.moveTo(300);
+      t.scheduler.advance(250);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(t.badge()?.style.getPropertyValue("top")).toBe("424px");
+      // The end of the transition repositions at once, without waiting for a look.
+      place.moveTo(320);
+      document.dispatchEvent(trusted(new Event("transitionend", { bubbles: true })));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(t.badge()?.style.getPropertyValue("top")).toBe("444px");
+    });
+
+    it("moves the dimmed badge of a site that is not on", async () => {
+      const t = await setup({ config: REMOTE });
+      const place = slide();
+      focusIn(t.box);
+      expect(t.content.dimmedBadge?.style.getPropertyValue("top")).toBe("224px");
+      place.moveTo(300);
+      t.scheduler.advance(250);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(t.content.dimmedBadge?.style.getPropertyValue("top")).toBe("424px");
+    });
+
+    it("keeps no timer when there is no box", async () => {
+      const t = await setup();
+      expect(t.scheduler.pending).toBe(0);
+      const off = await setup({ config: { state: "off" } });
+      expect(off.scheduler.pending).toBe(0);
     });
   });
 
