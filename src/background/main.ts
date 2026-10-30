@@ -49,6 +49,7 @@ class LazyStore {
 const log = new Logger(console);
 const lazyStore = new LazyStore();
 const permission = new BrowserPageModePermission(browser);
+const session = new BrowserSessionStorage(browser);
 
 // Every listener is registered here, synchronously, when the script starts.
 startBackground({
@@ -56,11 +57,7 @@ startBackground({
   commands: new BrowserCommands(browser),
   menus: new BrowserBackgroundMenus(browser),
   tabs: new BrowserTutorTabs(browser, TUTOR_PAGE),
-  handoff: new HandoffStore(
-    new BrowserSessionStorage(browser),
-    new SystemClock(),
-    new CryptoRandom(),
-  ),
+  handoff: new HandoffStore(session, new SystemClock(), new CryptoRandom()),
   notifier: new BrowserNotifier(browser),
   lifecycle: new BrowserLifecycle(browser),
   options: new BrowserOptionsOpener(browser),
@@ -69,10 +66,11 @@ startBackground({
     permission,
     scripts: new BrowserContentScripts(browser),
     tabs: new BrowserPageTabs(browser),
+    session,
     channel: new BroadcastChangeChannel(),
     log,
   }),
-  frameClaims: new FrameClaims(new BrowserSessionStorage(browser), new SystemClock()),
+  frameClaims: new FrameClaims(session, new SystemClock()),
   permission,
   messages: new BrowserBackgroundMessages(browser),
   log,

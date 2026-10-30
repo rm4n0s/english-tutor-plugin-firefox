@@ -4,8 +4,12 @@ import {
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_OPEN_TUTOR,
+  PAGE_MODE_SITE,
   parseBroadcast,
+  parseSiteConfig,
   type PageBroadcast,
+  type PromptChoice,
+  type SiteConfig,
 } from "../core/page-mode/messages";
 
 /** The match pattern page mode asks for: every web page (SPEC sections 3.2 and 4.11). */
@@ -149,6 +153,8 @@ export class BrowserPageModeBackendLink implements PageModeBackendLink {
 export interface MessageSender {
   /** Whether it is this extension's own code. */
   ownExtension: boolean;
+  /** The address of the page or frame the sender runs in (a content script's page), if known. */
+  url: string | undefined;
   tab: { id: number; windowId: number; index: number } | undefined;
 }
 
@@ -177,6 +183,7 @@ export class BrowserBackgroundMessages implements BackgroundMessages {
       const tab = sender.tab;
       return handler(message, {
         ownExtension: sender.id === this.api.runtime.id,
+        url: sender.url,
         tab:
           tab?.id === undefined || tab.windowId === undefined
             ? undefined
@@ -188,8 +195,10 @@ export class BrowserBackgroundMessages implements BackgroundMessages {
 
 /** The content script's link to the extension. */
 export interface PageModeRuntime {
-  /** Whether page mode runs on this host (the setting and the per-site list). */
-  enabledOn(host: string): Promise<boolean>;
+  /** What page mode does on this host: its state, and for `ask` the LLM server for the prompt. */
+  configFor(host: string): Promise<SiteConfig>;
+  /** Tells the background script the choice made in the prompt (SPEC section 4.11). */
+  chooseSite(host: string, choice: PromptChoice): Promise<void>;
   /** Opens a new tutor tab with the text (the hand-off of SPEC section 4.1). */
   openInTutor(text: string): Promise<void>;
   /** Tells the background script the id of the frame about to be made (SPEC section 4.11). */
@@ -207,13 +216,14 @@ export class BrowserPageModeRuntime implements PageModeRuntime {
     this.api = api;
   }
 
-  async enabledOn(host: string): Promise<boolean> {
+  async configFor(host: string): Promise<SiteConfig> {
     const answer: unknown = await this.api.runtime.sendMessage({ type: PAGE_MODE_CONFIG, host });
-    return (
-      typeof answer === "object" &&
-      answer !== null &&
-      (answer as { enabled?: unknown }).enabled === true
-    );
+    // An answer that makes no sense is "off": nothing is read.
+    return parseSiteConfig(answer) ?? { state: "off" };
+  }
+
+  async chooseSite(host: string, choice: PromptChoice): Promise<void> {
+    await this.api.runtime.sendMessage({ type: PAGE_MODE_SITE, host, choice });
   }
 
   async registerFrame(id: string): Promise<void> {

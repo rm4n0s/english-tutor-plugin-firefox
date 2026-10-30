@@ -13,7 +13,14 @@ export {
   type StreamHandlers,
 } from "./client";
 export { TEST_PROMPT, testConnection, type TestConnectionDeps } from "./connection";
-export { effectiveBaseUrl, isLocalHost, pageModeNote, parseHttpUrl, privacyNote } from "./endpoint";
+export {
+  effectiveBaseUrl,
+  isLocalHost,
+  pageModeNote,
+  parseHttpUrl,
+  privacyNote,
+  promptServer,
+} from "./endpoint";
 export {
   DEFAULT_ANTHROPIC_URL,
   DEFAULT_OLLAMA_URL,

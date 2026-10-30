@@ -22,7 +22,7 @@ const DEFAULTS: Settings = {
   results_font_size: 11,
   pane_sizes: { editor: 65, issues: 40 },
   page_mode: false,
-  page_mode_off_hosts: [],
+  page_mode_sites: {},
 };
 
 /** Writes a raw value, bypassing the setter, as an older or damaged database might hold it. */
@@ -68,9 +68,15 @@ describe("Store settings", () => {
     { key: "results_font_size" as const, value: 12.5 },
     { key: "pane_sizes" as const, value: { editor: 50, issues: 30.5 } },
     { key: "page_mode" as const, value: true },
-    { key: "page_mode_off_hosts" as const, value: ["example.com", "a.b.example.org"] },
-    { key: "page_mode_off_hosts" as const, value: ["x".repeat(253)] },
-    { key: "page_mode_off_hosts" as const, value: [] },
+    {
+      key: "page_mode_sites" as const,
+      value: { "example.com": "on", "a.b.example.org": "off" } as Record<string, "on" | "off">,
+    },
+    {
+      key: "page_mode_sites" as const,
+      value: { ["x".repeat(253)]: "on" } as Record<string, "on" | "off">,
+    },
+    { key: "page_mode_sites" as const, value: {} as Record<string, "on" | "off"> },
   ])("set and get $key = $value", ({ key, value }) => {
     it("round-trips and changes no other setting", async () => {
       const { store } = await freshStore();
@@ -108,15 +114,19 @@ describe("Store settings", () => {
     { key: "results_font_size", invalid: [5, 49, NaN, "11", null] },
     { key: "page_mode", invalid: ["true", 1, 0, null, []] },
     {
-      key: "page_mode_off_hosts",
+      key: "page_mode_sites",
       invalid: [
         "example.com",
-        [1],
-        [null],
-        [""],
-        ["x".repeat(254)],
-        ["example.com", 5],
-        { 0: "example.com" },
+        ["example.com"],
+        [],
+        { "example.com": "ask" },
+        { "example.com": "later" },
+        { "example.com": true },
+        { "example.com": null },
+        { "": "on" },
+        { ["x".repeat(254)]: "on" },
+        { "Example.COM": "on" },
+        { "example.com": "on", "other.org": 5 },
         null,
       ],
     },
@@ -169,12 +179,26 @@ describe("Store settings", () => {
     );
   });
 
-  it("copies the host list it stores", async () => {
+  it("copies the site choices it stores", async () => {
     const { store } = await freshStore();
-    const hosts = ["example.com"];
-    await store.setSetting("page_mode_off_hosts", hosts);
-    hosts.push("other.org");
-    expect(await store.getSetting("page_mode_off_hosts")).toEqual(["example.com"]);
+    const sites: Record<string, "on" | "off"> = { "example.com": "on" };
+    await store.setSetting("page_mode_sites", sites);
+    sites["other.org"] = "off";
+    expect(await store.getSetting("page_mode_sites")).toEqual({ "example.com": "on" });
+  });
+
+  it("keeps a host named __proto__ as a plain entry", async () => {
+    const { store } = await freshStore();
+    await store.setSetting("page_mode_sites", Object.fromEntries([["__proto__", "off"]]));
+    const read = await store.getSetting("page_mode_sites");
+    expect(Object.keys(read)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(read)).toBe(Object.prototype);
+  });
+
+  it("drops the key the first draft of page mode used (no release shipped it)", async () => {
+    const { store, db } = await freshStore();
+    await writeRaw(db, "page_mode_off_hosts", ["example.com"]);
+    expect(await store.getSettings()).toEqual(DEFAULTS);
   });
 
   it("ignores stored keys it does not know", async () => {

@@ -241,7 +241,7 @@ label.inline {
   width: 70px;
 }
 
-/* Page mode (SPEC section 4.11): the sites it is turned off on. */
+/* Page mode (SPEC section 4.11): the sites with a choice, and the Welcome block. */
 .host-list {
   margin: 4px 0 8px;
   padding: 0;
@@ -260,6 +260,23 @@ label.inline {
   background: var(--bg);
 }
 
+.host-row .host-name {
+  flex: 1;
+}
+
+.site-state {
+  min-width: 2.5em;
+  font-weight: 600;
+}
+
+.site-on {
+  color: var(--ok);
+}
+
+.site-off {
+  color: var(--fg-muted);
+}
+
 .host-row + .host-row {
   margin-top: 4px;
 }
@@ -269,10 +286,23 @@ label.inline {
 }
 
 /* Space around the page-mode block, which sits between the auto-check and the font rows. */
-#page-mode-hosts-empty {
+#page-mode-sites-empty {
   margin-bottom: 14px;
 }
 
 .host-list {
   margin-bottom: 14px;
+}
+
+/* The Welcome block of a first installation sits above the sections. */
+.welcome p {
+  margin: 0 0 8px;
+}
+
+.welcome .note {
+  margin-top: 10px;
+}
+
+.welcome .card-body {
+  min-height: 0;
 }

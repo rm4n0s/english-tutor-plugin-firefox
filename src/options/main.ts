@@ -13,17 +13,27 @@ async function main(): Promise<void> {
   const clock = new SystemClock();
   const db = await openDatabase(indexedDB);
   const store = new Store(db, clock, { validateConfig });
-  const page = mountOptions(document, {
-    store,
-    clock,
-    log,
-    channel: new BroadcastChangeChannel(),
-    permissions: new BrowserHostPermissions(browser),
-    pageMode: new BrowserPageModePermission(browser),
-    background: new BrowserPageModeBackendLink(browser),
-    // The page's own fetch, called as a method of window.
-    fetch: (input, init) => window.fetch(input, init),
-  });
+  // The first installation opens options.html#welcome (SPEC section 4.11). The fragment goes at
+  // once, so that a reload does not show the block again.
+  const welcome = window.location.hash === "#welcome";
+  if (welcome) {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  const page = mountOptions(
+    document,
+    {
+      store,
+      clock,
+      log,
+      channel: new BroadcastChangeChannel(),
+      permissions: new BrowserHostPermissions(browser),
+      pageMode: new BrowserPageModePermission(browser),
+      background: new BrowserPageModeBackendLink(browser),
+      // The page's own fetch, called as a method of window.
+      fetch: (input, init) => window.fetch(input, init),
+    },
+    { welcome },
+  );
   window.addEventListener("pagehide", () => {
     page.destroy();
   });

@@ -8,12 +8,18 @@ import type { OptionsDeps } from "./deps";
 export const PERMISSION_DENIED_MESSAGE =
   "Access to all websites was not allowed, so page mode stays off. Tick the box again to be asked again.";
 
+/** The label of the box, and its words in the Welcome block. */
+export const OFFER_LABEL = "Offer to check text boxes on websites";
+
+const SITE_LABELS: Readonly<Record<string, string>> = { on: "On", off: "Off" };
+
 /**
- * Page mode in the General section (SPEC sections 4.7 and 4.11): the box "Check text boxes on
- * websites" with its privacy note, and the list of sites it is turned off on. Ticking the box asks
+ * Page mode in the General section (SPEC sections 4.7 and 4.11): the box "Offer to check text
+ * boxes on websites" with its privacy note, and the list of sites with a choice, with their state
+ * and a Remove button. Ticking the box (or Allow in the Welcome block, which calls `allow()`) asks
  * for the `<all_urls>` permission (from the click handler itself), stores the setting and has the
- * background script register the content script; unticking it undoes all three. Changes are saved
- * at once and announced on the channel.
+ * background script register the content script; unticking it undoes all three, and keeps the
+ * choices made on sites. Changes are saved at once and announced on the channel.
  */
 export class PageModeSection {
   private readonly doc: Document;
@@ -22,13 +28,17 @@ export class PageModeSection {
   private readonly box: HTMLInputElement;
   private readonly note: HTMLElement;
   private readonly errorLine: HTMLElement;
-  private readonly hostsHeading: HTMLElement;
-  private readonly hostList: HTMLElement;
-  private readonly hostsEmpty: HTMLElement;
+  private readonly sitesHeading: HTMLElement;
+  private readonly siteList: HTMLElement;
+  private readonly sitesEmpty: HTMLElement;
   private failure: AppError | undefined;
   private llm: LLMConfig | undefined;
   /** Called when the box changes, so that the auto-check delay can follow (SPEC section 4.7). */
   onChange: () => void = () => undefined;
+  /** Called when page mode was allowed and stored (the Welcome block says so). */
+  onAllowed: () => void = () => undefined;
+  /** Called with the refusal, or undefined when a new attempt starts (the Welcome block shows it). */
+  onDenied: (err: AppError | undefined) => void = () => undefined;
 
   constructor(doc: Document, host: HTMLElement, deps: OptionsDeps, report: (err: unknown) => void) {
     this.doc = doc;
@@ -42,25 +52,22 @@ export class PageModeSection {
       role: "alert",
       hidden: true,
     });
-    this.hostsHeading = el(doc, "p", { class: "note page-mode-hosts-heading" }, [
-      "Sites where page mode is off:",
+    this.sitesHeading = el(doc, "p", { class: "note page-mode-hosts-heading" }, [
+      "Sites you made a choice on:",
     ]);
-    this.hostList = el(doc, "ul", { id: "page-mode-hosts", class: "host-list" });
-    this.hostsEmpty = el(doc, "p", { id: "page-mode-hosts-empty", class: "note" }, [
-      "Page mode is not turned off on any site. The toolbar button's menu turns it off on the site of the tab in front.",
+    this.siteList = el(doc, "ul", { id: "page-mode-sites", class: "host-list" });
+    this.sitesEmpty = el(doc, "p", { id: "page-mode-sites-empty", class: "note" }, [
+      "No site has a choice yet. English Tutor asks the first time you click into a text box on a site.",
     ]);
     host.append(
       el(doc, "div", { class: "form-row single" }, [
-        el(doc, "label", { class: "inline", for: "page-mode" }, [
-          this.box,
-          " Check text boxes on websites",
-        ]),
+        el(doc, "label", { class: "inline", for: "page-mode" }, [this.box, ` ${OFFER_LABEL}`]),
       ]),
       this.note,
       this.errorLine,
-      this.hostsHeading,
-      this.hostList,
-      this.hostsEmpty,
+      this.sitesHeading,
+      this.siteList,
+      this.sitesEmpty,
     );
     // The permission is requested in the click handler itself: Firefox accepts it only during a
     // user gesture, so nothing is awaited before the call.
@@ -69,6 +76,16 @@ export class PageModeSection {
       else this.turnOff();
       this.onChange();
     });
+  }
+
+  /**
+   * Allow in the Welcome block: the same as ticking the box. Call it from the click handler itself,
+   * before any `await`, because Firefox accepts the permission request only during a user gesture.
+   */
+  allow(): void {
+    this.box.checked = true;
+    this.turnOn(this.deps.pageMode.request());
+    this.onChange();
   }
 
   /** The failure the form shows, or undefined (its route is `PageModeSection.turnOn->...`). */
@@ -87,18 +104,22 @@ export class PageModeSection {
     this.box.checked = settings.page_mode;
     this.onChange();
     setText(this.note, pageModeNote(llm));
-    this.hostList.replaceChildren(
-      ...settings.page_mode_off_hosts.map((host) =>
-        el(this.doc, "li", { class: "host-row" }, [
+    const sites = Object.entries(settings.page_mode_sites).sort(([a], [b]) => a.localeCompare(b));
+    this.siteList.replaceChildren(
+      ...sites.map(([host, choice]) =>
+        el(this.doc, "li", { class: "host-row", "data-host": host }, [
           el(this.doc, "span", { class: "host-name" }, [host]),
+          el(this.doc, "span", { class: `site-state site-${choice}` }, [
+            SITE_LABELS[choice] ?? choice,
+          ]),
           this.removeButton(host),
         ]),
       ),
     );
-    const none = settings.page_mode_off_hosts.length === 0;
-    setHidden(this.hostsEmpty, !none);
-    setHidden(this.hostsHeading, none);
-    setHidden(this.hostList, none);
+    const none = sites.length === 0;
+    setHidden(this.sitesEmpty, !none);
+    setHidden(this.sitesHeading, none);
+    setHidden(this.siteList, none);
   }
 
   private removeButton(host: string): HTMLButtonElement {
@@ -109,7 +130,7 @@ export class PageModeSection {
       ["Remove"],
     );
     button.addEventListener("click", () => {
-      this.removeHost(host).catch(this.report);
+      this.removeSite(host).catch(this.report);
     });
     return button;
   }
@@ -132,6 +153,7 @@ export class PageModeSection {
   }
 
   private async finishTurnOn(asked: Promise<boolean>): Promise<void> {
+    this.onDenied(undefined);
     let granted = false;
     let cause: unknown;
     try {
@@ -142,20 +164,21 @@ export class PageModeSection {
     if (!granted) {
       this.box.checked = false;
       this.onChange();
-      this.showError(
-        new AppError(
-          "PageModePermissionDenied",
-          PERMISSION_DENIED_MESSAGE,
-          {},
-          cause === undefined ? undefined : { cause },
-        ).via("PageModeSection.turnOn"),
-      );
+      const denied = new AppError(
+        "PageModePermissionDenied",
+        PERMISSION_DENIED_MESSAGE,
+        {},
+        cause === undefined ? undefined : { cause },
+      ).via("PageModeSection.turnOn");
+      this.showError(denied);
+      this.onDenied(denied);
       return;
     }
     this.showError(undefined);
     await this.deps.store.setSetting("page_mode", true);
     this.deps.channel.post("settings-changed");
     await this.deps.background.apply();
+    this.onAllowed();
   }
 
   private turnOff(): void {
@@ -177,11 +200,12 @@ export class PageModeSection {
     await this.deps.pageMode.remove();
   }
 
-  private async removeHost(host: string): Promise<void> {
-    const hosts = await this.deps.store.getSetting("page_mode_off_hosts");
+  /** A removed site is asked about again. */
+  private async removeSite(host: string): Promise<void> {
+    const sites = await this.deps.store.getSetting("page_mode_sites");
     await this.deps.store.setSetting(
-      "page_mode_off_hosts",
-      hosts.filter((h) => h !== host),
+      "page_mode_sites",
+      Object.fromEntries(Object.entries(sites).filter(([h]) => h !== host)),
     );
     this.deps.channel.post("settings-changed");
     await this.deps.background.apply();

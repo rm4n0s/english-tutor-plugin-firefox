@@ -118,6 +118,11 @@ export class LLMSection {
     this.renderList();
   }
 
+  /** Opens the Add form, as the Add button does (the Welcome block's Add an LLM). */
+  startAdd(): void {
+    this.openForm(undefined);
+  }
+
   /** Reads the LLMs and the selection from the store and draws the list. */
   async load(): Promise<void> {
     try {

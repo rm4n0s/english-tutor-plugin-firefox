@@ -204,16 +204,24 @@ describe("BrowserBackgroundMessages", () => {
 
   it("tells the handler whether the sender is the extension and where its tab is", () => {
     const { messages, seen } = setup();
-    messages.fire("a", { id: "english-tutor@rm4n0s.dev", tab: { id: 9, windowId: 4, index: 2 } });
+    messages.fire("a", {
+      id: "english-tutor@rm4n0s.dev",
+      url: "https://example.com/page",
+      tab: { id: 9, windowId: 4, index: 2 },
+    });
     messages.fire("b", { id: "someone-else@example.com" });
     messages.fire("c", { id: "english-tutor@rm4n0s.dev", tab: {} });
     // A tab without an id cannot be told from another one.
     messages.fire("d", { id: "english-tutor@rm4n0s.dev", tab: { windowId: 4, index: 2 } });
     expect(seen.map((s) => s.sender)).toEqual([
-      { ownExtension: true, tab: { id: 9, windowId: 4, index: 2 } },
-      { ownExtension: false, tab: undefined },
-      { ownExtension: true, tab: undefined },
-      { ownExtension: true, tab: undefined },
+      {
+        ownExtension: true,
+        url: "https://example.com/page",
+        tab: { id: 9, windowId: 4, index: 2 },
+      },
+      { ownExtension: false, url: undefined, tab: undefined },
+      { ownExtension: true, url: undefined, tab: undefined },
+      { ownExtension: true, url: undefined, tab: undefined },
     ]);
   });
 
@@ -258,7 +266,8 @@ describe("BrowserFrameClaim", () => {
 });
 
 describe("BrowserPageModeRuntime", () => {
-  function setup(answer: unknown = { enabled: true }) {
+  function setup(...given: [unknown?]) {
+    const answer: unknown = given.length === 0 ? { state: "on" } : given[0];
     const sent: unknown[] = [];
     const messages = event();
     const api = {
@@ -274,14 +283,40 @@ describe("BrowserPageModeRuntime", () => {
     return { runtime: new BrowserPageModeRuntime(api), sent, messages };
   }
 
-  it("asks whether page mode runs on the host, and reads only enabled: true as yes", async () => {
-    const yes = setup({ enabled: true });
-    expect(await yes.runtime.enabledOn("example.com")).toBe(true);
-    expect(yes.sent).toEqual([{ type: "page-mode-config", host: "example.com" }]);
-    for (const answer of [{ enabled: false }, { enabled: "yes" }, {}, null, "true", 1]) {
-      expect(await setup(answer).runtime.enabledOn("example.com")).toBe(false);
-    }
+  it("asks what page mode does on the host", async () => {
+    const t = setup({ state: "ask", llm: { server: "localhost:11434", local: true } });
+    expect(await t.runtime.configFor("example.com")).toEqual({
+      state: "ask",
+      llm: { server: "localhost:11434", local: true },
+    });
+    expect(t.sent).toEqual([{ type: "page-mode-config", host: "example.com" }]);
   });
+
+  it.each([
+    { answer: { state: "on" }, expected: { state: "on" } },
+    { answer: { state: "off" }, expected: { state: "off" } },
+    { answer: { state: "later" }, expected: { state: "later" } },
+    { answer: { state: "ask", llm: null }, expected: { state: "ask", llm: null } },
+    // An answer that makes no sense, or an old one, is off: nothing is read.
+    { answer: { enabled: true }, expected: { state: "off" } },
+    { answer: { state: "yes" }, expected: { state: "off" } },
+    { answer: {}, expected: { state: "off" } },
+    { answer: null, expected: { state: "off" } },
+    { answer: undefined, expected: { state: "off" } },
+    { answer: "on", expected: { state: "off" } },
+    { answer: 1, expected: { state: "off" } },
+  ])("reads the answer $answer as $expected", async ({ answer, expected }) => {
+    expect(await setup(answer).runtime.configFor("example.com")).toEqual(expected);
+  });
+
+  it.each(["on", "off", "later"] as const)(
+    "tells the background script the choice %s",
+    async (choice) => {
+      const t = setup({ ok: true });
+      await t.runtime.chooseSite("example.com", choice);
+      expect(t.sent).toEqual([{ type: "page-mode-site", host: "example.com", choice }]);
+    },
+  );
 
   it("hands the text over to a new tutor tab", async () => {
     const t = setup({ ok: true });

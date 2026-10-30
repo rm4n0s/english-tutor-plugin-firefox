@@ -6,6 +6,8 @@ import {
   parseConfigRequest,
   parseFrameIdRequest,
   parseOpenTutorRequest,
+  parseSiteConfig,
+  parseSiteRequest,
 } from "./messages";
 
 describe("runtime messages of page mode", () => {
@@ -60,6 +62,113 @@ describe("runtime messages of page mode", () => {
     { message: undefined, expected: undefined },
   ])("parseBroadcast of $message", ({ message, expected }) => {
     expect(parseBroadcast(message)).toBe(expected);
+  });
+});
+
+describe("the site messages", () => {
+  it.each([
+    { name: "on", answer: { state: "on" }, expected: { state: "on" } },
+    { name: "off", answer: { state: "off" }, expected: { state: "off" } },
+    { name: "later", answer: { state: "later" }, expected: { state: "later" } },
+    {
+      name: "on with a server it does not need",
+      answer: { state: "on", llm: { server: "a.com", local: false } },
+      expected: { state: "on" },
+    },
+    {
+      name: "ask without an LLM",
+      answer: { state: "ask", llm: null },
+      expected: { state: "ask", llm: null },
+    },
+    {
+      name: "ask with no llm field",
+      answer: { state: "ask" },
+      expected: { state: "ask", llm: null },
+    },
+    {
+      name: "ask with a remote server",
+      answer: { state: "ask", llm: { server: "api.example.com", local: false } },
+      expected: { state: "ask", llm: { server: "api.example.com", local: false } },
+    },
+    {
+      name: "ask with a local server",
+      answer: { state: "ask", llm: { server: "localhost:11434", local: true, key: "x" } },
+      expected: { state: "ask", llm: { server: "localhost:11434", local: true } },
+    },
+    {
+      name: "ask with an empty server",
+      answer: { state: "ask", llm: { server: "", local: false } },
+      expected: undefined,
+    },
+    {
+      name: "ask with a number as server",
+      answer: { state: "ask", llm: { server: 5, local: false } },
+      expected: undefined,
+    },
+    {
+      name: "ask with no local flag",
+      answer: { state: "ask", llm: { server: "a.com" } },
+      expected: undefined,
+    },
+    { name: "ask with a text as llm", answer: { state: "ask", llm: "a.com" }, expected: undefined },
+    { name: "an unknown state", answer: { state: "maybe" }, expected: undefined },
+    { name: "the old answer of step 13", answer: { enabled: true }, expected: undefined },
+    { name: "nothing", answer: undefined, expected: undefined },
+    { name: "null", answer: null, expected: undefined },
+    { name: "text", answer: "on", expected: undefined },
+  ])("parseSiteConfig reads $name", ({ answer, expected }) => {
+    expect(parseSiteConfig(answer)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "on",
+      message: { type: "page-mode-site", host: "example.com", choice: "on" },
+      ok: true,
+    },
+    {
+      name: "off",
+      message: { type: "page-mode-site", host: "example.com", choice: "off" },
+      ok: true,
+    },
+    {
+      name: "later",
+      message: { type: "page-mode-site", host: "example.com", choice: "later" },
+      ok: true,
+    },
+    {
+      name: "ask",
+      message: { type: "page-mode-site", host: "example.com", choice: "ask" },
+      ok: false,
+    },
+    { name: "no choice", message: { type: "page-mode-site", host: "example.com" }, ok: false },
+    {
+      name: "an empty host",
+      message: { type: "page-mode-site", host: "", choice: "on" },
+      ok: false,
+    },
+    {
+      name: "an upper-case host",
+      message: { type: "page-mode-site", host: "Example.com", choice: "on" },
+      ok: false,
+    },
+    {
+      name: "a host of 254 characters",
+      message: { type: "page-mode-site", host: "a".repeat(254), choice: "on" },
+      ok: false,
+    },
+    {
+      name: "a number as host",
+      message: { type: "page-mode-site", host: 5, choice: "on" },
+      ok: false,
+    },
+    {
+      name: "another type",
+      message: { type: "page-mode-config", host: "x.com", choice: "on" },
+      ok: false,
+    },
+  ])("parseSiteRequest reads $name", ({ message, ok }) => {
+    expect(parseSiteRequest(message) !== undefined).toBe(ok);
   });
 });
 

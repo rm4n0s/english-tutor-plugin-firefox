@@ -1539,6 +1539,7 @@ const SCENARIOS = {
       await ctx.configureFakeLLM({ name: "Fake LLM" });
       await ctx.turnOnPageMode();
       await ctx.expectChecked("page-mode");
+      await ctx.expectText("page-mode-note", "asks on each site before it reads anything there");
       await ctx.expectText("page-mode-note", "is checked by");
       await ctx.expectText("page-mode-note", "on this computer");
       await ctx.expectHidden("page-mode-error");
@@ -1709,52 +1710,69 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-13-page-mode",
     async run(ctx) {
-      // The toolbar button's menu names the site of the tab in front (SPEC section 4.11). The
-      // native menu cannot be photographed (a screenshot is of the page only), so the entries are
-      // read from the browser, "Turn off" is chosen, and the options page's list of sites shows
-      // the result.
+      // The toolbar button's menu names the site of the tab in front and follows its states (SPEC
+      // section 4.11): Turn on for a site with no choice, Turn off for a site that is on, Turn on
+      // again for a site that is off. The native menu cannot be photographed (a screenshot is of the
+      // page only), so the entries are read from the browser, the entries are chosen, and the
+      // options page's list of sites shows the result.
       ctx.llm.setReplies(CHECK_REPLY);
       await ctx.configureFakeLLM({ name: "Fake LLM" });
-      await ctx.turnOnPageMode();
+      await ctx.turnOnPageMode({ sites: {} });
       const options = await ctx.driver.getWindowHandle();
-      await ctx.openPageModePage("textarea.html");
+      await ctx.openWebPage("textarea.html");
       const page = await ctx.driver.getWindowHandle();
-      const labels = await ctx.openToolbarMenu();
-      for (const wanted of ["New tutor tab", "Preferences", "Turn off on 127.0.0.1"]) {
-        if (!labels.includes(wanted)) {
-          throw new Error(`the toolbar menu has ${JSON.stringify(labels)}, not ${wanted}`);
+      const first = await ctx.openToolbarMenu(`Turn on on ${TEST_HOST}`);
+      for (const wanted of ["New tutor tab", "Preferences", `Turn on on ${TEST_HOST}`]) {
+        if (!first.includes(wanted)) {
+          throw new Error(`the toolbar menu has ${JSON.stringify(first)}, not ${wanted}`);
         }
       }
-      await ctx.chooseToolbarMenuItem("Turn off on 127.0.0.1");
-      // The open page stops at once: its overlay goes, and a text box is no longer checked.
-      await ctx.waitForNoPageModeHost();
-      await ctx.focusBox();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      if (ctx.llmRequests() !== 0) throw new Error("text was checked on a site that is turned off");
-      // The menu now offers the opposite.
-      const later = await ctx.openToolbarMenu();
-      if (!later.includes("Turn on on 127.0.0.1")) {
-        throw new Error(`the toolbar menu has ${JSON.stringify(later)}, not Turn on on 127.0.0.1`);
-      }
-      await ctx.closeToolbarMenu();
-      // The options page lists the site.
-      await ctx.driver.switchTo().window(options);
-      await ctx.waitForText("page-mode-hosts", "127.0.0.1");
-      await ctx.scrollTo("page-mode");
-      await ctx.expectTheme();
-      await ctx.screenshot();
-      // A new page load on that site is left alone too, and Remove turns it on again.
-      await ctx.driver.switchTo().window(page);
-      await ctx.driver.navigate().refresh();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await ctx.waitForNoPageModeHost();
-      await ctx.driver.switchTo().window(options);
-      await ctx.click("page-mode-hosts", ".host-remove");
-      await ctx.waitForCount("#page-mode-hosts li", 0);
-      await ctx.driver.switchTo().window(page);
-      await ctx.driver.navigate().refresh();
+      await ctx.chooseToolbarMenuItem(`Turn on on ${TEST_HOST}`);
+      // The open page starts at once: its overlay shows, and the text box is checked.
       await ctx.waitForPageModeHost();
       await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      const checked = ctx.llmRequests();
+      const second = await ctx.openToolbarMenu(`Turn off on ${TEST_HOST}`);
+      if (!second.includes(`Turn off on ${TEST_HOST}`)) {
+        throw new Error(`the toolbar menu has ${JSON.stringify(second)}, not Turn off`);
+      }
+      await ctx.chooseToolbarMenuItem(`Turn off on ${TEST_HOST}`);
+      // The open page stops at once: its overlay goes, and a text box is no longer checked.
+      await ctx.waitForNoPageModeHost();
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusBox();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (ctx.llmRequests() !== checked) {
+        throw new Error("text was checked on a site that is turned off");
+      }
+      // The menu now offers the opposite.
+      const later = await ctx.openToolbarMenu(`Turn on on ${TEST_HOST}`);
+      if (!later.includes(`Turn on on ${TEST_HOST}`)) {
+        throw new Error(`the toolbar menu has ${JSON.stringify(later)}, not Turn on`);
+      }
+      await ctx.closeToolbarMenu();
+      // The options page lists the site, off.
+      await ctx.driver.switchTo().window(options);
+      await ctx.waitForText("page-mode-sites", TEST_HOST);
+      await ctx.expectText("page-mode-sites", "Off");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+      // A new page load on that site is left alone too, and Remove makes it asked again.
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await ctx.waitForNoPageModeHost();
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode-sites", ".host-remove");
+      await ctx.waitForCount("#page-mode-sites li", 0);
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await ctx.focusUntilPrompt();
+      await ctx.clickPrompt("on");
       await ctx.waitForBadge("grammar");
     },
   },
@@ -1882,6 +1900,287 @@ const SCENARIOS = {
       await ctx.waitForLLMRequests(2);
     },
   },
+  // Step 14: page mode asks on each site (SPEC section 4.11). The prompt card lives in a closed
+  // shadow root, so the harness finds its buttons from the pixels of the picture.
+  welcome: {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      await expectInstallWelcome(ctx);
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      // The fragment goes at once, so that a reload does not show the block again.
+      await ctx.expectCleanAddress();
+      await ctx.expectText("welcome", "Welcome to English Tutor");
+      await ctx.expectText("welcome-offer", "reads nothing on a site until you say yes");
+      await ctx.expectHidden("welcome-error");
+      await ctx.expectHidden("welcome-allowed");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "welcome-dark": {
+    theme: "dark",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      await expectInstallWelcome(ctx);
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      await ctx.expectCleanAddress();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "welcome-actions": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // No PNG: what the buttons of the Welcome block do.
+      // A reload does not show the block again.
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      await ctx.driver.navigate().refresh();
+      await waitForPage(ctx.driver, "options.html");
+      await ctx.waitForVisible("llm-add");
+      if ((await ctx.driver.findElements(By.id("welcome"))).length !== 0) {
+        throw new Error("the Welcome block came back after a reload");
+      }
+      // Add an LLM opens the Add form of the LLMs section, and the block stays.
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      await ctx.click("welcome-add-llm");
+      await ctx.waitForVisible("llm-form");
+      await ctx.waitForVisible("welcome");
+      // Not now closes the block and changes nothing.
+      await ctx.click("welcome-later");
+      await ctx.waitForCount("#welcome", 0);
+      if (await ctx.hasAllUrlsPermission()) throw new Error("Not now asked for the permission");
+      await ctx.waitForRegisteredScripts(0);
+      // Allow asks for access to all websites once (the preference grants it without a prompt),
+      // ticks the box of the General section, and the background script registers the script.
+      await ctx.open("options.html#welcome");
+      await ctx.waitForVisible("welcome");
+      await ctx.click("welcome-allow");
+      await ctx.waitForVisible("welcome-allowed");
+      await ctx.waitForRegisteredScripts(1);
+      if (!(await ctx.hasAllUrlsPermission())) throw new Error("the permission was not granted");
+      await ctx.expectChecked("page-mode");
+      await ctx.expectHidden("welcome-error");
+      await ctx.expectHidden("welcome-offer");
+    },
+  },
+  "site-prompt": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // A site with no choice: the first focus of a text box opens the card under the box. The LLM
+      // is on another computer, so the note names its server.
+      await ctx.configureFakeLLM({
+        name: "Remote LLM",
+        baseUrl: "https://llm.example.com/v1",
+      });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.expectSiteConfig(TEST_HOST, {
+        state: "ask",
+        llm: { server: "llm.example.com", local: false },
+      });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      // The card did not take the focus from the text box, and nothing was sent.
+      await ctx.expectFocus("box");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
+      // The box's caret blinks and its focus ring fades: leave the box (the card stays) and wait.
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      await ctx.screenshot();
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made before Turn on");
+    },
+  },
+  "site-prompt-local": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // The LLM is a server on this computer: the note says the text is checked there.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.expectSiteConfig(TEST_HOST, {
+        state: "ask",
+        llm: { server: new URL(ctx.llm.baseUrl).host, local: true },
+      });
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      await ctx.expectFocus("box");
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      await ctx.screenshot();
+    },
+  },
+  "site-prompt-no-llm": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // No LLM is set up yet: the card says so and points to the options.
+      await ctx.open("options.html");
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.expectSiteConfig(TEST_HOST, { state: "ask", llm: null });
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      await ctx.expectFocus("box");
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (!(await ctx.promptShowing())) throw new Error("the card went when the box was left");
+      await ctx.screenshot();
+    },
+  },
+  "site-turned-on": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // Turn on: the card goes, the text box the user is in is checked at once (without a second
+      // click) and keeps its focus, and the badge shows the count.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent before Turn on");
+      await ctx.clickPrompt("on");
+      await ctx.waitForBadge("grammar");
+      await ctx.expectFocus("box");
+      await ctx.waitForLLMRequests(1);
+      if (await ctx.promptShowing()) throw new Error("the card stayed after Turn on");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+      // The choice is kept: the site is on after a reload, with no card.
+      await ctx.driver.navigate().refresh();
+      await ctx.waitForPageModeHost();
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      if (await ctx.promptShowing()) throw new Error("the card came back on a site that is on");
+    },
+  },
+  "options-sites": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // A site is the exact host name: the same server under another name is asked on its own.
+      // The options page lists both, with their state and Remove.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: {} });
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openWebPage("textarea.html");
+      await ctx.focusUntilPrompt();
+      await ctx.clickPrompt("on");
+      await ctx.waitForBadge("grammar");
+      await ctx.openWebPage("textarea.html", { host: OTHER_HOST });
+      await ctx.focusUntilPrompt();
+      await ctx.clickPrompt("off");
+      await ctx.driver.switchTo().window(options);
+      await ctx.waitForText("page-mode-sites", OTHER_HOST);
+      await ctx.waitForCount("#page-mode-sites li", 2);
+      const rows = await ctx.driver.executeScript(
+        `return [...document.querySelectorAll("#page-mode-sites li")].map((li) => li.innerText.replace(/\\s+/g, " ").trim())`,
+      );
+      if (
+        JSON.stringify(rows) !==
+        JSON.stringify([`${TEST_HOST} On Remove`, `${OTHER_HOST} Off Remove`])
+      ) {
+        throw new Error(`the list of sites is ${JSON.stringify(rows)}`);
+      }
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "sites-not-asked": {
+    theme: "light",
+    dir: "step-14-page-mode-sites",
+    async run(ctx) {
+      // No PNG. On a site that is off, and on a site answered Not now, the content script shows no
+      // card, makes no frame, reads no text and sends nothing; an excluded field never opens the
+      // prompt on a site that is asked about.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode({ sites: { [TEST_HOST]: "off" } });
+      // The options page shows the seeded site after it is loaded again.
+      await ctx.driver.navigate().refresh();
+      await waitForPage(ctx.driver, "options.html");
+      await ctx.waitForText("page-mode-sites", TEST_HOST);
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.watchFrameRegistrations();
+
+      // Never on this site (off): nothing shows, even when the user types.
+      await ctx.openWebPage("textarea.html");
+      const page = await ctx.driver.getWindowHandle();
+      await ctx.expectNoPrompt();
+      await ctx.typeInBox(" and some more words");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (await ctx.pageModeHostPresent()) throw new Error("an off site has a page-mode element");
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent from an off site");
+
+      // Remove on the options page: the site is asked again (the open page hears it).
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode-sites", ".host-remove");
+      await ctx.waitForCount("#page-mode-sites li", 0);
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.executeScript("document.activeElement.blur()");
+      await ctx.focusUntilPrompt();
+
+      // Not now: the card goes and the site is not asked again, even after a reload.
+      await ctx.clickPrompt("later");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (await ctx.pageModeHostPresent()) throw new Error("Not now left a page-mode element");
+      await ctx.driver.navigate().refresh();
+      await ctx.expectNoPrompt();
+      if (await ctx.pageModeHostPresent()) throw new Error("a later site has a page-mode element");
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent from a later site");
+      await ctx.driver.switchTo().window(options);
+      const later = await ctx.sessionKeys("page-mode-later:");
+      if (JSON.stringify(later) !== JSON.stringify([`page-mode-later:${TEST_HOST}`])) {
+        throw new Error(`storage.session holds ${JSON.stringify(later)}`);
+      }
+      if (
+        (await ctx.driver.executeScript(
+          "return document.getElementById('page-mode-sites').hidden",
+        )) !== true
+      ) {
+        throw new Error("Not now was stored as a choice");
+      }
+
+      // The content script was running on that page all the time: when Not now is forgotten (the
+      // browser restarts, which empties storage.session) and the page is told, it asks.
+      await ctx.clearLater();
+      await ctx.driver.switchTo().window(page);
+      await ctx.focusUntilPrompt();
+      await ctx.clickPrompt("later");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await ctx.driver.switchTo().window(options);
+      // The same, before a page that has excluded fields: it asks, and an excluded field never
+      // opens the prompt, while the plain text box does.
+      await ctx.clearLater();
+      await ctx.openWebPage("excluded.html");
+      const excluded = ["password", "email", "nospell", "card", "optout"];
+      for (const id of excluded) await ctx.expectNoPrompt(id, id === excluded[0] ? 2500 : 800);
+      await ctx.focusUntilPrompt("control");
+      if (ctx.llmRequests() !== 0) throw new Error("text was sent before Turn on");
+      await ctx.driver.switchTo().window(options);
+      if ((await ctx.frameRegistrations()) !== 0)
+        throw new Error("a frame was made without Turn on");
+    },
+  },
 };
 
 /** The fake LLM's answer when the text has no mistake. */
@@ -1890,8 +2189,48 @@ const NO_ISSUES_REPLY = {
   usage: { prompt_tokens: 60, completion_tokens: 8 },
 };
 
+/** JSON with the keys of every object in order, so that two values compare whatever their key order. */
+function canonicalJson(value) {
+  return JSON.stringify(value, (_, v) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)))
+      : v,
+  );
+}
+
+/**
+ * Fails unless installing the add-on opened the welcome page (`options.html#welcome`, on
+ * `runtime.onInstalled` with reason `install`) and it showed the Welcome block with the fragment
+ * cleared. `startBrowser` looked at that tab and closed it.
+ */
+async function expectInstallWelcome(ctx) {
+  const found = ctx.driver.installWelcome;
+  if (found?.welcome !== true) {
+    throw new Error(
+      `installing the add-on did not show the Welcome block: ${JSON.stringify(found)}`,
+    );
+  }
+  if (found.hash !== "") throw new Error(`the welcome address kept its fragment: ${found.hash}`);
+}
+
 /** The colour of the Open in English Tutor button of the blocked badge's card (#0b5cad). */
 const BLOCKED_CARD_BUTTON = [0x0b, 0x5c, 0xad];
+
+/**
+ * What the buttons of the site prompt look like (SPEC section 4.11): the card lives in a closed
+ * shadow root that Selenium cannot reach, so the harness finds a button from the pixels of the
+ * screenshot, as it does for the badge. Turn on is filled blue, Not now is filled grey-blue, and
+ * Never on this site has a red border.
+ */
+const PROMPT_COLORS = {
+  on: [0x0b, 0x5c, 0xad],
+  later: [0xd9, 0xe2, 0xec],
+  off: [0xb3, 0x26, 0x1e],
+};
+
+/** The site the test pages are on, and another that is the same server under another name. */
+const TEST_HOST = "127.0.0.1";
+const OTHER_HOST = "localhost";
 
 /** In the browser's own code: the visible entries of the toolbar button's open context menu. */
 const TOOLBAR_MENU_LABELS = `
@@ -2482,11 +2821,42 @@ async function startBrowser(theme, zipPath, downloadDir) {
   try {
     await sizeViewport(driver);
     await driver.installAddon(zipPath, true);
+    // Installing the add-on is an installation (`runtime.onInstalled`, reason `install`, which a
+    // temporary add-on reports too), so the background script opens the welcome page in a new tab.
+    // It is looked at and closed here, so that no scenario meets an extra tab, and the `welcome`
+    // scenario can say that the installation did open it.
+    driver.installWelcome = await takeInstallWelcomeTab(driver);
   } catch (err) {
     await driver.quit();
     throw err;
   }
   return driver;
+}
+
+/**
+ * Waits for the tab that installing the add-on opens (`options.html#welcome`), reports what it
+ * shows (the Welcome block, and that the fragment was cleared from the address), and closes it.
+ */
+async function takeInstallWelcomeTab(driver) {
+  const original = await driver.getWindowHandle();
+  let welcome;
+  await driver.wait(
+    async () => {
+      welcome = (await driver.getAllWindowHandles()).find((h) => h !== original);
+      return welcome !== undefined;
+    },
+    PAGE_TIMEOUT_MS,
+    "installing the add-on never opened the welcome page (runtime.onInstalled with reason install?)",
+  );
+  await driver.switchTo().window(welcome);
+  await waitForPage(driver, "options.html");
+  await driver.wait(until.elementLocated(By.id("welcome")), PAGE_TIMEOUT_MS);
+  const found = await driver.executeScript(
+    "return { welcome: document.getElementById('welcome') !== null, hash: location.hash }",
+  );
+  await driver.close();
+  await driver.switchTo().window(original);
+  return found;
 }
 
 /**
@@ -2624,6 +2994,20 @@ async function resetData(ctx) {
      request.onerror = () => done("failed");`,
   );
   if (result !== "deleted") throw new Error(`could not reset the database: ${result}`);
+  // Page mode starts from a fresh installation too: nothing in `storage.session` (the sites
+  // answered Not now), no registered content script and no access to all websites. The background
+  // script is asked to bring the registration in step with the (now default) settings.
+  const clean = await ctx.driver.executeAsyncScript(
+    `const done = arguments[arguments.length - 1];
+     (async () => {
+       await browser.storage.session.clear();
+       await browser.runtime.sendMessage({ type: "page-mode-apply" });
+       await browser.permissions.remove({ origins: ["<all_urls>"] }).catch(() => false);
+       const left = await browser.scripting.getRegisteredContentScripts();
+       return left.length;
+     })().then(done, (e) => done("failed: " + e));`,
+  );
+  if (clean !== 0) throw new Error(`could not reset page mode: ${clean}`);
 }
 
 function makeContext(name, scenario, driver, llm, policy, folders) {
@@ -3178,7 +3562,7 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
      * Opens a test page of the fake server (`PAGES`) in a new tab and leaves the other tabs open,
      * as the browser would for a link. The tab is opened by the browser's own code, as `open` does.
      */
-    async openWebPage(name) {
+    async openWebPage(name, { host = TEST_HOST } = {}) {
       const before = await driver.getAllWindowHandles();
       await driver.setContext(firefox.Context.CHROME);
       try {
@@ -3187,7 +3571,7 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
              triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
            });
            gBrowser.selectedTab = tab;`,
-          llm.pageUrl(name),
+          llm.pageUrl(name).replace(TEST_HOST, host),
         );
       } finally {
         await driver.setContext(firefox.Context.CONTENT);
@@ -3688,12 +4072,16 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
     // Page mode (SPEC section 4.11)
 
     /**
-     * Turns page mode on the way a user does: ticks "Check text boxes on websites" on the options
-     * page (the optional-permission preference grants `<all_urls>` without a prompt), and waits
-     * until the background script has registered the content script. The pause of the automatic
-     * check is set to one second (the shortest) so that scenarios do not wait for three.
+     * Turns page mode on the way a user does: ticks "Offer to check text boxes on websites" on the
+     * options page (the optional-permission preference grants `<all_urls>` without a prompt), and
+     * waits until the background script has registered the content script. The pause of the
+     * automatic check is set to one second (the shortest) so that scenarios do not wait for three.
+     *
+     * Page mode is off on every site until the user turns a site on (SPEC section 4.11), so the
+     * scenarios that are not about the prompt seed the test site as `on` (`sites`, host to `on` or
+     * `off`; `{}` leaves every site to be asked). That is a test-only write of the setting.
      */
-    async turnOnPageMode({ delay = 1 } = {}) {
+    async turnOnPageMode({ delay = 1, sites = { [TEST_HOST]: "on" } } = {}) {
       await driver.wait(until.elementLocated(By.id("page-mode")), PAGE_TIMEOUT_MS);
       await ctx.click("page-mode");
       await driver.wait(
@@ -3717,6 +4105,22 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       }
       // The delay is used by page mode, so its field is enabled now.
       await ctx.fill("auto-check-delay", String(delay), Key.TAB);
+      await ctx.seedSites(sites);
+    },
+    /** Test only: stores the site choices (`page_mode_sites`) from the options page. */
+    async seedSites(sites) {
+      const stored = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         const open = indexedDB.open("english-tutor");
+         open.onsuccess = () => {
+           const tx = open.result.transaction("settings", "readwrite");
+           tx.objectStore("settings").put({ key: "page_mode_sites", value: arguments[0] });
+           tx.oncomplete = () => { open.result.close(); done("stored"); };
+           tx.onerror = () => done("failed");
+         };`,
+        sites,
+      );
+      if (stored !== "stored") throw new Error("could not store the site choices");
     },
     /**
      * Opens a test page of the fake server in a new tab, and waits until the page-mode content
@@ -3913,7 +4317,7 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
      * The extension's entries are asked to update in `menus.onShown`, so it waits for the entry
      * of page mode to have a label.
      */
-    async openToolbarMenu() {
+    async openToolbarMenu(wanted) {
       await ctx.chrome(
         `const id = "english-tutor_rm4n0s_dev-browser-action";
          CustomizableUI.addWidgetToArea(id, CustomizableUI.AREA_NAVBAR);
@@ -3927,10 +4331,10 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         await driver.wait(
           async () => {
             labels = await driver.executeScript(TOOLBAR_MENU_LABELS);
-            return labels.some((label) => label.startsWith("Turn o"));
+            return labels.includes(wanted);
           },
           PAGE_TIMEOUT_MS,
-          `the toolbar menu never offered page mode for the site (it shows ${JSON.stringify(labels)})`,
+          `the toolbar menu never offered ${wanted} (it shows ${JSON.stringify(labels)})`,
         );
         return labels;
       } finally {
@@ -3961,6 +4365,111 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       } finally {
         await driver.setContext(firefox.Context.CONTENT);
       }
+    },
+    // The site prompt (SPEC section 4.11): a card in the content script's closed shadow root, so
+    // it is found, and its buttons clicked, from the pixels of the picture.
+
+    /** How many pixels of the picture are (nearly) this colour. */
+    async countColor(rgb, tolerance = 3) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      let n = 0;
+      for (let y = 0; y < png.height; y++) {
+        for (let x = 0; x < png.width; x++) if (closeTo(png.pixel(x, y), rgb, tolerance)) n++;
+      }
+      return n;
+    },
+    /** Whether the prompt card is on the page (its Turn on button is there). */
+    async promptShowing() {
+      return (await ctx.countColor(PROMPT_COLORS.on)) >= 200;
+    },
+    /** Waits for the prompt card to show. */
+    async waitForPrompt() {
+      await ctx.waitForColor(PROMPT_COLORS.on);
+    },
+    /**
+     * Clicks the text box, as the user does to start writing in it, until the prompt shows. The
+     * content script starts listening a moment after the page has loaded (it asks the background
+     * script first), so a focus that comes too early is repeated: the box is left and clicked again.
+     */
+    async focusUntilPrompt(id = "box") {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await ctx.focusBox(id);
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline) {
+          if (await ctx.promptShowing()) return;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        await driver.executeScript("document.activeElement.blur()");
+      }
+      throw new Error(`the prompt never showed on #${id}`);
+    },
+    /** Focuses the box and fails if the prompt shows within `ms`; the box is left again. */
+    async expectNoPrompt(id = "box", ms = 2500) {
+      await ctx.focusBox(id);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      if (await ctx.promptShowing()) throw new Error(`the prompt showed on #${id}`);
+      await driver.executeScript("document.activeElement.blur()");
+    },
+    /**
+     * Presses a button of the prompt (`on`, `later` or `off`). The card ignores clicks in its first
+     * half second (SPEC section 4.11), so the harness waits for it to show and then a little longer.
+     */
+    async clickPrompt(choice) {
+      const at = await ctx.waitForColor(PROMPT_COLORS[choice]);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await ctx.clickAt(at.x, at.y);
+    },
+    /**
+     * Fails unless the background script answers the content script's question for `host` with
+     * `expected` (run on an extension page). The note of the prompt is made from this answer.
+     */
+    async expectSiteConfig(host, expected) {
+      const answer = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.runtime.sendMessage({ type: "page-mode-config", host: arguments[0] }).then(done);`,
+        host,
+      );
+      if (canonicalJson(answer) !== canonicalJson(expected)) {
+        throw new Error(
+          `the site config is ${JSON.stringify(answer)}, not ${JSON.stringify(expected)}`,
+        );
+      }
+    },
+    /**
+     * What a restart of the browser does to Not now: `storage.session` is emptied. The open pages
+     * are then told, as they are by any change (run on an extension page).
+     */
+    async clearLater() {
+      await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.storage.session.clear()
+           .then(() => browser.runtime.sendMessage({ type: "page-mode-apply" }))
+           .then(() => done());`,
+      );
+    },
+    /** Starts recording the frames that content scripts register (run on an extension page). */
+    async watchFrameRegistrations() {
+      await driver.executeScript(
+        `window.__frameKeys = [];
+         browser.storage.session.onChanged.addListener((changes) => {
+           for (const key of Object.keys(changes)) {
+             if (key.startsWith("page-frame:")) window.__frameKeys.push(key);
+           }
+         });`,
+      );
+    },
+    /** How many frames were registered since `watchFrameRegistrations` (run on the same page). */
+    async frameRegistrations() {
+      return driver.executeScript("return window.__frameKeys.length");
+    },
+    /** The keys of `storage.session` that start with `prefix` (run on an extension page). */
+    async sessionKeys(prefix) {
+      return driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.storage.session.get(null).then(
+           (all) => done(Object.keys(all).filter((k) => k.startsWith(arguments[0]))));`,
+        prefix,
+      );
     },
     async waitForNoDialog(id) {
       await driver.wait(

@@ -1,7 +1,10 @@
 /** Installation, start-up and updates of the extension. The only place that calls `browser.runtime` for them. */
 export interface Lifecycle {
-  /** The extension was installed, updated or loaded as a temporary add-on. */
-  onInstalled(handler: () => void): void;
+  /**
+   * The extension was installed, updated or loaded as a temporary add-on. `reason` is the
+   * browser's: `install` for a first installation (a temporary add-on too), `update`, ...
+   */
+  onInstalled(handler: (reason: string) => void): void;
   /** The browser started with the extension installed. */
   onStartup(handler: () => void): void;
   /** A new version was downloaded and waits for the extension to restart (SPEC section 7). */
@@ -17,9 +20,9 @@ export class BrowserLifecycle implements Lifecycle {
     this.api = api;
   }
 
-  onInstalled(handler: () => void): void {
-    this.api.runtime.onInstalled.addListener(() => {
-      handler();
+  onInstalled(handler: (reason: string) => void): void {
+    this.api.runtime.onInstalled.addListener((details) => {
+      handler(details.reason);
     });
   }
 

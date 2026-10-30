@@ -24,9 +24,16 @@ const byId = (id: string): HTMLElement => {
 const box = () => byId("page-mode") as HTMLInputElement;
 const note = () => byId("page-mode-note").textContent;
 const hostRows = () =>
-  [...document.querySelectorAll("#page-mode-hosts .host-row")].map(
+  [...document.querySelectorAll("#page-mode-sites .host-row")].map(
     (row) => row.querySelector(".host-name")?.textContent,
   );
+const siteRows = () =>
+  [...document.querySelectorAll("#page-mode-sites .host-row")].map((row) => [
+    row.querySelector(".host-name")?.textContent,
+    row.querySelector(".site-state")?.textContent,
+  ]);
+
+const ASKS = "English Tutor asks on each site before it reads anything there.";
 
 /** The user clicks the box: the browser toggles it, then the click handler runs. */
 function clickBox(): void {
@@ -51,13 +58,13 @@ describe("the page-mode box", () => {
     await mount();
     expect(box().checked).toBe(false);
     expect(byId("page-mode").closest("label")?.textContent).toContain(
-      "Check text boxes on websites",
+      "Offer to check text boxes on websites",
     );
     expect(note()).toBe(
-      "What you type in text boxes on websites is sent to the server of the selected LLM to be checked. Add an LLM first.",
+      "English Tutor asks on each site before it reads anything there. What you type on a site you turn on is sent to the server of the selected LLM to be checked. Add an LLM first.",
     );
-    expect(byId("page-mode-hosts-empty").hidden).toBe(false);
-    expect(byId("page-mode-hosts").hidden).toBe(true);
+    expect(byId("page-mode-sites-empty").hidden).toBe(false);
+    expect(byId("page-mode-sites").hidden).toBe(true);
     expect(byId("page-mode-error").hidden).toBe(true);
   });
 
@@ -65,19 +72,17 @@ describe("the page-mode box", () => {
     {
       name: "a server on the internet",
       llm: { base_url: "https://api.example.com/v1" },
-      expected: "What you type in text boxes on websites is sent to api.example.com to be checked.",
+      expected: `${ASKS} What you type on a site you turn on is sent to api.example.com to be checked.`,
     },
     {
       name: "Anthropic without a base URL",
       llm: { provider: "anthropic" as const, base_url: "", api_key: "k", no_thinking: false },
-      expected:
-        "What you type in text boxes on websites is sent to Anthropic's server (api.anthropic.com) to be checked.",
+      expected: `${ASKS} What you type on a site you turn on is sent to Anthropic's server (api.anthropic.com) to be checked.`,
     },
     {
       name: "a server on this computer",
       llm: { provider: "ollama" as const, base_url: "http://localhost:11434" },
-      expected:
-        "What you type in text boxes on websites is checked by localhost:11434, on this computer.",
+      expected: `${ASKS} What you type on a site you turn on is checked by localhost:11434, on this computer.`,
     },
   ])("names the server of the selected LLM: $name", async ({ llm, expected }) => {
     await mount(async ({ store }) => {
@@ -231,22 +236,28 @@ describe("turning page mode off", () => {
   });
 });
 
-describe("the sites page mode is off on", () => {
+describe("the sites with a choice", () => {
   const seed = async ({ store }: OptionsHarness["deps"]) => {
     await store.setSetting("page_mode", true);
-    await store.setSetting("page_mode_off_hosts", ["example.com", "news.example.org"]);
+    await store.setSetting("page_mode_sites", {
+      "news.example.org": "off",
+      "example.com": "on",
+    });
   };
 
-  it("lists them, each with Remove", async () => {
+  it("lists them by name, each with its state and Remove", async () => {
     await mount(seed);
-    expect(hostRows()).toEqual(["example.com", "news.example.org"]);
-    expect(byId("page-mode-hosts-empty").hidden).toBe(true);
+    expect(siteRows()).toEqual([
+      ["example.com", "On"],
+      ["news.example.org", "Off"],
+    ]);
+    expect(byId("page-mode-sites-empty").hidden).toBe(true);
     expect(
       [...document.querySelectorAll(".host-remove")].map((b) => b.getAttribute("aria-label")),
     ).toEqual(["Remove example.com", "Remove news.example.org"]);
   });
 
-  it("Remove takes one out, announces it and has the open pages told", async () => {
+  it("Remove takes one out, so that it is asked again; announces it and has the open pages told", async () => {
     const h = await mount(seed);
     document
       .querySelector(".host-remove")!
@@ -254,39 +265,146 @@ describe("the sites page mode is off on", () => {
     await settle(() => {
       expect(hostRows()).toEqual(["news.example.org"]);
     });
-    expect(await h.deps.store.getSetting("page_mode_off_hosts")).toEqual(["news.example.org"]);
+    expect(await h.deps.store.getSetting("page_mode_sites")).toEqual({ "news.example.org": "off" });
     expect(h.otherPage.received).toContain("settings-changed");
     expect(h.background.applied).toBe(1);
   });
 
   it("shows the empty line when the last one is removed", async () => {
     await mount(async ({ store }) => {
-      await store.setSetting("page_mode_off_hosts", ["example.com"]);
+      await store.setSetting("page_mode_sites", { "example.com": "on" });
     });
     document
       .querySelector(".host-remove")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle(() => {
-      expect(byId("page-mode-hosts-empty").hidden).toBe(false);
+      expect(byId("page-mode-sites-empty").hidden).toBe(false);
     });
     expect(hostRows()).toEqual([]);
   });
 
-  it("follows a change made elsewhere (the toolbar menu)", async () => {
+  it("follows a change made elsewhere (the toolbar menu or the prompt)", async () => {
     const h = await mount();
-    await h.deps.store.setSetting("page_mode_off_hosts", ["added.example"]);
+    await h.deps.store.setSetting("page_mode_sites", { "added.example": "on" });
     h.otherPage.post("settings-changed");
     await settle(() => {
-      expect(hostRows()).toEqual(["added.example"]);
+      expect(siteRows()).toEqual([["added.example", "On"]]);
     });
+  });
+
+  it("keeps the choices when page mode is turned off", async () => {
+    const h = await mount(seed);
+    h.pageMode.granted = true;
+    clickBox();
+    await settle(() => {
+      expect(h.pageMode.calls).toEqual(["remove"]);
+    });
+    expect(await h.deps.store.getSetting("page_mode_sites")).toEqual({
+      "news.example.org": "off",
+      "example.com": "on",
+    });
+    expect(hostRows()).toHaveLength(2);
   });
 
   it("shows host names as text, never as markup", async () => {
     await mount(async ({ store }) => {
-      await store.setSetting("page_mode_off_hosts", ["<img src=x onerror=alert(1)>"]);
+      await store.setSetting("page_mode_sites", { "<img src=x onerror=alert(1)>": "on" });
     });
     expect(hostRows()).toEqual(["<img src=x onerror=alert(1)>"]);
-    expect(document.querySelector("#page-mode-hosts img")).toBeNull();
+    expect(document.querySelector("#page-mode-sites img")).toBeNull();
+  });
+});
+
+describe("the Welcome block", () => {
+  const welcome = () => document.getElementById("welcome");
+  const click = (id: string) =>
+    byId(id).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+  it("is not on the page unless it was asked for (options.html without #welcome)", async () => {
+    await mount();
+    expect(welcome()).toBeNull();
+  });
+
+  it("is shown above the sections when asked for, with its sentence, Add an LLM, the offer, Allow and Not now", async () => {
+    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
+    expect(welcome()).not.toBeNull();
+    // Right after the title, before the LLMs section.
+    expect(document.querySelector("h1")?.nextElementSibling).toBe(welcome());
+    expect(welcome()?.nextElementSibling?.id).toBe("llms");
+    expect(byId("welcome-heading").textContent).toBe("Welcome to English Tutor");
+    expect(byId("welcome-intro").textContent).toContain("grammar, vocabulary and syntax errors");
+    expect(byId("welcome-offer").textContent).toBe(
+      "Offer to check what you write on websites. English Tutor asks on each site first, and reads nothing on a site until you say yes.",
+    );
+    expect([...byId("welcome").querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "Add an LLM",
+      "Allow",
+      "Not now",
+    ]);
+  });
+
+  it("Add an LLM opens the Add form of the LLMs section", async () => {
+    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
+    expect(document.getElementById("llm-form")).toBeNull();
+    click("welcome-add-llm");
+    expect(document.getElementById("llm-form")).not.toBeNull();
+    expect(welcome()).not.toBeNull();
+  });
+
+  it("Not now closes the block and changes nothing", async () => {
+    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
+    click("welcome-later");
+    expect(welcome()).toBeNull();
+    expect(mounted.pageMode.calls).toEqual([]);
+    expect(await mounted.deps.store.getSetting("page_mode")).toBe(false);
+    expect(box().checked).toBe(false);
+    expect(mounted.background.applied).toBe(0);
+  });
+
+  it("Allow asks for <all_urls> in the turn of the click, stores page_mode, has the background script register, ticks the box and says so", async () => {
+    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
+    const h = mounted;
+    click("welcome-allow");
+    // Nothing was awaited between the click and the request.
+    expect(h.pageMode.calls).toEqual(["request"]);
+    await settle(() => {
+      expect(h.background.applied).toBe(1);
+    });
+    expect(await h.deps.store.getSetting("page_mode")).toBe(true);
+    expect(h.otherPage.received).toContain("settings-changed");
+    expect(box().checked).toBe(true);
+    await settle(() => {
+      expect(byId("welcome-allowed").hidden).toBe(false);
+    });
+    expect(byId("welcome-offer").hidden).toBe(true);
+    expect(byId("welcome-error").hidden).toBe(true);
+    // The delay field follows, as it does for the box.
+    expect((byId("auto-check-delay") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("Allow that the user refuses says so in the block (PageModePermissionDenied) and keeps the offer", async () => {
+    mounted = await mountForTest(document, undefined, undefined, { welcome: true });
+    const h = mounted;
+    h.pageMode.answer = "refuse";
+    click("welcome-allow");
+    await settle(() => {
+      expect(byId("welcome-error").hidden).toBe(false);
+    });
+    expect(byId("welcome-error").textContent).toBe(PERMISSION_DENIED_MESSAGE);
+    expect(
+      h.page.pageMode.error?.hasRoute("PageModeSection.turnOn->PageModePermissionDenied"),
+    ).toBe(true);
+    expect(box().checked).toBe(false);
+    expect(await h.deps.store.getSetting("page_mode")).toBe(false);
+    expect(h.background.applied).toBe(0);
+    expect(byId("welcome-allowed").hidden).toBe(true);
+    // Allow again, and the error goes.
+    h.pageMode.answer = "grant";
+    click("welcome-allow");
+    await settle(() => {
+      expect(byId("welcome-allowed").hidden).toBe(false);
+    });
+    expect(byId("welcome-error").hidden).toBe(true);
   });
 });
 

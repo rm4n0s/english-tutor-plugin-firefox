@@ -6,10 +6,12 @@ import {
   PAGE_MODE_APPLY,
   PAGE_MODE_CONFIG,
   PAGE_MODE_OPEN_TUTOR,
+  PAGE_MODE_SITE,
   messageType,
   parseConfigRequest,
   parseFrameIdRequest,
   parseOpenTutorRequest,
+  parseSiteRequest,
 } from "../core/page-mode/messages";
 import type { FrameClaims } from "../core/page-mode/frame-claims";
 import type { Commands } from "../platform/commands";
@@ -32,7 +34,7 @@ export const MENU_IDS = {
   webAlternatives: "english-tutor-web-alternatives",
   newTab: "english-tutor-action-new-tab",
   preferences: "english-tutor-action-preferences",
-  /** Turn off / Turn on page mode on the active tab's host (SPEC section 4.11). */
+  /** Turn on / Turn off page mode on the active tab's host (SPEC section 4.11). */
   pageModeSite: "english-tutor-action-page-mode-site",
 } as const;
 
@@ -86,7 +88,7 @@ export interface BackgroundDeps {
   notifier: Notifier;
   lifecycle: Lifecycle;
   options: OptionsOpener;
-  /** Page mode: registration, the per-site list and the content script's questions. */
+  /** Page mode: registration, the sites and the content script's questions. */
   pageMode: PageModeBackend;
   /** Which frame belongs to which tab: a page cannot make a frame of its own (SPEC section 4.11). */
   frameClaims: FrameClaims;
@@ -146,9 +148,14 @@ export function startBackground(deps: BackgroundDeps): void {
   const syncPageMode = (notify: boolean): void => {
     pageMode.sync({ notify }).catch(report("could not bring page mode in step with its setting"));
   };
-  lifecycle.onInstalled(() => {
+  lifecycle.onInstalled((reason) => {
     install();
     syncPageMode(false);
+    // A first installation (and a temporary add-on, which reports the same) shows the welcome
+    // page, which asks once for access to all websites. An update does not (SPEC section 4.11).
+    if (reason === "install") {
+      options.openWelcome().catch(report("could not open the welcome page"));
+    }
   });
   lifecycle.onStartup(() => {
     install();
@@ -220,7 +227,13 @@ export function startBackground(deps: BackgroundDeps): void {
     if (type === PAGE_MODE_CONFIG) {
       const request = parseConfigRequest(message);
       if (request === undefined) return undefined;
-      return pageMode.enabledOn(request.host).then((enabled) => ({ enabled }));
+      return pageMode.config(request.host);
+    }
+    if (type === PAGE_MODE_SITE) {
+      // The choice of the prompt, from the content script of a tab; the host must be the page's.
+      const request = parseSiteRequest(message);
+      if (request === undefined || sender.tab === undefined) return undefined;
+      return pageMode.chooseSite(request, sender.url).then((ok) => ({ ok }));
     }
     if (type === PAGE_FRAME_REGISTER) {
       // From the content script of a tab; the browser says which tab. A message without a tab

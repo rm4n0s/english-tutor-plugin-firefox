@@ -21,11 +21,17 @@ export interface Settings {
   results_font_family: string;
   results_font_size: number;
   pane_sizes: PaneSizes;
-  /** Whether page mode is on (SPEC section 4.11). */
+  /** Whether page mode is offered: it asks on each site before it reads anything (SPEC section 4.11). */
   page_mode: boolean;
-  /** Host names page mode is turned off on, each at most 253 characters. */
-  page_mode_off_hosts: string[];
+  /** The sites the user made a choice on. A site with no entry is `ask`. */
+  page_mode_sites: PageModeSites;
 }
+
+/** The user's choice on one site: Turn on, or Never on this site (SPEC section 4.11). */
+export type SiteChoice = "on" | "off";
+
+/** Host name (lower case, at most 253 characters) to the choice made on it. */
+export type PageModeSites = Record<string, SiteChoice>;
 
 export type SettingKey = keyof Settings;
 
@@ -72,14 +78,20 @@ const fontFamily: SettingDefinition<string> = {
   encode: (value) => value,
 };
 
-function hostList(raw: unknown): string[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const hosts: string[] = [];
-  for (const host of raw as unknown[]) {
-    if (typeof host !== "string" || host === "" || host.length > HOST_MAX_LENGTH) return undefined;
-    hosts.push(host);
+/** Whether `host` can be a key of `page_mode_sites`. */
+export function isSiteHost(host: string): boolean {
+  return host !== "" && host.length <= HOST_MAX_LENGTH && host === host.toLowerCase();
+}
+
+function siteChoices(raw: unknown): PageModeSites | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const entries: [string, SiteChoice][] = [];
+  for (const [host, choice] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isSiteHost(host) || (choice !== "on" && choice !== "off")) return undefined;
+    entries.push([host, choice]);
   }
-  return hosts;
+  // `fromEntries` makes own properties, so even a host named `__proto__` stays a plain entry.
+  return Object.fromEntries(entries);
 }
 
 export const SETTING_DEFINITIONS: { readonly [K in SettingKey]: SettingDefinition<Settings[K]> } = {
@@ -129,13 +141,15 @@ export const SETTING_DEFINITIONS: { readonly [K in SettingKey]: SettingDefinitio
     decode: (raw) => (typeof raw === "boolean" ? raw : undefined),
     encode: (value) => value,
   },
-  page_mode_off_hosts: {
-    default: [],
-    decode: hostList,
-    // A copy, so that a later change of the caller's array cannot change what is stored.
+  page_mode_sites: {
+    default: {},
+    decode: siteChoices,
+    // A copy, so that a later change of the caller's object cannot change what is stored.
     encode: (value) => {
       const candidate: unknown = value;
-      return Array.isArray(candidate) ? [...(candidate as unknown[])] : undefined;
+      return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+        ? Object.fromEntries(Object.entries(candidate))
+        : undefined;
     },
   },
 };

@@ -42,12 +42,14 @@ export function privacyNote(provider: Provider, baseUrl: string): string | null 
 }
 
 /**
- * The note under the page-mode box of the options page (SPEC section 4.11): where what the user
- * types on websites goes. A server on this computer keeps it there. Without an LLM it says that
- * an LLM has to be chosen first.
+ * The note under the "Offer to check text boxes on websites" box of the options page (SPEC
+ * sections 4.7 and 4.11): that the extension asks on each site, and where what the user types on
+ * a site they turn on goes. A server on this computer keeps it there. Without an LLM it says that
+ * an LLM has to be added first.
  */
 export function pageModeNote(llm: { provider: Provider; base_url: string } | undefined): string {
-  const subject = "What you type in text boxes on websites";
+  const asks = "English Tutor asks on each site before it reads anything there.";
+  const subject = `${asks} What you type on a site you turn on`;
   if (llm === undefined) {
     return `${subject} is sent to the server of the selected LLM to be checked. Add an LLM first.`;
   }
@@ -61,4 +63,17 @@ export function pageModeNote(llm: { provider: Provider; base_url: string } | und
       ? `${PROVIDER_LABELS.anthropic}'s server (${url.host})`
       : url.host;
   return `${subject} is sent to ${server} to be checked.`;
+}
+
+/**
+ * The server of an LLM as the page-mode prompt names it (SPEC section 4.11): the host and port
+ * only, and whether it is on this computer. Undefined for an address that is not a valid one.
+ */
+export function promptServer(llm: {
+  provider: Provider;
+  base_url: string;
+}): { server: string; local: boolean } | undefined {
+  const url = parseHttpUrl(effectiveBaseUrl(llm.provider, llm.base_url));
+  if (url === undefined) return undefined;
+  return { server: url.host, local: isLocalHost(url.hostname) };
 }

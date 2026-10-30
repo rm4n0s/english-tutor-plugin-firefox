@@ -1,3 +1,4 @@
+import { isSiteHost } from "../store/settings";
 import { FRAME_ID_PATTERN } from "./protocol";
 
 /**
@@ -8,8 +9,13 @@ import { FRAME_ID_PATTERN } from "./protocol";
 
 /** The options page asks the background script to make the registration match the settings. */
 export const PAGE_MODE_APPLY = "page-mode-apply";
-/** The content script asks whether page mode runs on its host. Answer: `{ enabled: boolean }`. */
+/**
+ * The content script asks what page mode does on its host. The answer is a `SiteConfig`: the
+ * site's state, and for `ask` the server of the LLM in use, for the prompt's note.
+ */
 export const PAGE_MODE_CONFIG = "page-mode-config";
+/** The content script tells the background script the choice made in the prompt (`SiteRequest`). */
+export const PAGE_MODE_SITE = "page-mode-site";
 /** The content script hands the text of a text box to a new tutor tab (the blocked badge). */
 export const PAGE_MODE_OPEN_TUTOR = "page-mode-open-tutor";
 /** The background script tells the open pages that page mode was turned off: remove everything. */
@@ -29,6 +35,30 @@ export interface ConfigRequest {
   type: typeof PAGE_MODE_CONFIG;
   /** The host name of the page (`location.hostname`). */
   host: string;
+}
+
+/** What page mode does on a site (SPEC section 4.11): `later` is "Not now", until the browser restarts. */
+export type SiteState = "on" | "off" | "ask" | "later";
+
+/** The server of the LLM in use, for the prompt's note: the host and port only, never a key. */
+export interface PromptServer {
+  /** `host` or `host:port`. */
+  server: string;
+  /** Whether the server is on this computer. */
+  local: boolean;
+}
+
+/** The background script's answer to `page-mode-config`. */
+export type SiteConfig =
+  { state: "on" | "off" | "later" } | { state: "ask"; llm: PromptServer | null };
+
+/** The choices the prompt offers. */
+export type PromptChoice = "on" | "off" | "later";
+
+export interface SiteRequest {
+  type: typeof PAGE_MODE_SITE;
+  host: string;
+  choice: PromptChoice;
 }
 
 export interface OpenTutorRequest {
@@ -53,6 +83,28 @@ export function parseConfigRequest(message: unknown): ConfigRequest | undefined 
   const host = (message as { host?: unknown }).host;
   if (typeof host !== "string" || host.length > 253) return undefined;
   return { type: PAGE_MODE_CONFIG, host };
+}
+
+/** The state in an answer of the background script, or undefined for anything else. */
+export function parseSiteConfig(answer: unknown): SiteConfig | undefined {
+  if (typeof answer !== "object" || answer === null) return undefined;
+  const { state, llm } = answer as { state?: unknown; llm?: unknown };
+  if (state === "on" || state === "off" || state === "later") return { state };
+  if (state !== "ask") return undefined;
+  if (llm === null || llm === undefined) return { state, llm: null };
+  if (typeof llm !== "object") return undefined;
+  const { server, local } = llm as { server?: unknown; local?: unknown };
+  if (typeof server !== "string" || server === "" || server.length > 300) return undefined;
+  if (typeof local !== "boolean") return undefined;
+  return { state, llm: { server, local } };
+}
+
+export function parseSiteRequest(message: unknown): SiteRequest | undefined {
+  if (messageType(message) !== PAGE_MODE_SITE) return undefined;
+  const { host, choice } = message as { host?: unknown; choice?: unknown };
+  if (typeof host !== "string" || !isSiteHost(host)) return undefined;
+  if (choice !== "on" && choice !== "off" && choice !== "later") return undefined;
+  return { type: PAGE_MODE_SITE, host, choice };
 }
 
 export function parseOpenTutorRequest(message: unknown): OpenTutorRequest | undefined {

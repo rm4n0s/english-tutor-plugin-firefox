@@ -3,7 +3,15 @@ export { DATABASE_NAME, MIGRATIONS, STORES, type Migration } from "./migrations"
 export { Store, type StoreOptions } from "./store";
 export { countInPeriod, periodDays, Stats, summarizeRows, type IgnoreSet } from "./stats";
 export { docSource, isSessionSource, TabSource } from "./source";
-export { SETTING_KEYS, type PaneSizes, type SettingKey, type Settings } from "./settings";
+export {
+  isSiteHost,
+  SETTING_KEYS,
+  type PageModeSites,
+  type PaneSizes,
+  type SettingKey,
+  type Settings,
+  type SiteChoice,
+} from "./settings";
 export type {
   ConfigValidator,
   DocumentInput,

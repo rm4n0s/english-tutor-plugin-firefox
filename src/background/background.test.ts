@@ -75,6 +75,7 @@ function setup(
     permission,
     scripts,
     tabs: pageTabs,
+    session,
     channel: bus.connect(),
     log,
   });
@@ -608,50 +609,174 @@ describe("page mode", () => {
   });
 
   describe("the content script's questions", () => {
+    const FAKE_SERVER = { server: "api.example.com", local: false };
+
+    async function addLLM(
+      s: ReturnType<typeof setup>,
+      name: string,
+      baseUrl: string,
+      select = false,
+    ): Promise<void> {
+      const store = await settings(s);
+      const saved = await store.createConfig({
+        name,
+        provider: "openai-compatible",
+        model: "m",
+        base_url: baseUrl,
+        api_key: "SECRET-KEY",
+        temperature: null,
+        timeout_seconds: null,
+        max_parallel: 1,
+        no_thinking: true,
+      });
+      if (select) await store.setSetting("selected_llm_id", saved.id);
+    }
+
     it.each([
       {
-        name: "page mode on, host not listed",
-        on: true,
-        off: [],
+        name: "page mode not offered",
+        offered: false,
+        sites: {},
         host: "example.com",
-        expected: true,
-      },
-      { name: "page mode off", on: false, off: [], host: "example.com", expected: false },
-      {
-        name: "a host in the list",
-        on: true,
-        off: ["example.com"],
-        host: "example.com",
-        expected: false,
+        state: "off",
       },
       {
-        name: "the list compares in lower case",
-        on: true,
-        off: ["example.com"],
+        name: "page mode not offered, whatever the site says",
+        offered: false,
+        sites: { "example.com": "on" },
+        host: "example.com",
+        state: "off",
+      },
+      {
+        name: "a site with no choice",
+        offered: true,
+        sites: {},
+        host: "example.com",
+        state: "ask",
+      },
+      {
+        name: "a site that is on",
+        offered: true,
+        sites: { "example.com": "on" },
+        host: "example.com",
+        state: "on",
+      },
+      {
+        name: "a site that is off",
+        offered: true,
+        sites: { "example.com": "off" },
+        host: "example.com",
+        state: "off",
+      },
+      {
+        name: "the host compared in lower case",
+        offered: true,
+        sites: { "example.com": "on" },
         host: "EXAMPLE.com",
-        expected: false,
+        state: "on",
       },
       {
-        name: "another host in the list",
-        on: true,
-        off: ["other.org"],
-        host: "example.com",
-        expected: true,
-      },
-      {
-        name: "a subdomain of a listed host",
-        on: true,
-        off: ["example.com"],
+        name: "a subdomain of a site that is on (a site is the exact host)",
+        offered: true,
+        sites: { "example.com": "on" },
         host: "www.example.com",
-        expected: true,
+        state: "ask",
       },
-    ])("$name", async ({ on, off, host, expected }) => {
+      {
+        name: "the parent of a site that is on",
+        offered: true,
+        sites: { "www.example.com": "on" },
+        host: "example.com",
+        state: "ask",
+      },
+      { name: "no host (a file)", offered: true, sites: {}, host: "", state: "off" },
+    ])("answers $state for $name", async ({ offered, sites, host, state }) => {
       const s = setup();
       const store = await settings(s);
-      await store.setSetting("page_mode", on);
-      await store.setSetting("page_mode_off_hosts", off);
+      await store.setSetting("page_mode", offered);
+      await store.setSetting("page_mode_sites", sites as Record<string, "on" | "off">);
       const reply = await s.messageBus.send({ type: "page-mode-config", host });
-      expect(reply).toEqual({ answered: true, answer: { enabled: expected } });
+      expect(reply.answered).toBe(true);
+      expect((reply.answer as { state: string }).state).toBe(state);
+    });
+
+    it("answers later for a site answered Not now, and ask for another one", async () => {
+      const s = setup();
+      await (await settings(s)).setSetting("page_mode", true);
+      s.session.values.set("page-mode-later:example.com", true);
+      expect(
+        (await s.messageBus.send({ type: "page-mode-config", host: "example.com" })).answer,
+      ).toEqual({ state: "later" });
+      expect(
+        (await s.messageBus.send({ type: "page-mode-config", host: "other.org" })).answer,
+      ).toEqual({ state: "ask", llm: null });
+    });
+
+    it("a choice on the site wins over Not now", async () => {
+      const s = setup();
+      const store = await settings(s);
+      await store.setSetting("page_mode", true);
+      await store.setSetting("page_mode_sites", { "example.com": "off" });
+      s.session.values.set("page-mode-later:example.com", true);
+      expect(
+        (await s.messageBus.send({ type: "page-mode-config", host: "example.com" })).answer,
+      ).toEqual({ state: "off" });
+    });
+
+    it.each([
+      { name: "no LLM yet", llms: [], selected: undefined, expected: null },
+      {
+        name: "the only LLM",
+        llms: [["A", "https://api.example.com/v1"]],
+        selected: undefined,
+        expected: FAKE_SERVER,
+      },
+      {
+        name: "the first LLM by name when none is selected",
+        llms: [
+          ["Zeta", "https://zeta.example.com/v1"],
+          ["Alpha", "https://alpha.example.com:8443/v1"],
+        ],
+        selected: undefined,
+        expected: { server: "alpha.example.com:8443", local: false },
+      },
+      {
+        name: "the selected LLM",
+        llms: [
+          ["Zeta", "https://zeta.example.com/v1"],
+          ["Alpha", "https://alpha.example.com:8443/v1"],
+        ],
+        selected: "Zeta",
+        expected: { server: "zeta.example.com", local: false },
+      },
+      {
+        name: "a server on this computer",
+        llms: [["Local", "http://localhost:11434/v1"]],
+        selected: undefined,
+        expected: { server: "localhost:11434", local: true },
+      },
+    ])(
+      "tells the prompt the server of $name, and never a key or a path",
+      async ({ llms, selected, expected }) => {
+        const s = setup();
+        await (await settings(s)).setSetting("page_mode", true);
+        for (const [name, url] of llms as [string, string][])
+          await addLLM(s, name, url, name === selected);
+        const reply = await s.messageBus.send({ type: "page-mode-config", host: "example.com" });
+        expect(reply.answer).toEqual({ state: "ask", llm: expected });
+        expect(JSON.stringify(reply.answer)).not.toContain("SECRET-KEY");
+        expect(JSON.stringify(reply.answer)).not.toContain("/v1");
+      },
+    );
+
+    it("tells no server for a site that is not asked about", async () => {
+      const s = setup();
+      const store = await settings(s);
+      await store.setSetting("page_mode", true);
+      await store.setSetting("page_mode_sites", { "example.com": "on" });
+      await addLLM(s, "A", "https://api.example.com/v1");
+      const reply = await s.messageBus.send({ type: "page-mode-config", host: "example.com" });
+      expect(reply.answer).toEqual({ state: "on" });
     });
 
     it.each([
@@ -674,6 +799,143 @@ describe("page mode", () => {
     ])("never answers $name", async ({ message }) => {
       const s = setup();
       expect((await s.messageBus.send(message)).answered).toBe(false);
+    });
+  });
+
+  describe("the choice of the prompt", () => {
+    const TAB = { id: 7, windowId: 4, index: 2 };
+    const send = (
+      s: ReturnType<typeof setup>,
+      choice: unknown,
+      overrides: { host?: string; url?: string | undefined; tab?: typeof TAB | undefined } = {},
+    ) =>
+      s.messageBus.send(
+        { type: "page-mode-site", host: overrides.host ?? "www.example.com", choice },
+        {
+          url: "url" in overrides ? overrides.url : SITE,
+          tab: "tab" in overrides ? overrides.tab : TAB,
+        },
+      );
+
+    async function offered(s: ReturnType<typeof setup>): Promise<void> {
+      await (await settings(s)).setSetting("page_mode", true);
+    }
+
+    it.each([
+      { choice: "on", expected: { "www.example.com": "on" } },
+      { choice: "off", expected: { "www.example.com": "off" } },
+    ])("stores $choice, announces it and tells the open pages", async ({ choice, expected }) => {
+      const s = setup();
+      await offered(s);
+      const reply = await send(s, choice);
+      expect(reply).toEqual({ answered: true, answer: { ok: true } });
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual(expected);
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+    });
+
+    it("keeps the other sites' choices", async () => {
+      const s = setup();
+      await offered(s);
+      await (await settings(s)).setSetting("page_mode_sites", { "other.org": "off" });
+      await send(s, "on");
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({
+        "other.org": "off",
+        "www.example.com": "on",
+      });
+    });
+
+    it("remembers Not now in storage.session only, until the browser restarts", async () => {
+      const s = setup();
+      await offered(s);
+      const reply = await send(s, "later");
+      expect(reply.answer).toEqual({ ok: true });
+      expect(s.session.values.get("page-mode-later:www.example.com")).toBe(true);
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
+      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+      // The browser restarts: storage.session is empty, and the site is asked again.
+      s.session.values.clear();
+      expect(
+        (await s.messageBus.send({ type: "page-mode-config", host: "www.example.com" })).answer,
+      ).toEqual({ state: "ask", llm: null });
+    });
+
+    it.each(["on", "off"])("%s forgets an earlier Not now", async (choice) => {
+      const s = setup();
+      await offered(s);
+      await send(s, "later");
+      await send(s, choice);
+      expect(s.session.values.has("page-mode-later:www.example.com")).toBe(false);
+    });
+
+    it.each([
+      {
+        name: "page mode that is not offered",
+        setup: false,
+        url: SITE,
+        tab: TAB,
+        host: "www.example.com",
+        choice: "on",
+      },
+      {
+        name: "a host that is not the page's",
+        setup: true,
+        url: SITE,
+        tab: TAB,
+        host: "evil.org",
+        choice: "on",
+      },
+      {
+        name: "a page that is not http or https",
+        setup: true,
+        url: "about:blank",
+        tab: TAB,
+        host: "www.example.com",
+        choice: "on",
+      },
+      {
+        name: "a sender with no address",
+        setup: true,
+        url: undefined,
+        tab: TAB,
+        host: "www.example.com",
+        choice: "on",
+      },
+    ])("takes nothing for $name", async ({ setup: on, url, tab, host, choice }) => {
+      const s = setup();
+      if (on) await offered(s);
+      const reply = await send(s, choice, { host, url, tab });
+      expect(reply).toEqual({ answered: true, answer: { ok: false } });
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
+      expect([...s.session.values.keys()]).toEqual([]);
+      expect(s.pageTabs.sent).toEqual([]);
+    });
+
+    it.each([
+      { name: "an unknown choice", choice: "ask", overrides: {} },
+      { name: "no choice", choice: undefined, overrides: {} },
+      { name: "an upper-case host", choice: "on", overrides: { host: "WWW.example.com" } },
+      {
+        name: "a sender without a tab (an extension page)",
+        choice: "on",
+        overrides: { tab: undefined },
+      },
+    ])("leaves $name unanswered", async ({ choice, overrides }) => {
+      const s = setup();
+      await offered(s);
+      const reply = await send(s, choice, overrides);
+      expect(reply.answered).toBe(false);
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
+    });
+
+    it("is answered only for the extension's own senders", async () => {
+      const s = setup();
+      await offered(s);
+      const reply = await s.messageBus.send(
+        { type: "page-mode-site", host: "www.example.com", choice: "on" },
+        { ownExtension: false, url: SITE, tab: TAB },
+      );
+      expect(reply.answered).toBe(false);
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
     });
   });
 
@@ -824,25 +1086,55 @@ describe("page mode", () => {
 
     it.each([
       {
-        name: "Turn off on the host while page mode is on",
+        name: "Turn on on the host for a site with no choice",
         on: true,
-        off: [],
-        url: SITE,
-        title: "Turn off on www.example.com",
-        visible: true,
-      },
-      {
-        name: "Turn on on the host when it is in the list",
-        on: true,
-        off: ["www.example.com"],
+        sites: {},
+        later: false,
         url: SITE,
         title: "Turn on on www.example.com",
         visible: true,
       },
       {
-        name: "nothing while page mode is off",
+        name: "Turn on on the host for a site answered Not now",
+        on: true,
+        sites: {},
+        later: true,
+        url: SITE,
+        title: "Turn on on www.example.com",
+        visible: true,
+      },
+      {
+        name: "Turn off on the host for a site that is on",
+        on: true,
+        sites: { "www.example.com": "on" },
+        later: false,
+        url: SITE,
+        title: "Turn off on www.example.com",
+        visible: true,
+      },
+      {
+        name: "Turn on on the host for a site that is off",
+        on: true,
+        sites: { "www.example.com": "off" },
+        later: false,
+        url: SITE,
+        title: "Turn on on www.example.com",
+        visible: true,
+      },
+      {
+        name: "Turn on for the exact host: a parent that is on does not count",
+        on: true,
+        sites: { "example.com": "on" },
+        later: false,
+        url: SITE,
+        title: "Turn on on www.example.com",
+        visible: true,
+      },
+      {
+        name: "nothing while page mode is not offered",
         on: false,
-        off: [],
+        sites: {},
+        later: false,
         url: SITE,
         title: undefined,
         visible: false,
@@ -850,7 +1142,8 @@ describe("page mode", () => {
       {
         name: "nothing for a page that is not http or https",
         on: true,
-        off: [],
+        sites: {},
+        later: false,
         url: "about:preferences",
         title: undefined,
         visible: false,
@@ -858,7 +1151,8 @@ describe("page mode", () => {
       {
         name: "nothing for a file",
         on: true,
-        off: [],
+        sites: {},
+        later: false,
         url: "file:///home/me/a.html",
         title: undefined,
         visible: false,
@@ -866,18 +1160,20 @@ describe("page mode", () => {
       {
         name: "nothing when the address is not known",
         on: true,
-        off: [],
+        sites: {},
+        later: false,
         url: undefined,
         title: undefined,
         visible: false,
       },
-    ])("shows $name", async ({ on, off, url, title, visible }) => {
+    ])("shows $name", async ({ on, sites, later, url, title, visible }) => {
       const s = setup();
       s.lifecycle.install();
       await settle();
       const store = await settings(s);
       await store.setSetting("page_mode", on);
-      await store.setSetting("page_mode_off_hosts", off);
+      await store.setSetting("page_mode_sites", sites as Record<string, "on" | "off">);
+      if (later) s.session.values.set("page-mode-later:www.example.com", true);
       s.menus.show({ contexts: ["action"], tabUrl: url });
       await settle();
       await settle();
@@ -894,43 +1190,106 @@ describe("page mode", () => {
     });
   });
 
-  describe("turning page mode off and on for a site from the menu", () => {
+  describe("turning page mode on and off for a site from the menu", () => {
     const choose = (s: ReturnType<typeof setup>, url: string | undefined) => {
       s.menus.choose(MENU_IDS.pageModeSite, {
         tab: { tabId: 1, windowId: 1, index: 0, url },
       });
     };
 
-    it("adds the host to the list, announces it and tells the open pages", async () => {
-      const s = setup();
-      choose(s, SITE);
-      await settle();
-      await settle();
-      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual([
-        "www.example.com",
-      ]);
-      expect(s.pageTabs.sent).toEqual(["settings-changed"]);
-    });
-
-    it("takes the host out of the list when it is there", async () => {
-      const s = setup();
-      await (await settings(s)).setSetting("page_mode_off_hosts", ["www.example.com", "other.org"]);
-      choose(s, SITE);
-      await settle();
-      await settle();
-      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual(["other.org"]);
-    });
+    it.each([
+      {
+        name: "a site with no choice",
+        sites: {},
+        later: false,
+        expected: { "www.example.com": "on" },
+      },
+      {
+        name: "a site answered Not now",
+        sites: {},
+        later: true,
+        expected: { "www.example.com": "on" },
+      },
+      {
+        name: "a site that is off",
+        sites: { "www.example.com": "off", "other.org": "on" },
+        later: false,
+        expected: { "www.example.com": "on", "other.org": "on" },
+      },
+      {
+        name: "a site that is on",
+        sites: { "www.example.com": "on", "other.org": "on" },
+        later: false,
+        expected: { "www.example.com": "off", "other.org": "on" },
+      },
+    ])(
+      "for $name stores the other state, announces it and tells the open pages",
+      async ({ sites, later, expected }) => {
+        const s = setup();
+        const store = await settings(s);
+        await store.setSetting("page_mode", true);
+        await store.setSetting("page_mode_sites", sites as Record<string, "on" | "off">);
+        if (later) s.session.values.set("page-mode-later:www.example.com", true);
+        choose(s, SITE);
+        await settle();
+        await settle();
+        expect(await store.getSetting("page_mode_sites")).toEqual(expected);
+        expect(s.session.values.has("page-mode-later:www.example.com")).toBe(false);
+        expect(s.pageTabs.sent).toEqual(["settings-changed"]);
+      },
+    );
 
     it.each([
       { name: "an unknown address", url: undefined },
       { name: "a page that is not http or https", url: "about:blank" },
     ])("does nothing for $name", async ({ url }) => {
       const s = setup();
+      await (await settings(s)).setSetting("page_mode", true);
       choose(s, url);
       await settle();
       await settle();
-      expect(await (await settings(s)).getSetting("page_mode_off_hosts")).toEqual([]);
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
       expect(s.pageTabs.sent).toEqual([]);
+    });
+
+    it("does nothing while page mode is not offered", async () => {
+      const s = setup();
+      choose(s, SITE);
+      await settle();
+      await settle();
+      expect(await (await settings(s)).getSetting("page_mode_sites")).toEqual({});
+      expect(s.pageTabs.sent).toEqual([]);
+    });
+  });
+
+  describe("the welcome page", () => {
+    it.each([
+      { reason: "install", welcomes: 1 },
+      { reason: "update", welcomes: 0 },
+      { reason: "browser_update", welcomes: 0 },
+    ])("is opened for the reason $reason: $welcomes time(s)", async ({ reason, welcomes }) => {
+      const s = setup();
+      s.lifecycle.install(reason);
+      await settle();
+      expect(s.options.welcomes).toBe(welcomes);
+      // Whatever the reason, the menus and the registration are brought up to date.
+      expect(s.menus.installs).toBe(1);
+    });
+
+    it("is not opened when the browser starts", async () => {
+      const s = setup();
+      s.lifecycle.startBrowser();
+      await settle();
+      expect(s.options.welcomes).toBe(0);
+    });
+
+    it("logs a failure to open it instead of leaving a rejected promise", async () => {
+      const s = setup();
+      s.options.welcomeFails = new Error("no window");
+      s.lifecycle.install();
+      await settle();
+      expect(messages(s.logged)).toContain("could not open the welcome page");
+      expect(s.menus.installs).toBe(1);
     });
   });
 
@@ -944,7 +1303,7 @@ describe("page mode", () => {
       scripts: first.scripts,
     });
     const reply = await second.messageBus.send({ type: "page-mode-config", host: "example.com" });
-    expect(reply.answer).toEqual({ enabled: true });
+    expect(reply.answer).toEqual({ state: "ask", llm: null });
     second.permission.withdraw();
     await settle();
     await settle();

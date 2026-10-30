@@ -1,4 +1,4 @@
-import { SystemScheduler } from "../core/clock";
+import { SystemClock, SystemScheduler } from "../core/clock";
 import { Logger } from "../core/log";
 import { CryptoRandom } from "../core/random";
 import { BrowserPageModeRuntime } from "../platform/page-mode";
@@ -6,8 +6,9 @@ import { WindowPageConnector } from "../platform/page-port";
 import { PageModeContent } from "./page-mode";
 
 // The page-mode content script (SPEC section 4.11). The background script registers it only while
-// page mode is on. It starts by asking whether page mode runs on this host, and does nothing if it
-// does not. It never answers a `runtime` message (tutor pings are for the tutor pages).
+// page mode is offered. It starts by asking what page mode does on this host: on a site that is on
+// it checks the text boxes the user focuses, on a site with no choice it waits to ask, and on any
+// other it does nothing. It never answers a `runtime` message (tutor pings are for the tutor pages).
 const log = new Logger(console);
 
 const content = new PageModeContent({
@@ -15,6 +16,7 @@ const content = new PageModeContent({
   runtime: new BrowserPageModeRuntime(browser),
   connector: new WindowPageConnector(window),
   scheduler: new SystemScheduler(),
+  clock: new SystemClock(),
   random: new CryptoRandom(),
   log,
 });

@@ -34,11 +34,11 @@ export class FakeCommands implements Commands {
 
 export class FakeLifecycle implements Lifecycle {
   reloads = 0;
-  private installed: (() => void) | undefined;
+  private installed: ((reason: string) => void) | undefined;
   private started: (() => void) | undefined;
   private updated: (() => void) | undefined;
 
-  onInstalled(handler: () => void): void {
+  onInstalled(handler: (reason: string) => void): void {
     this.installed = handler;
   }
 
@@ -54,8 +54,9 @@ export class FakeLifecycle implements Lifecycle {
     this.reloads++;
   }
 
-  install(): void {
-    this.installed?.();
+  /** The extension is installed (`install`), updated (`update`) or loaded again. */
+  install(reason = "install"): void {
+    this.installed?.(reason);
   }
 
   startBrowser(): void {
@@ -69,9 +70,17 @@ export class FakeLifecycle implements Lifecycle {
 
 export class FakeOptionsOpener implements OptionsOpener {
   opened = 0;
+  welcomes = 0;
+  welcomeFails: Error | undefined;
 
   open(): Promise<void> {
     this.opened++;
+    return Promise.resolve();
+  }
+
+  openWelcome(): Promise<void> {
+    if (this.welcomeFails !== undefined) return Promise.reject(this.welcomeFails);
+    this.welcomes++;
     return Promise.resolve();
   }
 }

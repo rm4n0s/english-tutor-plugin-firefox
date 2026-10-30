@@ -1,4 +1,4 @@
-import type { PageBroadcast } from "../../core/page-mode/messages";
+import type { PageBroadcast, PromptChoice, SiteConfig } from "../../core/page-mode/messages";
 import type {
   BackgroundMessages,
   ContentScripts,
@@ -107,7 +107,12 @@ export class FakeBackgroundMessages implements BackgroundMessages {
     message: unknown,
     sender: Partial<MessageSender> = {},
   ): Promise<{ answered: boolean; answer: unknown }> {
-    const result = this.handler?.(message, { ownExtension: true, tab: undefined, ...sender });
+    const result = this.handler?.(message, {
+      ownExtension: true,
+      url: undefined,
+      tab: undefined,
+      ...sender,
+    });
     if (result === undefined) return { answered: false, answer: undefined };
     return { answered: true, answer: await result };
   }
@@ -116,9 +121,14 @@ export class FakeBackgroundMessages implements BackgroundMessages {
 /** The content script's link to the extension, in memory. */
 export class FakePageModeRuntime implements PageModeRuntime {
   /** The answer of the background script about this host. */
-  enabled = true;
-  enabledFails: Error | undefined;
+  config: SiteConfig = { state: "on" };
+  configFails: Error | undefined;
   readonly asked: string[] = [];
+  /** The choices of the prompt, in order. */
+  readonly chosen: { host: string; choice: PromptChoice }[] = [];
+  chooseFails: Error | undefined;
+  /** When set, `chooseSite` waits for it. */
+  chooseGate: Promise<void> | undefined;
   readonly opened: string[] = [];
   /** The frame ids the content script registered. */
   readonly registered: string[] = [];
@@ -127,10 +137,16 @@ export class FakePageModeRuntime implements PageModeRuntime {
   registerGate: Promise<void> | undefined;
   readonly listeners = new Set<(message: PageBroadcast) => void>();
 
-  enabledOn(host: string): Promise<boolean> {
+  configFor(host: string): Promise<SiteConfig> {
     this.asked.push(host);
-    if (this.enabledFails !== undefined) return Promise.reject(this.enabledFails);
-    return Promise.resolve(this.enabled);
+    if (this.configFails !== undefined) return Promise.reject(this.configFails);
+    return Promise.resolve(this.config);
+  }
+
+  async chooseSite(host: string, choice: PromptChoice): Promise<void> {
+    this.chosen.push({ host, choice });
+    if (this.chooseFails !== undefined) throw this.chooseFails;
+    await this.chooseGate;
   }
 
   async registerFrame(id: string): Promise<void> {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { effectiveBaseUrl, isLocalHost, pageModeNote, parseHttpUrl, privacyNote } from "./endpoint";
+import {
+  effectiveBaseUrl,
+  isLocalHost,
+  pageModeNote,
+  parseHttpUrl,
+  privacyNote,
+  promptServer,
+} from "./endpoint";
 import type { Provider } from "./provider";
 
 describe("effectiveBaseUrl", () => {
@@ -101,7 +108,8 @@ describe("privacyNote", () => {
 });
 
 describe("pageModeNote", () => {
-  const subject = "What you type in text boxes on websites";
+  const subject =
+    "English Tutor asks on each site before it reads anything there. What you type on a site you turn on";
   it.each([
     {
       name: "a remote server",
@@ -134,5 +142,54 @@ describe("pageModeNote", () => {
     expected: string;
   }[])("$name", ({ llm, expected }) => {
     expect(pageModeNote(llm)).toBe(expected);
+  });
+});
+
+describe("promptServer", () => {
+  it.each([
+    {
+      name: "a remote server",
+      llm: { provider: "openai-compatible", base_url: "https://api.example.com/v1" },
+      expected: { server: "api.example.com", local: false },
+    },
+    {
+      name: "a remote server with a port",
+      llm: { provider: "openai-compatible", base_url: "http://llm.example.com:8080/v1" },
+      expected: { server: "llm.example.com:8080", local: false },
+    },
+    {
+      name: "Anthropic without a base URL",
+      llm: { provider: "anthropic", base_url: "" },
+      expected: { server: "api.anthropic.com", local: false },
+    },
+    {
+      name: "Ollama on this computer",
+      llm: { provider: "ollama", base_url: "http://localhost:11434" },
+      expected: { server: "localhost:11434", local: true },
+    },
+    {
+      name: "a server on 127.0.0.1",
+      llm: { provider: "openai-compatible", base_url: "http://127.0.0.1:47811/v1" },
+      expected: { server: "127.0.0.1:47811", local: true },
+    },
+    {
+      name: "a path and credentials never show",
+      llm: {
+        provider: "openai-compatible",
+        base_url: "https://user:secret@api.example.com/v1/key",
+      },
+      expected: { server: "api.example.com", local: false },
+    },
+    {
+      name: "a malformed address",
+      llm: { provider: "openai-compatible", base_url: "nope" },
+      expected: undefined,
+    },
+  ] as {
+    name: string;
+    llm: { provider: Provider; base_url: string };
+    expected: { server: string; local: boolean } | undefined;
+  }[])("$name", ({ llm, expected }) => {
+    expect(promptServer(llm)).toEqual(expected);
   });
 });

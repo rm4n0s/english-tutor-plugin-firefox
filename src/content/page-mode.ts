@@ -1,7 +1,12 @@
-import type { Scheduler } from "../core/clock";
+import type { Clock, Scheduler } from "../core/clock";
 import type { AppError } from "../core/errors";
 import type { Logger } from "../core/log";
-import type { PageBroadcast } from "../core/page-mode/messages";
+import type {
+  PageBroadcast,
+  PromptChoice,
+  PromptServer,
+  SiteConfig,
+} from "../core/page-mode/messages";
 import { PAGE_MODE_OFF } from "../core/page-mode/messages";
 import type { FrameMessage } from "../core/page-mode/protocol";
 import type { Random } from "../core/random";
@@ -13,6 +18,7 @@ import { BlockedCard } from "./blocked-card";
 import { BoxState } from "./box-state";
 import { FrameLink } from "./frame-link";
 import { OverlayHost } from "./overlay-host";
+import { SitePrompt } from "./site-prompt";
 import { findTextBox } from "./text-box";
 
 export interface PageModeContentDeps {
@@ -21,6 +27,8 @@ export interface PageModeContentDeps {
   runtime: PageModeRuntime;
   connector: PageConnector;
   scheduler: Scheduler;
+  /** Time for the prompt: its buttons ignore clicks in its first 500 ms. */
+  clock: Clock;
   random: Random;
   log: Logger;
   /** `open` lets a test look inside the shadow root; the extension always uses `closed`. */
@@ -43,19 +51,29 @@ interface Tracked {
 
 /**
  * Page mode on one web page, in one frame of it (SPEC section 4.11). It asks the background script
- * whether page mode runs on this host, then watches focus: a text box takes part only after the
- * user focuses it (events the page dispatches itself, `isTrusted === false`, are ignored). It keeps
- * the box's text state, sends the text and each edit to the frame over the port, and draws the
- * badge from what the frame answers. Everything it adds to the page is in one element with a
- * closed shadow root. It never calls an LLM and never sees a key or a setting.
+ * what page mode does on this host, and acts on the answer:
  *
- * `page-mode-off` removes everything; `settings-changed` asks the background script again.
+ * - `on`: it watches focus. A text box takes part only after the user focuses it (events the page
+ *   dispatches itself, `isTrusted === false`, are ignored). It keeps the box's text state, sends
+ *   the text and each edit to the frame over the port, and draws the badge from what the frame
+ *   answers.
+ * - `ask`: it reads no text and makes no frame. The first trusted focus of a text box page mode may
+ *   read opens the prompt card, once per page load; Turn on makes the site `on` and checks the
+ *   focused box at once.
+ * - `off` and `later`: it does nothing at all.
+ *
+ * Everything it adds to the page is in an element with a closed shadow root. It never calls an LLM
+ * and never sees a key or a setting. `page-mode-off` removes everything; `settings-changed` asks
+ * the background script again.
  */
 export class PageModeContent {
   private readonly deps: PageModeContentDeps;
   private readonly win: Window & typeof globalThis;
   private readonly doc: Document;
   private active: Active | undefined;
+  private prompt: SitePrompt | undefined;
+  /** The prompt is shown at most once per page load, whatever happens to the site's state. */
+  private promptShown = false;
   private stopListening: (() => void) | undefined;
   private asks = 0;
   /** Called when a badge is clicked and the frame is working: step 15 opens the dialog here. */
@@ -67,9 +85,19 @@ export class PageModeContent {
     this.doc = deps.win.document;
   }
 
-  /** Whether page mode is showing anything on this page now. */
+  /** Whether page mode is checking text boxes on this page now (the site is `on`). */
   get running(): boolean {
     return this.active !== undefined;
+  }
+
+  /** Whether the prompt is waiting for the user's first focus of a text box, or showing. */
+  get asking(): boolean {
+    return this.prompt !== undefined;
+  }
+
+  /** Whether the prompt card is showing. */
+  get promptOpen(): boolean {
+    return this.prompt?.open === true;
   }
 
   /** The text boxes the user has focused, with their state (for tests and for step 14). */
@@ -141,15 +169,67 @@ export class PageModeContent {
   /** Asks again; the latest answer wins. */
   private async refresh(): Promise<void> {
     const ask = ++this.asks;
-    let enabled = false;
+    // An answer that cannot be had is `off`: nothing is read.
+    let config: SiteConfig = { state: "off" };
     try {
-      enabled = await this.deps.runtime.enabledOn(this.win.location.hostname);
+      config = await this.deps.runtime.configFor(this.win.location.hostname);
     } catch (err) {
-      this.deps.log.error("page mode could not ask whether it runs here", { err });
+      this.deps.log.error("page mode could not ask what it does here", { err });
     }
     if (ask !== this.asks) return;
-    if (enabled) this.attach();
-    else this.detach();
+    this.apply(config);
+  }
+
+  private apply(config: SiteConfig): void {
+    if (config.state === "on") {
+      this.dropPrompt();
+      this.attach();
+    } else if (config.state === "ask") {
+      // An open card stays: the answer only says the site is still undecided.
+      this.detachActive();
+      this.askOnFocus(config.llm);
+    } else {
+      this.detach();
+    }
+  }
+
+  /** Waits for the first focus of a text box, to show the prompt (once per page load). */
+  private askOnFocus(llm: PromptServer | null): void {
+    if (this.promptShown) return;
+    if (this.prompt === undefined) {
+      this.prompt = new SitePrompt({
+        win: this.win,
+        clock: this.deps.clock,
+        host: this.win.location.hostname,
+        ...(this.deps.overlayMode === undefined ? {} : { overlayMode: this.deps.overlayMode }),
+        onShown: () => {
+          this.promptShown = true;
+        },
+        onChoose: (choice) => {
+          this.prompt = undefined;
+          this.choose(choice);
+        },
+      });
+      this.prompt.start();
+    }
+    this.prompt.llm = llm;
+  }
+
+  /** The user's choice in the prompt: sent to the background script, which stores it. */
+  private choose(choice: PromptChoice): void {
+    this.asks++;
+    this.finishChoose(choice).catch((err: unknown) => {
+      this.deps.log.error("page mode could not store the choice", { err });
+    });
+  }
+
+  private async finishChoose(choice: PromptChoice): Promise<void> {
+    await this.deps.runtime.chooseSite(this.win.location.hostname, choice);
+    if (choice !== "on") return;
+    // Turn on: the site is on at once. The box the user is in is checked now, not after the next
+    // focus.
+    this.attach();
+    this.active?.adopt(this.doc.activeElement);
   }
 
   private attach(): void {
@@ -159,9 +239,20 @@ export class PageModeContent {
     });
   }
 
-  private detach(): void {
+  private dropPrompt(): void {
+    this.prompt?.stop();
+    this.prompt = undefined;
+  }
+
+  private detachActive(): void {
     this.active?.destroy();
     this.active = undefined;
+  }
+
+  /** Removes everything page mode has on the page: the checks, the badges and the prompt. */
+  private detach(): void {
+    this.detachActive();
+    this.dropPrompt();
   }
 }
 
@@ -276,8 +367,20 @@ class Active {
   }
 
   private onFocusIn(event: FocusEvent): void {
-    if (this.host.owns(event.target)) return;
-    const found = findTextBox(event.composedPath()[0] ?? event.target, this.win);
+    this.focusTarget(event.composedPath()[0] ?? event.target, event.target);
+  }
+
+  /**
+   * Takes the text box the user is in right now, as if it had just been focused: after Turn on in
+   * the prompt, the box is checked at once, not after the next focus.
+   */
+  adopt(target: Element | null): void {
+    if (target !== null) this.focusTarget(target, target);
+  }
+
+  private focusTarget(target: EventTarget | null, eventTarget: EventTarget | null): void {
+    if (this.host.owns(eventTarget)) return;
+    const found = findTextBox(target, this.win);
     if (found === undefined) {
       this.deactivate();
       return;

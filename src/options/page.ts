@@ -4,20 +4,33 @@ import type { OptionsDeps } from "./deps";
 import { GeneralSection } from "./general-section";
 import type { PageModeSection } from "./page-mode-section";
 import { LLMSection } from "./llm-section";
+import { WelcomeBlock } from "./welcome";
+
+export interface OptionsPageOptions {
+  /** Show the Welcome block first: the page was opened as `options.html#welcome`. */
+  welcome?: boolean;
+}
 
 export interface OptionsPage {
   /** Resolves when both sections have read the store. */
   ready: Promise<void>;
   /** The page-mode box and its list of sites. */
   pageMode: PageModeSection;
+  /** The Welcome block, while it is on the page. */
+  welcome: WelcomeBlock | undefined;
   destroy(): void;
 }
 
 /**
- * Builds the options page into `doc` (SPEC section 4.7): the LLMs section and the General
- * section, and a banner for failures. It listens for changes made by other pages.
+ * Builds the options page into `doc` (SPEC section 4.7): the Welcome block when asked for, the LLMs
+ * section and the General section, and a banner for failures. It listens for changes made by
+ * other pages.
  */
-export function mountOptions(doc: Document, deps: OptionsDeps): OptionsPage {
+export function mountOptions(
+  doc: Document,
+  deps: OptionsDeps,
+  options: OptionsPageOptions = {},
+): OptionsPage {
   const llmHost = requireElement(doc, "#llms .card-body");
   const generalHost = requireElement(doc, "#general .card-body");
   const banner = el(doc, "p", {
@@ -51,6 +64,17 @@ export function mountOptions(doc: Document, deps: OptionsDeps): OptionsPage {
   };
   const llms = new LLMSection(doc, llmHost, llmDeps, report);
   const general = new GeneralSection(doc, generalHost, deps, report);
+  // The Welcome block of a first installation sits above the sections (SPEC section 4.11).
+  let welcome: WelcomeBlock | undefined;
+  if (options.welcome === true) {
+    welcome = new WelcomeBlock(doc, {
+      pageMode: general.pageMode,
+      addLLM: () => {
+        llms.startAdd();
+      },
+    });
+    requireElement(doc, "h1").after(welcome.element);
+  }
 
   const unsubscribe = deps.channel.subscribe((message) => {
     // The page-mode note names the selected LLM, so it follows the list too.
@@ -62,6 +86,7 @@ export function mountOptions(doc: Document, deps: OptionsDeps): OptionsPage {
   return {
     ready: Promise.all([llms.load(), general.load()]).then(() => undefined),
     pageMode: general.pageMode,
+    welcome,
     destroy: () => {
       unsubscribe();
       llms.destroy();

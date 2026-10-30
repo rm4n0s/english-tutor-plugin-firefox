@@ -9,14 +9,20 @@ import { FakeBackendLink, FakePageModePermission } from "../../platform/testing/
 import { FakePermissions } from "../../platform/testing/fake-permissions";
 import { el } from "../../ui/dom";
 import type { OptionsDeps } from "../deps";
-import { mountOptions, type OptionsPage } from "../page";
+import { mountOptions, type OptionsPage, type OptionsPageOptions } from "../page";
 
 /** The skeleton of options.html that `mountOptions` needs, built with createElement. */
 export function skeleton(doc: Document): void {
   doc.body.replaceChildren();
   const section = (id: string) =>
     el(doc, "section", { id, class: "card" }, [el(doc, "div", { class: "card-body" })]);
-  doc.body.append(el(doc, "main", { class: "page" }, [section("llms"), section("general")]));
+  doc.body.append(
+    el(doc, "main", { class: "page" }, [
+      el(doc, "h1", {}, ["English Tutor Preferences"]),
+      section("llms"),
+      section("general"),
+    ]),
+  );
 }
 
 export interface OptionsHarness {
@@ -53,6 +59,7 @@ export async function mountForTest(
   doc: Document,
   script: FakeScript = { kind: "json", body: { choices: [{ message: { content: "ok" } }] } },
   seed: (deps: OptionsDeps) => Promise<void> = () => Promise.resolve(),
+  options: OptionsPageOptions = {},
 ): Promise<OptionsHarness> {
   skeleton(doc);
   const { store } = await freshStore({ validateConfig });
@@ -82,7 +89,7 @@ export async function mountForTest(
     log: new Logger({ debug: record, info: record, warn: record, error: record }),
   };
   await seed(deps);
-  const page = mountOptions(doc, deps);
+  const page = mountOptions(doc, deps, options);
   await page.ready;
   return {
     deps,
