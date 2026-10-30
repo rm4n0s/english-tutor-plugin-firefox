@@ -2,6 +2,7 @@ import type { AnalysisModel, CheckOptions, CheckResult } from "../analysis";
 import { AppError } from "../errors";
 import { isCancelled, type Usage } from "../llm";
 import type { Logger } from "../log";
+import { rebaseRangeAcross, type Edit, type Ranged } from "./edits";
 import type { IssueState } from "./state";
 
 /** What the controller needs from the analyzer. `Analyzer` fits. */
@@ -38,7 +39,11 @@ export type CheckOutcome =
     }
   | { kind: "cancelled" }
   | { kind: "failed"; manual: boolean; error: AppError }
-  /** The result no longer applies: a newer check replaced this one, or the text changed. */
+  /**
+   * The result no longer applies: a newer check replaced this one, or the text changed in a way
+   * the result cannot follow (too many edits, a loaded text, or an edit inside a checked
+   * selection). The issues the state had stay.
+   */
   | { kind: "stale" }
   /** An auto-check was refused because a check is running. Try again after the next pause. */
   | { kind: "busy" }
@@ -54,9 +59,10 @@ export type CheckOutcome =
  * - Cancelling leaves the issues as they were and is not an error.
  * - A failed check keeps the old issues. The error is in the outcome (route
  *   `CheckController.check->Analyzer.check->...->Tag`).
- * - A result is applied only if its check is still the pending one and the revision of the text
- *   is the snapshot's. Step 7 rebases a result across the edits made meanwhile instead of
- *   dropping it as `stale`.
+ * - A result is applied only if its check is still the pending one. If the text was edited
+ *   meanwhile, the result is rebased across the edits the state logged (SPEC section 5.5); it is
+ *   discarded as `stale` only when the log overflowed, a text was loaded, or (for a selection
+ *   check) an edit touched the checked range.
  */
 export class CheckController {
   private readonly deps: CheckControllerDeps;
@@ -75,9 +81,13 @@ export class CheckController {
     this.controller?.abort();
   }
 
-  async check(options: { manual: boolean }): Promise<CheckOutcome> {
+  /**
+   * `selection` is the range a check of a selection covers (step 10 sends only that text): an
+   * edit that touches it while the check runs discards the result.
+   */
+  async check(options: { manual: boolean; selection?: Ranged }): Promise<CheckOutcome> {
     const { state } = this.deps;
-    const { manual } = options;
+    const { manual, selection } = options;
     if (state.pending !== null && !manual) return { kind: "busy" };
 
     let model: AnalysisModel | undefined;
@@ -116,13 +126,21 @@ export class CheckController {
       this.reportUsage(result.usage);
       return { kind: "cancelled" };
     }
+    let edits: readonly Edit[] = [];
     if (state.revision !== pending.revision) {
-      // The text changed while the check ran, and its issues went with the edit.
-      state.endCheck("none");
-      this.reportUsage(result.usage);
-      return { kind: "stale" };
+      // The text changed while the check ran: rebase the result across the edits.
+      const logged = state.editsDuringCheck;
+      if (
+        logged === undefined ||
+        (selection !== undefined && rebaseRangeAcross(selection, logged) === null)
+      ) {
+        state.discardCheck();
+        this.reportUsage(result.usage);
+        return { kind: "stale" };
+      }
+      edits = logged;
     }
-    state.finishCheck(result.placed, text, result.unplaced);
+    state.finishCheck(result.placed, text, result.unplaced, edits);
     this.reportUsage(result.usage);
     return { kind: "finished", manual, text, result };
   }

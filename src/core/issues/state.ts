@@ -1,6 +1,7 @@
 import type { CheckedIssue, Category, ErrorType, Issue } from "../analysis";
 import { CATEGORIES } from "../analysis";
 import type { Clock } from "../clock";
+import { EditLog, rebaseIssues, type Edit } from "./edits";
 
 /**
  * An issue of the text, as the editor and the list show it. Offsets are UTF-16 offsets in the
@@ -22,6 +23,11 @@ export interface TextIssue {
   readonly fingerprint: string;
   /** As the model reported it, with the contexts the explanation prompt needs (step 8). */
   readonly issue: Issue;
+  /**
+   * True when a manual check found it. Issues of an auto-check are not counted in the statistics
+   * and get no count badge (SPEC sections 4.4 and 5.7).
+   */
+  readonly manual: boolean;
 }
 
 /** The check that is running. At most one per state. */
@@ -50,8 +56,9 @@ export type IssueListener = (change: IssueChange) => void;
  * issues list and the status bar observe it, and none of them talks to another. It does not know
  * the text itself (the editor owns that) or how checks run (`CheckController` drives it).
  *
- * Step 7 adds edit rebasing here: it replaces `issues` through `replaceIssues` and bumps the
- * revision with `bumpRevision`.
+ * An edit of the text goes through `applyEdit` (SPEC section 5.5): the issues it touches go at
+ * once, the ones after it move, and while a check runs the edit is logged so that the check's
+ * result can be rebased across it.
  */
 export class IssueState {
   private readonly clock: Clock;
@@ -66,9 +73,12 @@ export class IssueState {
   private hasResult = false;
   private nextIssueId = 1;
   private nextCheckId = 1;
+  private readonly log: EditLog;
 
-  constructor(clock: Clock) {
+  /** `editLogLimit` is the most edits kept while a check runs (SPEC section 5.5). */
+  constructor(clock: Clock, options: { editLogLimit?: number } = {}) {
     this.clock = clock;
+    this.log = new EditLog(options.editLogLimit);
   }
 
   // Reading
@@ -127,6 +137,15 @@ export class IssueState {
     return this.notPlaced;
   }
 
+  /**
+   * The edits made since the pending check began, in order, to rebase its result across; or
+   * undefined when there were too many, or a text was loaded meanwhile, and the result must be
+   * discarded. Empty when the text did not change.
+   */
+  get editsDuringCheck(): readonly Edit[] | undefined {
+    return this.log.edits;
+  }
+
   /** Observers. Returns the function that removes the listener. */
   subscribe(listener: IssueListener): () => void {
     this.listeners.add(listener);
@@ -172,6 +191,7 @@ export class IssueState {
    * controller finds out that it is no longer the pending one when it ends.
    */
   beginCheck(manual: boolean): PendingCheck {
+    this.log.clear();
     this.running = {
       id: this.nextCheckId++,
       revision: this.currentRevision,
@@ -185,11 +205,21 @@ export class IssueState {
   /**
    * Ends the pending check with its result: the issues replace the old ones, the selection is
    * cleared, and the check counts as finished. `text` is the text that was checked, where the
-   * offsets of `placed` point (the snippets are cut from it).
+   * offsets of `placed` point (the snippets are cut from it). `edits` are the ones made to the
+   * text since then (`editsDuringCheck`): the issues are rebased across them in order, and the
+   * ones an edit touched are dropped.
    */
-  finishCheck(placed: readonly CheckedIssue[], text: string, unplaced: number): void {
+  finishCheck(
+    placed: readonly CheckedIssue[],
+    text: string,
+    unplaced: number,
+    edits: readonly Edit[] = [],
+  ): void {
+    const manual = this.running?.manual ?? true;
     this.running = null;
-    this.current = placed.map((p) => this.toTextIssue(p, text));
+    let issues = placed.map((p) => this.toTextIssue(p, text, manual));
+    for (const edit of edits) issues = rebaseIssues(issues, edit);
+    this.current = issues;
     this.selection = null;
     this.notPlaced = unplaced;
     this.end = "finished";
@@ -204,12 +234,21 @@ export class IssueState {
     this.emit("pending", "outcome");
   }
 
+  /**
+   * Ends the pending check and throws its result away because it cannot be applied (SPEC section
+   * 5.5): the issues and the outcome of the earlier check stay as they were.
+   */
+  discardCheck(): void {
+    this.running = null;
+    this.emit("pending");
+  }
+
   // Text changes
 
   /**
-   * The text was loaded or changed in a way that the issues cannot follow: they go, the selection
-   * with them, and the revision moves on. A pending check is left to its controller (it will find
-   * its snapshot outdated). Step 7 replaces this, for edits, by rebasing.
+   * A text was loaded (New, Open, a hand-off): the issues go, the selection with them, and the
+   * revision moves on. A pending check is left to its controller; it finds its snapshot outdated
+   * and, as a loaded text is not an edit, discards its result.
    */
   reset(): void {
     this.bumpRevision();
@@ -222,16 +261,50 @@ export class IssueState {
     if (had) this.emit("issues", "selection", "outcome");
   }
 
-  /** Counts an edit or a loaded text. */
+  /**
+   * The text was edited (SPEC section 5.5). The revision moves on; an issue the edit touched is
+   * removed at once (and the selection with it), the ones after the edit move; while a check
+   * runs, the edit is logged. When no issue is left, the check's result no longer says anything
+   * about the text, so the state goes back to "not checked" (status `Ready`).
+   */
+  applyEdit(edit: Edit): void {
+    if (this.running !== null) this.log.push(edit);
+    this.currentRevision++;
+    const before = this.current;
+    const after = rebaseIssues(before, edit);
+    const changed = after.length !== before.length || after.some((issue, i) => issue !== before[i]);
+    const hadSelection = this.selection !== null;
+    this.current = after;
+    if (this.selection !== null && !after.some((issue) => issue.id === this.selection)) {
+      this.selection = null;
+    }
+    const changes: IssueChange[] = ["revision"];
+    if (changed) changes.push("issues");
+    if (hadSelection && this.selection === null) changes.push("selection");
+    if (after.length === 0 && (this.end !== "none" || this.hasResult || this.notPlaced > 0)) {
+      this.end = "none";
+      this.hasResult = false;
+      this.notPlaced = 0;
+      if (!changed) changes.push("issues");
+      changes.push("outcome");
+    }
+    this.emit(...changes);
+  }
+
+  /**
+   * Counts a change of the text that is not an edit (a loaded text). A pending check can no longer
+   * be rebased across it, so its result will be discarded.
+   */
   bumpRevision(): number {
     this.currentRevision++;
+    this.log.invalidate();
     this.emit("revision");
     return this.currentRevision;
   }
 
   /**
-   * Replaces the issues with a rebased or merged list (step 7 and step 10) and keeps the
-   * selection if that issue is still there.
+   * Replaces the issues with a merged list (step 10) and keeps the selection if that issue is
+   * still there.
    */
   replaceIssues(issues: readonly TextIssue[]): void {
     this.current = issues;
@@ -241,7 +314,7 @@ export class IssueState {
     } else this.emit("issues");
   }
 
-  private toTextIssue(placed: CheckedIssue, text: string): TextIssue {
+  private toTextIssue(placed: CheckedIssue, text: string, manual: boolean): TextIssue {
     return {
       id: this.nextIssueId++,
       start: placed.start,
@@ -252,6 +325,7 @@ export class IssueState {
       snippet: text.slice(placed.start, placed.end),
       fingerprint: placed.fingerprint,
       issue: placed.issue,
+      manual,
     };
   }
 

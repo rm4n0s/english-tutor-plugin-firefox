@@ -223,7 +223,190 @@ describe("IssueState", () => {
     });
   });
 
-  describe("replaceIssues (for rebasing and merging)", () => {
+  describe("applyEdit (SPEC section 5.5)", () => {
+    function checked() {
+      const made = newState();
+      made.state.beginCheck(true);
+      made.state.finishCheck(fiveIssues(), FIVE_TEXT, 1);
+      return made.state;
+    }
+
+    it("moves the issues after the edit, drops the touched ones, and leaves the earlier ones", () => {
+      const state = checked();
+      const kept = state.issues[0];
+      // "aaaa bbbb cccc ..." -> an insertion inside "cccc".
+      state.applyEdit({ start: 12, removed: 0, added: 3 });
+      expect(state.issues.map((i) => [i.snippet, i.start, i.end])).toEqual([
+        ["aaaa", 0, 4],
+        ["bbbb", 5, 9],
+        ["dddd", 18, 22],
+        ["eeee", 23, 27],
+      ]);
+      expect(state.issues[0]).toBe(kept);
+      expect(state.revision).toBe(1);
+    });
+
+    it("keeps the snippet of a moved issue (it is what was checked)", () => {
+      const state = checked();
+      state.applyEdit({ start: 2, removed: 0, added: 3 }); // inside "aaaa"
+      expect(state.issues.map((i) => [i.snippet, i.start])).toEqual([
+        ["bbbb", 8],
+        ["cccc", 13],
+        ["dddd", 18],
+        ["eeee", 23],
+      ]);
+    });
+
+    it("tells the observers what changed", () => {
+      const state = checked();
+      const changes = recorded(state);
+      state.applyEdit({ start: 100, removed: 0, added: 1 });
+      expect(changes).toEqual(["revision"]);
+      changes.length = 0;
+      state.applyEdit({ start: 2, removed: 0, added: 1 });
+      expect(changes).toEqual(["revision", "issues"]);
+    });
+
+    it("removes a selected issue that the edit touched, and keeps one that only moved", () => {
+      const state = checked();
+      state.select(state.issues[2]?.id ?? 0);
+      state.applyEdit({ start: 100, removed: 0, added: 1 });
+      expect(state.selected?.snippet).toBe("cccc");
+      state.applyEdit({ start: 1, removed: 0, added: 2 }); // touches "aaaa" only
+      expect(state.selected?.snippet).toBe("cccc");
+      expect(state.selected?.start).toBe(12);
+      const changes = recorded(state);
+      state.applyEdit({ start: 13, removed: 1, added: 1 }); // inside the selected one
+      expect(state.selectedId).toBeNull();
+      expect(changes).toEqual(["revision", "issues", "selection"]);
+    });
+
+    it("goes back to not checked when no issue is left", () => {
+      const made = newState();
+      const { state } = made;
+      state.beginCheck(true);
+      state.finishCheck([placed(0, 4)], "aaaa bbbb", 2);
+      const changes = recorded(state);
+      state.applyEdit({ start: 2, removed: 1, added: 1 });
+      expect(state.issues).toEqual([]);
+      expect(state.checked).toBe(false);
+      expect(state.outcome).toBe("none");
+      expect(state.unplaced).toBe(0);
+      expect(changes).toEqual(["revision", "issues", "outcome"]);
+    });
+
+    it("an edit of a text with no issues and a finished check ('No errors found') clears the result", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck([], "aaaa", 0);
+      expect(state.checked).toBe(true);
+      const changes = recorded(state);
+      state.applyEdit({ start: 0, removed: 0, added: 1 });
+      expect(state.checked).toBe(false);
+      expect(state.outcome).toBe("none");
+      expect(changes).toEqual(["revision", "issues", "outcome"]);
+    });
+
+    it("an edit of an unchecked text only counts the revision", () => {
+      const { state } = newState();
+      const changes = recorded(state);
+      state.applyEdit({ start: 0, removed: 0, added: 1 });
+      expect(changes).toEqual(["revision"]);
+      expect(state.revision).toBe(1);
+    });
+  });
+
+  describe("the edit log while a check runs", () => {
+    it("logs edits in order, from the start of the check", () => {
+      const { state } = newState();
+      state.applyEdit({ start: 0, removed: 0, added: 1 }); // before the check: not logged
+      state.beginCheck(true);
+      expect(state.editsDuringCheck).toEqual([]);
+      state.applyEdit({ start: 5, removed: 1, added: 0 });
+      state.applyEdit({ start: 2, removed: 0, added: 4 });
+      expect(state.editsDuringCheck).toEqual([
+        { start: 5, removed: 1, added: 0 },
+        { start: 2, removed: 0, added: 4 },
+      ]);
+    });
+
+    it("a new check starts a new log", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.applyEdit({ start: 5, removed: 1, added: 0 });
+      state.beginCheck(true);
+      expect(state.editsDuringCheck).toEqual([]);
+    });
+
+    it("overflows after the limit (the default is 100,000)", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      for (let i = 0; i < 100_000; i++) state.applyEdit({ start: 0, removed: 0, added: 1 });
+      expect(state.editsDuringCheck).toHaveLength(100_000);
+      state.applyEdit({ start: 0, removed: 0, added: 1 });
+      expect(state.editsDuringCheck).toBeUndefined();
+    });
+
+    it.each([
+      {
+        name: "a loaded text",
+        act: (s: ReturnType<typeof newState>["state"]) => {
+          s.reset();
+        },
+      },
+      {
+        name: "a revision bump",
+        act: (s: ReturnType<typeof newState>["state"]) => {
+          s.bumpRevision();
+        },
+      },
+    ])("cannot be rebased across $name", ({ act }) => {
+      const { state } = newState();
+      state.beginCheck(true);
+      act(state);
+      expect(state.editsDuringCheck).toBeUndefined();
+    });
+
+    it("finishCheck rebases the result across the edits it is given", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0, [
+        { start: 0, removed: 0, added: 2 }, // touches "aaaa"
+        { start: 13, removed: 1, added: 0 }, // inside "cccc" after the shift (12..16)
+        { start: 30, removed: 0, added: 5 },
+      ]);
+      expect(state.issues.map((i) => [i.snippet, i.start, i.end])).toEqual([
+        ["bbbb", 7, 11],
+        ["dddd", 16, 20],
+        ["eeee", 21, 25],
+      ]);
+    });
+
+    it("discardCheck ends the check and leaves the old issues and outcome", () => {
+      const { state } = newState();
+      state.beginCheck(true);
+      state.finishCheck(fiveIssues(), FIVE_TEXT, 0);
+      state.beginCheck(true);
+      state.discardCheck();
+      expect(state.pending).toBeNull();
+      expect(state.issues).toHaveLength(5);
+      expect(state.outcome).toBe("finished");
+    });
+  });
+
+  describe("the manual flag", () => {
+    it.each([
+      { manual: true, expected: [true, true] },
+      { manual: false, expected: [false, false] },
+    ])("issues of a check with manual=$manual carry it", ({ manual, expected }) => {
+      const { state } = newState();
+      state.beginCheck(manual);
+      state.finishCheck([placed(0, 4), placed(5, 9)], FIVE_TEXT, 0);
+      expect(state.issues.map((i) => i.manual)).toEqual(expected);
+    });
+  });
+
+  describe("replaceIssues (for merging)", () => {
     it("keeps the selection when its issue is still there and drops it otherwise", () => {
       const { state } = newState();
       state.beginCheck(true);

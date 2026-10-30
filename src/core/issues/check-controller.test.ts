@@ -11,6 +11,7 @@ import {
 import { AppError } from "../errors";
 import type { Usage } from "../llm";
 import { CheckController, type CheckOutcome, type CheckRunner } from "./check-controller";
+import { IssueState } from "./state";
 import { deferred, fiveIssues, FIVE_TEXT, newState, placed, resultOf } from "./testing/helpers";
 
 const MODEL = { client: {}, name: "Local" } as unknown as AnalysisModel;
@@ -240,11 +241,11 @@ describe("CheckController", () => {
     });
   });
 
-  describe("a stale result", () => {
-    it("is ignored when the text changed while checking, and the issues of the edit stay gone", async () => {
+  describe("a result after the text changed", () => {
+    it("is ignored when a text was loaded meanwhile", async () => {
       const { state, runner, controller, usages } = setupController();
       const running = controller.check({ manual: true });
-      state.reset(); // the text was edited or replaced
+      state.reset(); // a text was loaded: not an edit
       runner.finish(0, resultOf(fiveIssues()));
       expect(await running).toEqual({ kind: "stale" });
       expect(state.issues).toEqual([]);
@@ -252,6 +253,137 @@ describe("CheckController", () => {
       expect(state.pending).toBeNull();
       expect(state.outcome).toBe("none");
       expect(usages).toHaveLength(1);
+    });
+
+    it.each([
+      {
+        name: "an edit before every issue shifts them all",
+        edits: [
+          { start: 0, removed: 0, added: 0 },
+          { start: 0, removed: 0, added: 3 },
+        ],
+        // The first (empty) edit is a no-op in the log; "aaaa" is touched by the insertion at 0.
+        expected: ["bbbb", "cccc", "dddd", "eeee"],
+        starts: [8, 13, 18, 23],
+      },
+      {
+        name: "an edit inside one issue drops it and moves the later ones",
+        edits: [{ start: 11, removed: 1, added: 4 }],
+        expected: ["aaaa", "bbbb", "dddd", "eeee"],
+        starts: [0, 5, 18, 23],
+      },
+      {
+        name: "an edit after every issue changes nothing",
+        edits: [{ start: 40, removed: 0, added: 4 }],
+        expected: ["aaaa", "bbbb", "cccc", "dddd", "eeee"],
+        starts: [0, 5, 10, 15, 20],
+      },
+      {
+        name: "several edits are applied in order",
+        edits: [
+          { start: 6, removed: 1, added: 2 }, // inside "bbbb"; "cccc" is now at 11..15
+          { start: 12, removed: 0, added: 1 }, // inside "cccc"
+        ],
+        expected: ["aaaa", "dddd", "eeee"],
+        starts: [0, 17, 22],
+      },
+    ])("is rebased across the edits: $name", async ({ edits, expected, starts }) => {
+      const { state, runner, controller } = setupController();
+      const running = controller.check({ manual: true });
+      for (const edit of edits) state.applyEdit(edit);
+      runner.finish(0, resultOf(fiveIssues(), { unplaced: 2 }));
+      const outcome = await running;
+      expect(outcome.kind).toBe("finished");
+      expect(state.issues.map((i) => i.snippet)).toEqual(expected);
+      expect(state.issues.map((i) => i.start)).toEqual(starts);
+      expect(state.unplaced).toBe(2);
+      expect(state.outcome).toBe("finished");
+      expect(state.pending).toBeNull();
+    });
+
+    it("is discarded when the edit log overflowed, and the old issues stay", async () => {
+      const { clock } = newState();
+      const state = new IssueState(clock, { editLogLimit: 2 });
+      const runner = new ManualRunner();
+      const controller = new CheckController({
+        state,
+        runner,
+        getModel: () => MODEL,
+        getText: () => FIVE_TEXT,
+      });
+      state.beginCheck(true);
+      state.finishCheck([placed(0, 4)], FIVE_TEXT, 0);
+      const running = controller.check({ manual: true });
+      for (let i = 0; i < 3; i++) state.applyEdit({ start: 40, removed: 0, added: 1 });
+      runner.finish(0, resultOf(fiveIssues()));
+      expect(await running).toEqual({ kind: "stale" });
+      expect(state.issues.map((i) => i.snippet)).toEqual(["aaaa"]);
+      expect(state.pending).toBeNull();
+      expect(state.outcome).toBe("finished");
+    });
+
+    it("applies the result when the log holds exactly the limit", async () => {
+      const { clock } = newState();
+      const state = new IssueState(clock, { editLogLimit: 2 });
+      const runner = new ManualRunner();
+      const controller = new CheckController({
+        state,
+        runner,
+        getModel: () => MODEL,
+        getText: () => FIVE_TEXT,
+      });
+      const running = controller.check({ manual: true });
+      for (let i = 0; i < 2; i++) state.applyEdit({ start: 40, removed: 0, added: 1 });
+      runner.finish(0, resultOf(fiveIssues()));
+      expect((await running).kind).toBe("finished");
+      expect(state.issues).toHaveLength(5);
+    });
+
+    it.each([
+      {
+        name: "an edit inside the selection",
+        edits: [{ start: 12, removed: 0, added: 1 }],
+        stale: true,
+      },
+      {
+        name: "an edit adjacent to the selection",
+        edits: [{ start: 15, removed: 0, added: 1 }],
+        stale: true,
+      },
+      {
+        name: "an edit before the selection",
+        edits: [{ start: 0, removed: 1, added: 3 }],
+        stale: false,
+      },
+      {
+        name: "an edit after the selection",
+        edits: [{ start: 30, removed: 0, added: 3 }],
+        stale: false,
+      },
+      {
+        name: "an edit that touches the selection after an earlier one moved it",
+        edits: [
+          { start: 0, removed: 0, added: 5 }, // the selection is now at 15..20
+          { start: 20, removed: 0, added: 1 },
+        ],
+        stale: true,
+      },
+    ])("a selection check is discarded only for $name: $stale", async ({ edits, stale }) => {
+      const { state, runner, controller } = setupController();
+      const running = controller.check({ manual: true, selection: { start: 10, end: 15 } });
+      for (const edit of edits) state.applyEdit(edit);
+      runner.finish(0, resultOf([placed(10, 14)]));
+      expect((await running).kind).toBe(stale ? "stale" : "finished");
+      expect(state.pending).toBeNull();
+      expect(state.issues.length).toBe(stale ? 0 : 1);
+    });
+
+    it("an auto-check result carries the flag on its issues", async () => {
+      const { state, runner, controller } = setupController();
+      const running = controller.check({ manual: false });
+      runner.finish(0, resultOf(fiveIssues()));
+      await running;
+      expect(state.issues.every((i) => !i.manual)).toBe(true);
     });
   });
 });
