@@ -54,8 +54,18 @@ describe("DialogController", () => {
   });
 
   it.each([
-    { name: "drawn", act: (c: DialogController) => c.drawn(2) },
-    { name: "selected", act: (c: DialogController) => c.selected(2, 5) },
+    {
+      name: "drawn",
+      act: (c: DialogController) => {
+        c.drawn(2);
+      },
+    },
+    {
+      name: "selected",
+      act: (c: DialogController) => {
+        c.selected(2, 5);
+      },
+    },
     { name: "closedByFrame", act: (c: DialogController) => c.closedByFrame(2) },
   ])("ignores $name for another box", ({ act }) => {
     const t = setup();
