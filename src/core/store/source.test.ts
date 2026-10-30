@@ -24,6 +24,16 @@ describe("TabSource", () => {
     expect(isSessionSource(source.key)).toBe(false);
   });
 
+  it("uses a library document opened in the tab, and a restored key", () => {
+    const source = new TabSource(new CountingRandom());
+    expect(source.useDocument(7)).toBe("doc:7");
+    expect(source.key).toBe("doc:7");
+    source.restore("session:restored");
+    expect(source.key).toBe("session:restored");
+    // A later renew still makes a fresh key.
+    expect(source.renew()).toMatch(/^session:/);
+  });
+
   it.each([
     { id: 1, expected: "doc:1" },
     { id: 4096, expected: "doc:4096" },
