@@ -23,6 +23,8 @@ const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
   "FileNotUTF8",
   "FileWriteFailed",
   "HandoffExpired",
+  "PageFrameBlocked",
+  "PageModePermissionDenied",
 ];
 
 function testSources(dir: string): string[] {
