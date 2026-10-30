@@ -1996,6 +1996,28 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "underlines-input-scrolled": {
+    theme: "light",
+    dir: "step-15-page-underlines",
+    async run(ctx) {
+      // No PNG. A one-line input whose text is longer than the box, scrolled to its end: the
+      // underlines follow the text inside the input.
+      await checkedBox(ctx, "input.html");
+      await ctx.driver.executeScript(
+        `const box = document.getElementById("box");
+         box.focus();
+         box.setSelectionRange(box.value.length, box.value.length);
+         box.scrollLeft = box.scrollWidth;`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const scrolled = await ctx.driver.executeScript(
+        "return document.getElementById('box').scrollLeft",
+      );
+      if (!(scrolled > 20)) throw new Error(`the input did not scroll (${scrolled})`);
+      await ctx.expectUnderline("make a photo", "vocabulary");
+      await ctx.expectNoUnderlineUnder("Yesterday", "grammar");
+    },
+  },
   "page-underlines-scrolled": {
     theme: "light",
     dir: "step-15-page-underlines",
