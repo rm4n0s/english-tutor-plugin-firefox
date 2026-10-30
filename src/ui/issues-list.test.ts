@@ -158,6 +158,120 @@ describe("IssuesList", () => {
     expect(rows().every((r) => r.getAttribute("aria-selected") === "false")).toBe(true);
   });
 
+  describe("as a listbox", () => {
+    const keydown = (key: string, init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      listbox().dispatchEvent(event);
+      return event;
+    };
+    const listbox = () => host.querySelector<HTMLElement>("#issues")!;
+    const selected = () => state.selected?.snippet;
+
+    it("is one tab stop, vertical, labelled by its header, and its rows have unique ids", () => {
+      check();
+      expect(listbox().getAttribute("tabindex")).toBe("0");
+      expect(listbox().getAttribute("aria-orientation")).toBe("vertical");
+      expect(listbox().getAttribute("aria-labelledby")).toBe("issues-header");
+      expect(new Set(rows().map((r) => r.id)).size).toBe(5);
+      expect(rows().every((r) => r.getAttribute("role") === "option")).toBe(true);
+    });
+
+    it("names the selected row as the active descendant, and none when nothing is selected", () => {
+      check();
+      expect(listbox().hasAttribute("aria-activedescendant")).toBe(false);
+      state.select(state.issues[3]?.id ?? 0);
+      expect(listbox().getAttribute("aria-activedescendant")).toBe(rows()[3]?.id);
+      state.select(null);
+      expect(listbox().hasAttribute("aria-activedescendant")).toBe(false);
+    });
+
+    it("drops the active descendant when the rows go", () => {
+      check();
+      state.select(state.issues[0]?.id ?? 0);
+      state.reset();
+      expect(listbox().hasAttribute("aria-activedescendant")).toBe(false);
+    });
+
+    it.each([
+      { name: "Down from nothing selects the first", keys: ["ArrowDown"], expected: "aaaa" },
+      { name: "Up from nothing selects the last", keys: ["ArrowUp"], expected: "eeee" },
+      { name: "Down moves on", keys: ["ArrowDown", "ArrowDown", "ArrowDown"], expected: "cccc" },
+      { name: "Up moves back", keys: ["End", "ArrowUp"], expected: "dddd" },
+      {
+        name: "Down stops at the last row",
+        keys: ["End", "ArrowDown", "ArrowDown"],
+        expected: "eeee",
+      },
+      { name: "Up stops at the first row", keys: ["Home", "ArrowUp"], expected: "aaaa" },
+      { name: "Home", keys: ["End", "Home"], expected: "aaaa" },
+      { name: "End", keys: ["End"], expected: "eeee" },
+    ])("$name", ({ keys, expected }) => {
+      check();
+      for (const key of keys) expect(keydown(key).defaultPrevented).toBe(true);
+      expect(selected()).toBe(expected);
+    });
+
+    it("skips rows of a hidden category", () => {
+      check();
+      state.setHidden("vocabulary", true);
+      keydown("End");
+      keydown("ArrowUp");
+      expect(selected()).toBe("bbbb");
+    });
+
+    it("leaves other keys, and shortcuts with a modifier, alone", () => {
+      check();
+      for (const event of [
+        keydown("a"),
+        keydown("Tab"),
+        keydown("ArrowDown", { ctrlKey: true }),
+        keydown("ArrowDown", { altKey: true }),
+      ]) {
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(state.selectedId).toBeNull();
+    });
+
+    it("does nothing with no rows", () => {
+      expect(keydown("ArrowDown").defaultPrevented).toBe(true);
+      expect(state.selectedId).toBeNull();
+    });
+
+    it("Enter and a double click activate the selected issue; Enter with none does nothing", () => {
+      const activated: number[] = [];
+      list.destroy();
+      list = new IssuesList(document, host, state, { onActivate: (id) => activated.push(id) });
+      check();
+      expect(keydown("Enter").defaultPrevented).toBe(false);
+      expect(activated).toEqual([]);
+      const id = state.issues[1]?.id ?? 0;
+      state.select(id);
+      expect(keydown("Enter").defaultPrevented).toBe(true);
+      expect(activated).toEqual([id]);
+      const third = state.issues[2]?.id ?? 0;
+      rows()[2]
+        ?.querySelector(".row-snippet")
+        ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(state.selectedId).toBe(third);
+      expect(activated).toEqual([id, third]);
+    });
+
+    it("scrolls the selected row into view, whoever selected it", () => {
+      check();
+      const box = listbox();
+      Object.defineProperty(box, "clientHeight", { value: 100, configurable: true });
+      box.getBoundingClientRect = () => new DOMRect(0, 0, 200, 100);
+      rows().forEach((row, i) => {
+        row.getBoundingClientRect = () => new DOMRect(0, i * 60 - box.scrollTop, 200, 50);
+      });
+      state.select(state.issues[4]?.id ?? 0);
+      // The row spans 240..290 and the view is 100 high: scrolled so that its bottom is the view's.
+      expect(box.scrollTop).toBe(190);
+      state.select(state.issues[0]?.id ?? 0);
+      expect(box.scrollTop).toBe(0);
+    });
+  });
+
   it("drops its rows when the issues go", () => {
     check();
     state.reset();

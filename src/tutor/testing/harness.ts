@@ -64,6 +64,8 @@ export interface HarnessOptions {
   configs?: LLMConfigInput[];
   /** The stored `selected_llm_id`, by index in `configs` (ids are 1, 2, ...), or a raw id. */
   selected?: number | null;
+  /** Settings stored before the page opens. */
+  settings?: { auto_check?: boolean; auto_check_delay_s?: number };
   script?: FakeScript;
   /** Whether the host permission of `ORIGIN` is granted; default true. */
   granted?: boolean;
@@ -79,6 +81,12 @@ export async function mountForTest(
   for (const input of options.configs ?? []) await store.createConfig(input);
   if (options.selected !== undefined && options.selected !== null) {
     await store.setSetting("selected_llm_id", options.selected);
+  }
+  if (options.settings?.auto_check !== undefined) {
+    await store.setSetting("auto_check", options.settings.auto_check);
+  }
+  if (options.settings?.auto_check_delay_s !== undefined) {
+    await store.setSetting("auto_check_delay_s", options.settings.auto_check_delay_s);
   }
   const bus = new FakeChannelBus();
   const received: string[] = [];

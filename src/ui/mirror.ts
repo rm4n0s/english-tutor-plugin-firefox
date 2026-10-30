@@ -33,6 +33,38 @@ export function mirrorNodes(
   return nodes;
 }
 
+/** A rectangle in viewport coordinates, as `getClientRects` gives it. */
+export interface Box {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+/** The rectangles of each shown issue's span in the mirror: one per line the issue covers. */
+export function issueBoxes(mirror: HTMLElement): { id: number; boxes: Box[] }[] {
+  const result: { id: number; boxes: Box[] }[] = [];
+  for (const span of mirror.querySelectorAll<HTMLElement>("span.issue")) {
+    const id = Number(span.dataset.issueId);
+    if (Number.isInteger(id)) result.push({ id, boxes: [...span.getClientRects()] });
+  }
+  return result;
+}
+
+/**
+ * The issue whose rectangles hold the point, or undefined (SPEC section 4.3: the character under
+ * the mouse is found from the mirror's span rectangles).
+ */
+export function issueIdAtPoint(
+  issues: readonly { id: number; boxes: readonly Box[] }[],
+  x: number,
+  y: number,
+): number | undefined {
+  return issues.find(({ boxes }) =>
+    boxes.some((box) => x >= box.left && x < box.right && y >= box.top && y < box.bottom),
+  )?.id;
+}
+
 /**
  * The layer behind a transparent `<textarea>` that draws the underlines (SPEC section 4.3). It has
  * the same font, padding, width, wrapping and scroll position as the textarea (they share the

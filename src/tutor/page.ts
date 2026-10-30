@@ -6,14 +6,24 @@ import {
   type UsageRecorder,
 } from "../core/analysis";
 import { AppError } from "../core/errors";
-import { CheckController, IssueState, TokenTally, type CheckOutcome } from "../core/issues";
+import {
+  adjacentIssueId,
+  AutoCheck,
+  CheckController,
+  IssueState,
+  TokenTally,
+  TrackedText,
+  type CheckOutcome,
+} from "../core/issues";
 import { effectiveBaseUrl } from "../core/llm";
 import { StoreUsageRecorder, type LLMConfig } from "../core/store";
 import { Banner } from "../ui/banner";
+import { EditorSelection } from "../ui/editor-selection";
 import { ExplanationPanel } from "../ui/explanation-panel";
 import { IssuesList } from "../ui/issues-list";
 import { LoadingLayer } from "../ui/loading-layer";
 import { EditorMirror } from "../ui/mirror";
+import { IssueTooltip } from "../ui/tooltip";
 import type { TutorDeps } from "./deps";
 import { LLMSelector } from "./llm-selector";
 import { StatusBar } from "./status-bar";
@@ -45,8 +55,18 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const checkButton = requireElement(doc, "check", HTMLButtonElement);
   const prefsButton = requireElement(doc, "prefs", HTMLButtonElement);
   const select = requireElement(doc, "llm-select", HTMLSelectElement);
+  const autoCheckBox = requireElement(doc, "auto-check", HTMLInputElement);
 
   const state = new IssueState(deps.clock);
+  // Edits are found and applied to the state first, before the mirror and the status bar redraw
+  // on the same `input` event (SPEC section 5.5).
+  const trackedText = new TrackedText(state, editor.value);
+  const onInput = (): void => {
+    trackedText.changed(editor.value);
+    updateCheckButton();
+    autoCheck.edited();
+  };
+  editor.addEventListener("input", onInput);
   const tally = new TokenTally();
   // Every request counts in the session first, and then goes to the store; a store failure is
   // logged by the analyzer and never fails the check.
@@ -109,8 +129,14 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     log: deps.log,
   });
 
-  const issuesList = new IssuesList(doc, requireElement(doc, "issues-pane", HTMLElement), state);
   const editorMirror = new EditorMirror(doc, editor, mirror, state);
+  const editorSelection = new EditorSelection(editor, mirror, state);
+  const tooltip = new IssueTooltip(doc, editor, mirror, state);
+  const issuesList = new IssuesList(doc, requireElement(doc, "issues-pane", HTMLElement), state, {
+    onActivate: () => {
+      editorSelection.focusSelected();
+    },
+  });
   const loading = new LoadingLayer(doc, editorBox, editor, state, deps.scheduler);
   const statusBar = new StatusBar(
     {
@@ -160,6 +186,16 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
       .catch(report);
   }
 
+  function runCheck(manual: boolean): void {
+    const config = selector.selected;
+    controller
+      .check({ manual })
+      .then((outcome) => {
+        handleOutcome(outcome, config);
+      })
+      .catch(report);
+  }
+
   function toggleCheck(): void {
     if (state.pending !== null) {
       controller.cancel();
@@ -167,20 +203,64 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     }
     if (checkButton.disabled) return;
     banner.hide();
-    const config = selector.selected;
-    controller
-      .check({ manual: true })
-      .then((outcome) => {
-        handleOutcome(outcome, config);
-      })
-      .catch(report);
+    runCheck(true);
   }
 
+  // Auto-check (SPEC section 5.1): the setting is shared with the options page.
+  let autoCheckDelay = 3;
+  const autoCheck = new AutoCheck({
+    scheduler: deps.scheduler,
+    enabled: () => autoCheckBox.checked,
+    delaySeconds: () => autoCheckDelay,
+    busy: () => state.pending !== null,
+    canCheck: () => selector.selected !== undefined && editor.value.trim() !== "",
+    start: () => {
+      runCheck(false);
+    },
+  });
+
+  async function loadAutoCheck(): Promise<void> {
+    const settings = await deps.store.getSettings();
+    autoCheckBox.checked = settings.auto_check;
+    autoCheckDelay = settings.auto_check_delay_s;
+    if (!settings.auto_check) autoCheck.stop();
+  }
+
+  autoCheckBox.addEventListener("change", () => {
+    const on = autoCheckBox.checked;
+    if (!on) autoCheck.stop();
+    deps.store
+      .setSetting("auto_check", on)
+      .then(() => {
+        deps.channel.post("settings-changed");
+      })
+      .catch((err: unknown) => {
+        autoCheckBox.checked = !on;
+        report(err);
+      });
+  });
+
   checkButton.addEventListener("click", toggleCheck);
+  // F7 and Shift+F7 go to the next and previous issue (SPEC section 4.3).
+  function goToAdjacentIssue(direction: "next" | "previous"): void {
+    const id = adjacentIssueId(
+      state.visibleIssues,
+      state.selectedId,
+      editorSelection.caret,
+      direction,
+    );
+    if (id === undefined) return;
+    if (id === state.selectedId) editorSelection.reveal();
+    else state.select(id);
+  }
+
   const onKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
       event.preventDefault();
       toggleCheck();
+    } else if (event.key === "F7" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      goToAdjacentIssue(event.shiftKey ? "previous" : "next");
     }
   };
   doc.addEventListener("keydown", onKeydown);
@@ -188,12 +268,6 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     deps.openOptions();
   });
 
-  // Editing: step 7 rebases the issues across an edit. Until then an edit drops them, so that an
-  // underline never sits under the wrong word.
-  editor.addEventListener("input", () => {
-    state.reset();
-    updateCheckButton();
-  });
   const stopState = state.subscribe((change) => {
     if (change === "pending") updateCheckButton();
   });
@@ -219,10 +293,11 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
   const stopChannel = deps.channel.subscribe((message) => {
     if (message.type === "configs-changed" || message.type === "settings-changed") {
       selector.load().catch(report);
+      loadAutoCheck().catch(report);
     }
   });
 
-  const ready = selector.load().catch(report);
+  const ready = Promise.all([selector.load(), loadAutoCheck()]).then(() => undefined, report);
   updateCheckButton();
 
   return {
@@ -231,11 +306,15 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
     tally,
     destroy: () => {
       controller.cancel();
+      autoCheck.stop();
+      editor.removeEventListener("input", onInput);
       stopChannel();
       stopState();
       stopLegend();
       doc.removeEventListener("keydown", onKeydown);
       issuesList.destroy();
+      tooltip.destroy();
+      editorSelection.destroy();
       editorMirror.destroy();
       loading.destroy();
       statusBar.destroy();
