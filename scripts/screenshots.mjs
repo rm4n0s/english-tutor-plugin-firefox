@@ -20,9 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { inflateSync } from "node:zlib";
 import { Browser, Builder, By, Key, until } from "selenium-webdriver";
 import firefox from "selenium-webdriver/firefox.js";
-import { FakeLLMServer, OK_REPLY } from "./fake-llm.mjs";
+import { FakeLLMServer, OK_REPLY, PAGE_MODE_TEXT } from "./fake-llm.mjs";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -1529,7 +1530,313 @@ const SCENARIOS = {
       await ctx.waitForBadges(["x1", "x1", "x1"]);
     },
   },
+  // Step 13: page mode (SPEC section 4.11). The badge lives in a closed shadow root, so these
+  // scenarios read its state from the pixels of the screenshot, as a user sees it.
+  "options-page-mode": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.expectChecked("page-mode");
+      await ctx.expectText("page-mode-note", "is checked by");
+      await ctx.expectText("page-mode-note", "on this computer");
+      await ctx.expectHidden("page-mode-error");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.screenshot();
+    },
+  },
+  "badge-checking": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // The fake LLM holds its answer, so that the badge stays on its spinner.
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 120_000 });
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      await ctx.focusBox();
+      await ctx.waitForLLMRequests(1);
+      await ctx.waitForBadge("spinner");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  "badge-count": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      await ctx.focusBox();
+      // Two grammar issues and one vocabulary issue: the count is in the colour of grammar.
+      await ctx.waitForBadge("grammar");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+      // Nothing was recorded in the statistics: only the dialog's Check does that (step 15).
+      await ctx.expectNoRecordedMistakes();
+    },
+  },
+  "badge-none": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      ctx.llm.setReplies(NO_ISSUES_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("check");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  "badge-no-llm": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // No LLM is configured: the options page is opened without adding one.
+      await ctx.open("options.html");
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("warning");
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent without an LLM");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  "badge-blocked": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // The page's policy is `frame-src 'none'`: the frame cannot load, so after 5 seconds the badge
+      // shows `!`, and its click offers only Open in English Tutor.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("blocked-frame.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("warning");
+      if (ctx.llmRequests() !== 0) throw new Error("the blocked frame still checked the text");
+      const { x, y } = await ctx.badgeCenter();
+      await ctx.clickAt(x, y);
+      await ctx.waitForColor(BLOCKED_CARD_BUTTON);
+      await ctx.screenshot();
+      // Open in English Tutor: a new tutor tab holds the text of the box (the hand-off of
+      // SPEC section 4.1), and nothing is written back to the page.
+      const before = await ctx.driver.getAllWindowHandles();
+      const button = await ctx.waitForColor(BLOCKED_CARD_BUTTON);
+      await ctx.clickAt(button.x, button.y);
+      await ctx.switchToNewTab(before);
+      await waitForPage(ctx.driver, "tutor.html");
+      await ctx.waitForEditorValue(PAGE_MODE_TEXT);
+    },
+  },
+  "badge-input": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("input.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  "badge-contenteditable": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("contenteditable.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      // The text sent is the editor's two paragraphs joined by a line break.
+      const sent = ctx.llm.requests.at(-1)?.body.messages.find((m) => m.role === "user").content;
+      if (!String(sent).includes("market.\nHe go")) {
+        throw new Error("the paragraphs were not joined by a line break");
+      }
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+    },
+  },
+  "excluded-fields": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("excluded.html");
+      const excluded = ["password", "email", "nospell", "card", "optout"];
+      for (const id of excluded) {
+        await ctx.focusBox(id);
+        await ctx.typeInBox(" and some more words", id);
+      }
+      // Longer than the pause before an automatic check (one second): nothing was sent.
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (ctx.llmRequests() !== 0) throw new Error("text of an excluded field was sent");
+      for (const id of excluded) await ctx.expectNoBadge(id);
+      await ctx.stabilise({ keepFocus: true });
+      await ctx.screenshot();
+      // The control, a plain text box on the same page, is checked: page mode does run here.
+      await ctx.focusBox("control");
+      await ctx.waitForLLMRequests(1);
+      await ctx.waitForBadge("grammar", "control");
+    },
+  },
+  "toolbar-menu-site": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // The toolbar button's menu names the site of the tab in front (SPEC section 4.11). The
+      // native menu cannot be photographed (a screenshot is of the page only), so the entries are
+      // read from the browser, "Turn off" is chosen, and the options page's list of sites shows
+      // the result.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openPageModePage("textarea.html");
+      const page = await ctx.driver.getWindowHandle();
+      const labels = await ctx.openToolbarMenu();
+      for (const wanted of ["New tutor tab", "Preferences", "Turn off on 127.0.0.1"]) {
+        if (!labels.includes(wanted)) {
+          throw new Error(`the toolbar menu has ${JSON.stringify(labels)}, not ${wanted}`);
+        }
+      }
+      await ctx.chooseToolbarMenuItem("Turn off on 127.0.0.1");
+      // The open page stops at once: its overlay goes, and a text box is no longer checked.
+      await ctx.waitForNoPageModeHost();
+      await ctx.focusBox();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (ctx.llmRequests() !== 0) throw new Error("text was checked on a site that is turned off");
+      // The menu now offers the opposite.
+      const later = await ctx.openToolbarMenu();
+      if (!later.includes("Turn on on 127.0.0.1")) {
+        throw new Error(`the toolbar menu has ${JSON.stringify(later)}, not Turn on on 127.0.0.1`);
+      }
+      await ctx.closeToolbarMenu();
+      // The options page lists the site.
+      await ctx.driver.switchTo().window(options);
+      await ctx.waitForText("page-mode-hosts", "127.0.0.1");
+      await ctx.scrollTo("page-mode");
+      await ctx.expectTheme();
+      await ctx.screenshot();
+      // A new page load on that site is left alone too, and Remove turns it on again.
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await ctx.waitForNoPageModeHost();
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode-hosts", ".host-remove");
+      await ctx.waitForCount("#page-mode-hosts li", 0);
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await ctx.waitForPageModeHost();
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+    },
+  },
+  "page-mode-off": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // Turning page mode off and on again, as a user does it on the options page.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      const options = await ctx.driver.getWindowHandle();
+      await ctx.openPageModePage("textarea.html");
+      const page = await ctx.driver.getWindowHandle();
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode");
+      await ctx.waitForRegisteredScripts(0);
+      if (await ctx.hasAllUrlsPermission()) throw new Error("the <all_urls> permission was kept");
+      // The open page removed its badge and everything else at once.
+      await ctx.driver.switchTo().window(page);
+      await ctx.waitForNoPageModeHost();
+      await ctx.expectNoBadge();
+
+      // On again: the box asks for the permission, the script is registered, a new page works.
+      await ctx.driver.switchTo().window(options);
+      await ctx.click("page-mode");
+      await ctx.waitForRegisteredScripts(1);
+      if (!(await ctx.hasAllUrlsPermission()))
+        throw new Error("the <all_urls> permission is missing");
+      await ctx.driver.switchTo().window(page);
+      await ctx.driver.navigate().refresh();
+      await ctx.waitForPageModeHost();
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+    },
+  },
+  "strict-csp-frame": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // Found in Firefox 159: a page's `frame-src 'none'` does not stop the extension's own frame
+      // that a content script adds, so page mode works on such a page (SPEC section 4.11).
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("strict-csp.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+    },
+  },
+  "page-mode-edits": {
+    theme: "light",
+    dir: "step-13-page-mode",
+    async run(ctx) {
+      // Typing moves and removes the issues at once (SPEC section 5.5), and a pause in typing
+      // starts a new automatic check.
+      ctx.llm.setReplies(CHECK_REPLY);
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      await ctx.waitForLLMRequests(1);
+      // Slow the next answer down, so that what the edits did is what the badge shows.
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 120_000 });
+      // A letter inside "I seen" and one inside "He go" remove both grammar issues: only the
+      // vocabulary issue "make a photo" is left, and the badge changes to its colour at once.
+      await ctx.typeAt("I s", "e", 0);
+      await ctx.typeAt("He g", "o", 0);
+      await ctx.waitForBadge("spinner");
+      await ctx.waitForLLMRequests(2);
+    },
+  },
 };
+
+/** The fake LLM's answer when the text has no mistake. */
+const NO_ISSUES_REPLY = {
+  content: JSON.stringify({ issues: [] }),
+  usage: { prompt_tokens: 60, completion_tokens: 8 },
+};
+
+/** The colour of the Open in English Tutor button of the blocked badge's card (#0b5cad). */
+const BLOCKED_CARD_BUTTON = [0x0b, 0x5c, 0xad];
+
+/** In the browser's own code: the visible entries of the toolbar button's open context menu. */
+const TOOLBAR_MENU_LABELS = `
+  const popup = document.getElementById("toolbar-context-menu");
+  if (popup === null || popup.state !== "open") return [];
+  return [...popup.children].filter((m) => m.localName === "menuitem" && !m.hidden).map((m) => m.label);
+`;
 
 /** In the browser's own code: the visible entries of the open page context menu. */
 const ROW_MENU_LABELS = `
@@ -2160,6 +2467,74 @@ async function sizeViewport(driver, width = WIDTH) {
   });
   const [finalWidth] = await measureViewport(driver);
   if (finalWidth !== width) throw new Error(`the page area is ${finalWidth} px wide, not ${width}`);
+}
+
+/**
+ * Decodes an 8-bit RGB or RGBA PNG (what the browser's screenshots are) into `{ width, height,
+ * pixel(x, y) }`, so that a scenario can look at the colour of a pixel. The badge of page mode lives
+ * in a closed shadow root, which the page (and so Selenium) cannot read: its state is read from
+ * the picture, as a user sees it.
+ */
+function decodePng(png) {
+  const { width, height } = pngSize(png);
+  const colorType = png[25];
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (png[24] !== 8 || channels === 0 || png[28] !== 0) throw new Error("unsupported PNG");
+  const chunks = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    if (png.toString("ascii", offset + 4, offset + 8) === "IDAT") {
+      chunks.push(png.subarray(offset + 8, offset + 8 + length));
+    }
+    offset += length + 12;
+  }
+  const raw = inflateSync(Buffer.concat(chunks));
+  const stride = width * channels;
+  const data = Buffer.alloc(height * stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    for (let i = 0; i < stride; i++) {
+      const value = raw[y * (stride + 1) + 1 + i];
+      const left = i >= channels ? data[y * stride + i - channels] : 0;
+      const up = y > 0 ? data[(y - 1) * stride + i] : 0;
+      const upLeft = y > 0 && i >= channels ? data[(y - 1) * stride + i - channels] : 0;
+      let predicted = 0;
+      if (filter === 1) predicted = left;
+      else if (filter === 2) predicted = up;
+      else if (filter === 3) predicted = (left + up) >> 1;
+      else if (filter === 4) {
+        const p = left + up - upLeft;
+        const pa = Math.abs(p - left);
+        const pb = Math.abs(p - up);
+        const pc = Math.abs(p - upLeft);
+        predicted = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+      }
+      data[y * stride + i] = (value + predicted) & 255;
+    }
+  }
+  return {
+    width,
+    height,
+    pixel: (x, y) => {
+      const o = y * stride + x * channels;
+      return [data[o], data[o + 1], data[o + 2]];
+    },
+  };
+}
+
+/** The colours of the badge (src/content/style.ts) by what it shows, as read from a screenshot. */
+const BADGE_COLORS = {
+  grammar: [0xd5, 0x5e, 0x00],
+  syntax: [0x00, 0x9e, 0x73],
+  vocabulary: [0x00, 0x72, 0xb2],
+  check: [0x1b, 0x7a, 0x3d],
+  warning: [0xb3, 0x26, 0x1e],
+  icon: [0x00, 0x72, 0xb2],
+  spinner: [0xff, 0xff, 0xff],
+};
+
+function closeTo(pixel, expected, tolerance = 8) {
+  return pixel.every((channel, i) => Math.abs(channel - expected[i]) <= tolerance);
 }
 
 function pngSize(png) {
@@ -3243,6 +3618,281 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
         PAGE_TIMEOUT_MS,
         `the dialog #${id} never opened`,
       );
+    },
+    // Page mode (SPEC section 4.11)
+
+    /**
+     * Turns page mode on the way a user does: ticks "Check text boxes on websites" on the options
+     * page (the optional-permission preference grants `<all_urls>` without a prompt), and waits
+     * until the background script has registered the content script. The pause of the automatic
+     * check is set to one second (the shortest) so that scenarios do not wait for three.
+     */
+    async turnOnPageMode({ delay = 1 } = {}) {
+      await driver.wait(until.elementLocated(By.id("page-mode")), PAGE_TIMEOUT_MS);
+      await ctx.click("page-mode");
+      await driver.wait(
+        async () =>
+          (await driver.executeAsyncScript(
+            `const done = arguments[arguments.length - 1];
+             browser.scripting.getRegisteredContentScripts({ ids: ["page-mode"] }).then(
+               (found) => done(found.length), () => done(-1));`,
+          )) === 1,
+        PAGE_TIMEOUT_MS,
+        `the page-mode content script was never registered. Options page: ${await driver
+          .executeScript(
+            `return JSON.stringify({ checked: document.getElementById("page-mode").checked,
+               error: document.getElementById("page-mode-error").textContent,
+               banner: document.getElementById("options-error").textContent })`,
+          )
+          .catch(() => "?")}`,
+      );
+      if (await driver.findElement(By.id("page-mode-error")).isDisplayed()) {
+        throw new Error(`page mode failed: ${await textOf(driver, "page-mode-error")}`);
+      }
+      // The delay is used by page mode, so its field is enabled now.
+      await ctx.fill("auto-check-delay", String(delay), Key.TAB);
+    },
+    /**
+     * Opens a test page of the fake server in a new tab, and waits until the page-mode content
+     * script has started on it (its host element, a `div` directly in `<html>`, is there).
+     */
+    async openPageModePage(name) {
+      await ctx.openWebPage(name);
+      await driver.wait(
+        () =>
+          driver.executeScript(
+            "return [...document.documentElement.children].some((c) => c.tagName === 'DIV')",
+          ),
+        PAGE_TIMEOUT_MS,
+        `page mode never started on ${name}`,
+      );
+    },
+    /** Clicks a text box of the page, as the user does to start writing in it. */
+    async focusBox(id = "box") {
+      await driver.findElement(By.id(id)).click();
+    },
+    /** The window coordinates of the middle of the badge of the box with this id (SPEC section 4.11). */
+    async badgeCenter(id = "box") {
+      return driver.executeScript(
+        `const box = document.getElementById(arguments[0]);
+         const rect = box.getBoundingClientRect();
+         const style = getComputedStyle(box);
+         const px = (v) => parseFloat(v) || 0;
+         const sx = Math.max(0, box.offsetWidth - box.clientWidth - px(style.borderLeftWidth) - px(style.borderRightWidth));
+         const sy = Math.max(0, box.offsetHeight - box.clientHeight - px(style.borderTopWidth) - px(style.borderBottomWidth));
+         return {
+           x: Math.round(rect.right - px(style.borderRightWidth) - sx - 22 - 4) + 11,
+           y: Math.round(rect.bottom - px(style.borderBottomWidth) - sy - 22 - 4) + 11,
+         };`,
+        id,
+      );
+    },
+    /** The colour of the picture at a point: a fresh screenshot, so what the user sees. */
+    async pixelAt(x, y) {
+      const png = Buffer.from(await driver.takeScreenshot(), "base64");
+      return decodePng(png).pixel(x, y);
+    },
+    /**
+     * Waits until the badge of the box shows `kind` (`grammar`, `syntax` and `vocabulary` for a
+     * count in that colour, `check`, `warning`, `icon` or `spinner`), read from the pixels a user
+     * sees, 7 px above the badge's middle (clear of its glyph).
+     */
+    async waitForBadge(kind, id = "box") {
+      const { x, y } = await ctx.badgeCenter(id);
+      const deadline = Date.now() + PAGE_TIMEOUT_MS;
+      for (;;) {
+        const pixel = await ctx.pixelAt(x, y - 7);
+        if (closeTo(pixel, BADGE_COLORS[kind])) return;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `the badge of #${id} never showed ${kind} (the pixel at ${x},${y - 7} is ${String(pixel)})`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    },
+    /** Fails if the badge of the box shows anything but the page behind it (white) or the box. */
+    async expectNoBadge(id = "box") {
+      const { x, y } = await ctx.badgeCenter(id);
+      const pixel = await ctx.pixelAt(x, y - 7);
+      if (
+        Object.values(BADGE_COLORS).some((c) => !closeTo(c, [255, 255, 255]) && closeTo(pixel, c))
+      ) {
+        throw new Error(`#${id} has a badge (the pixel at ${x},${y - 7} is ${String(pixel)})`);
+      }
+    },
+    /** The number of requests the fake LLM has received since the scenario began. */
+    llmRequests() {
+      return llm.requests.length;
+    },
+    /** Waits until the fake LLM has received `count` requests. */
+    async waitForLLMRequests(count) {
+      await driver.wait(
+        () => llm.requests.length >= count,
+        PAGE_TIMEOUT_MS,
+        `the fake LLM got ${llm.requests.length} requests, not ${count}`,
+      );
+    },
+    /** Types into a text box of the page, after its text, as a user does. */
+    async typeInBox(text, id = "box") {
+      // After the text that is there, wherever the click put the caret.
+      await driver.findElement(By.id(id)).sendKeys(Key.chord(Key.CONTROL, Key.END), text);
+    },
+    /** Clicks the window coordinates with the mouse (the badge is in a shadow root Selenium cannot reach). */
+    async clickAt(x, y) {
+      await driver.actions({ async: true }).move({ x, y, origin: "viewport" }).click().perform();
+    },
+    /**
+     * Waits until the picture has a block of pixels of this colour and returns its centre (the
+     * middle of the pixels of that colour), for a click on a control inside a shadow root.
+     */
+    async waitForColor(rgb) {
+      let found;
+      await driver.wait(
+        async () => {
+          const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+          let sumX = 0;
+          let sumY = 0;
+          let n = 0;
+          for (let y = 0; y < png.height; y++) {
+            for (let x = 0; x < png.width; x++) {
+              if (closeTo(png.pixel(x, y), rgb, 3)) {
+                sumX += x;
+                sumY += y;
+                n++;
+              }
+            }
+          }
+          if (n < 200) return false;
+          found = { x: Math.round(sumX / n), y: Math.round(sumY / n) };
+          return true;
+        },
+        PAGE_TIMEOUT_MS,
+        `no pixels of the colour ${String(rgb)} ever showed`,
+      );
+      return found;
+    },
+    /** Fails if page mode recorded a mistake: the check of a text box is automatic, which is never counted. */
+    async expectNoRecordedMistakes() {
+      await ctx.open("options.html");
+      const count = await driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         const open = indexedDB.open("english-tutor");
+         open.onsuccess = () => {
+           const count = open.result.transaction("error_events").objectStore("error_events").count();
+           count.onsuccess = () => { open.result.close(); done(count.result); };
+         };`,
+      );
+      if (count !== 0) throw new Error(`${count} mistakes were recorded by an automatic check`);
+    },
+    /**
+     * Types `text` into the text box right after the first `before` in its text (the caret is put
+     * there with a script, which is not typing; the keys are the user's).
+     */
+    async typeAt(before, text, offset = 0, id = "box") {
+      await driver.executeScript(
+        `const box = document.getElementById(arguments[1]);
+         const at = box.value.indexOf(arguments[0]) + arguments[0].length + arguments[2];
+         box.focus();
+         box.setSelectionRange(at, at);`,
+        before,
+        id,
+        offset,
+      );
+      await driver.findElement(By.id(id)).sendKeys(text);
+    },
+    /** Whether the page's overlay host (a `div` directly in `<html>`) is there. */
+    async pageModeHostPresent() {
+      return driver.executeScript(
+        "return [...document.documentElement.children].some((c) => c.tagName === 'DIV')",
+      );
+    },
+    async waitForPageModeHost() {
+      await driver.wait(
+        () => ctx.pageModeHostPresent(),
+        PAGE_TIMEOUT_MS,
+        "page mode never started",
+      );
+    },
+    async waitForNoPageModeHost() {
+      await driver.wait(
+        async () => !(await ctx.pageModeHostPresent()),
+        PAGE_TIMEOUT_MS,
+        "page mode never removed its overlay",
+      );
+    },
+    /** Waits until the background script has this many registered content scripts. Needs an extension page. */
+    async waitForRegisteredScripts(count) {
+      await driver.wait(
+        async () =>
+          (await driver.executeAsyncScript(
+            `const done = arguments[arguments.length - 1];
+             browser.scripting.getRegisteredContentScripts().then((f) => done(f.length), () => done(-1));`,
+          )) === count,
+        PAGE_TIMEOUT_MS,
+        `there were never ${count} registered content scripts`,
+      );
+    },
+    async hasAllUrlsPermission() {
+      return driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         browser.permissions.contains({ origins: ["<all_urls>"] }).then(done);`,
+      );
+    },
+    /**
+     * Opens the context menu of the toolbar button (put on the toolbar first, as a headless
+     * browser keeps it in the extensions panel) and returns the labels of its visible entries.
+     * The extension's entries are asked to update in `menus.onShown`, so it waits for the entry
+     * of page mode to have a label.
+     */
+    async openToolbarMenu() {
+      await ctx.chrome(
+        `const id = "english-tutor_rm4n0s_dev-browser-action";
+         CustomizableUI.addWidgetToArea(id, CustomizableUI.AREA_NAVBAR);
+         await new Promise((r) => setTimeout(r, 300));`,
+      );
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        const node = await driver.findElement(By.id("english-tutor_rm4n0s_dev-browser-action"));
+        await driver.actions({ async: true }).contextClick(node).perform();
+        let labels = [];
+        await driver.wait(
+          async () => {
+            labels = await driver.executeScript(TOOLBAR_MENU_LABELS);
+            return labels.some((label) => label.startsWith("Turn o"));
+          },
+          PAGE_TIMEOUT_MS,
+          `the toolbar menu never offered page mode for the site (it shows ${JSON.stringify(labels)})`,
+        );
+        return labels;
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    async chooseToolbarMenuItem(label) {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        const chosen = await driver.executeScript(
+          `const popup = document.getElementById("toolbar-context-menu");
+           const item = [...popup.children].find((m) => m.localName === "menuitem" && !m.hidden && m.label === arguments[0]);
+           if (item === undefined || item.disabled) return "no enabled entry " + arguments[0];
+           item.doCommand();
+           popup.hidePopup();
+           return "ok";`,
+          label,
+        );
+        if (chosen !== "ok") throw new Error(chosen);
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    async closeToolbarMenu() {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        await driver.executeScript('document.getElementById("toolbar-context-menu").hidePopup()');
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
     },
     async waitForNoDialog(id) {
       await driver.wait(

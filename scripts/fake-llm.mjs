@@ -24,6 +24,40 @@ export const OK_REPLY = {
  * address as the LLM so that they are web pages like any other. `selection.html` has text to
  * select for the web page menu (SPEC section 4.1).
  */
+/** The text the page-mode test pages hold: five of the mistakes of the canned check reply. */
+export const PAGE_MODE_TEXT =
+  "Yesterday I seen my friend at the market. He go to school every day, and he make a photo of everything.";
+
+/** The head and the plain style shared by the page-mode test pages: nothing varies between runs. */
+const pageHead = (title, extraCss = "") => `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>${title}</title>
+    <style>
+      body { font: 16px/1.5 sans-serif; margin: 0; padding: 40px 60px; color: #1d2024; background: #fff; }
+      h1 { margin: 0 0 12px; font-size: 22px; }
+      p.note { margin: 0 0 16px; color: #555; }
+      label { display: block; margin: 16px 0 4px; font-weight: 600; }
+      textarea, input[type="text"], input[type="password"], input[type="email"], input[type="search"],
+      input:not([type]), .editable {
+        box-sizing: border-box; width: 560px; font: 16px/1.5 sans-serif; padding: 8px 10px;
+        border: 1px solid #8a919c; border-radius: 4px; background: #fff; color: #1d2024;
+      }
+      textarea { height: 150px; resize: none; display: block; }
+      .editable { min-height: 150px; }
+      .editable p { margin: 0 0 8px; }
+      ${extraCss}
+    </style>
+  </head>
+`;
+
+/**
+ * Test pages the harness opens in normal tabs (`GET /pages/<name>`), served from the same fixed
+ * address as the LLM so that they are web pages like any other. `selection.html` has text to
+ * select for the web page menu (SPEC section 4.1). The others are for page mode (SPEC section
+ * 4.11): each holds a text box with `PAGE_MODE_TEXT`, or the fields page mode must leave alone.
+ */
 export const PAGES = {
   "selection.html": `<!doctype html>
 <html lang="en">
@@ -42,7 +76,83 @@ export const PAGES = {
   </body>
 </html>
 `,
+  "textarea.html":
+    pageHead("A message form") +
+    `  <body>
+    <h1>Write to us</h1>
+    <p class="note">A plain text box on a plain page.</p>
+    <label for="box">Your message</label>
+    <textarea id="box">${PAGE_MODE_TEXT}</textarea>
+    <p class="note" id="below">Below the text box.</p>
+  </body>
+</html>
+`,
+  "input.html":
+    pageHead("A search form") +
+    `  <body>
+    <h1>Write a title</h1>
+    <p class="note">A one-line text box.</p>
+    <label for="box">Title</label>
+    <input type="text" id="box" value="${PAGE_MODE_TEXT}" />
+  </body>
+</html>
+`,
+  "contenteditable.html":
+    pageHead("A rich editor") +
+    `  <body>
+    <h1>Write a post</h1>
+    <p class="note">An editable region.</p>
+    <label id="label">Post</label>
+    <div class="editable" id="box" contenteditable="true"><p>Yesterday I seen my friend at the market.</p><p>He go to school every day, and he make a photo of everything.</p></div>
+  </body>
+</html>
+`,
+  // Fields page mode must never read, check or touch (SPEC section 4.11), each with enough words
+  // to be checked if it were allowed, and one plain text box at the end as the control.
+  "excluded.html":
+    pageHead(
+      "Fields that are left alone",
+      ".row { margin-bottom: 6px; } textarea { height: 56px; } label { margin: 10px 0 2px; }",
+    ) +
+    `  <body>
+    <h1>Fields that are left alone</h1>
+    <label for="password">Password</label>
+    <input type="password" id="password" value="${PAGE_MODE_TEXT}" />
+    <label for="email">Email</label>
+    <input type="email" id="email" value="${PAGE_MODE_TEXT}" />
+    <label for="nospell">Code (spellcheck off)</label>
+    <textarea id="nospell" spellcheck="false">${PAGE_MODE_TEXT}</textarea>
+    <label for="card">Card number (autocomplete cc-number)</label>
+    <input type="text" id="card" autocomplete="cc-number" value="${PAGE_MODE_TEXT}" />
+    <label for="optout">Marked data-english-tutor="off"</label>
+    <div data-english-tutor="off"><textarea id="optout">${PAGE_MODE_TEXT}</textarea></div>
+    <label for="control">A plain text box (the control)</label>
+    <textarea id="control" style="height: 56px">${PAGE_MODE_TEXT}</textarea>
+  </body>
+</html>
+`,
 };
+
+/**
+ * Headers of test pages. `strict-csp.html` has `frame-src 'none'`: Firefox does not apply a page's
+ * policy to the extension's own frame that a content script adds (checked in Firefox 159: the frame
+ * loads), so page mode works there. `blocked-frame.html` has `Cross-Origin-Embedder-Policy:
+ * require-corp`, which Firefox does enforce against a frame whose document does not opt in, as the
+ * extension's does not: this is the page whose frame cannot load (`PageFrameBlocked`).
+ */
+export const PAGE_HEADERS = {
+  "strict-csp.html": { "content-security-policy": "frame-src 'none'" },
+  "blocked-frame.html": { "content-security-policy": "sandbox allow-same-origin" },
+};
+
+PAGES["strict-csp.html"] = PAGES["textarea.html"].replace(
+  "<title>A message form</title>",
+  "<title>A strict page</title>",
+);
+PAGES["blocked-frame.html"] = PAGES["textarea.html"].replace(
+  "<title>A message form</title>",
+  "<title>A page that embeds nothing</title>",
+);
 
 /**
  * A reply is `{ content, usage?, status?, delayMs?, wordDelayMs?, stallAfterWords? }`. A streamed
@@ -134,7 +244,10 @@ export class FakeLLMServer {
     }
     const page = url.pathname.startsWith("/pages/") ? PAGES[url.pathname.slice(7)] : undefined;
     if (req.method === "GET" && page !== undefined) {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        ...(PAGE_HEADERS[url.pathname.slice(7)] ?? {}),
+      });
       res.end(page);
       return;
     }
