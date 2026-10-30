@@ -612,3 +612,149 @@ describe("BoxSession: automatic checks turned off (page_mode_auto_check)", () =>
     expect(t.runner.asked).toHaveLength(1);
   });
 });
+
+describe("BoxSession: a box that is emptied or replaced (SPEC section 4.11)", () => {
+  const edit = (t: ReturnType<typeof make>, revision: number, text: string) => {
+    t.session.edit({ revision, start: 0, removed: t.session.text.length, inserted: text });
+  };
+
+  async function checked() {
+    const t = make();
+    t.runner.answer(resultOf(ISSUES));
+    t.session.focus(0, TEXT);
+    await settle();
+    return t;
+  }
+
+  it.each([
+    { name: "emptied", text: "" },
+    { name: "only white space", text: "  \n" },
+    { name: "two words", text: "Hello there" },
+    { name: "replaced by other text", text: "Quite another text" },
+  ])("$name: no issue is left, and the frame says idle for the new revision", async ({ text }) => {
+    const t = await checked();
+    edit(t, 1, text);
+    await settle();
+    expect(t.session.state.issues).toEqual([]);
+    expect(states(t.sent).at(-1)).toMatchObject({ revision: 1, status: "idle", issues: [] });
+    expect(t.session.text).toBe(text);
+  });
+
+  it("an automatic check that runs for the old text is dropped, and its result is not applied", async () => {
+    const t = make();
+    const finish = t.runner.hold();
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("checking");
+    edit(t, 1, "");
+    await settle();
+    expect(t.session.state.pending).toBeNull();
+    expect(states(t.sent).at(-1)).toMatchObject({ revision: 1, status: "idle", issues: [] });
+    finish(resultOf(ISSUES));
+    await settle();
+    expect(t.session.state.issues).toEqual([]);
+    expect(t.session.state.checked).toBe(false);
+    expect(states(t.sent).at(-1)).toMatchObject({ revision: 1, status: "idle", issues: [] });
+  });
+
+  it("starts no check for the empty text after the pause", async () => {
+    const t = await checked();
+    edit(t, 1, "");
+    t.scheduler.advance(60_000);
+    await settle();
+    expect(t.runner.asked).toHaveLength(1);
+  });
+
+  it("a text that grows back from empty is checked after the pause", async () => {
+    const t = await checked();
+    edit(t, 1, "");
+    t.runner.answer(resultOf([placed(0, 3)]));
+    t.session.edit({ revision: 2, start: 0, removed: 0, inserted: "Him go home now" });
+    t.scheduler.advance(3000);
+    await settle();
+    expect(t.runner.asked.map((a) => a.text)).toEqual([TEXT, "Him go home now"]);
+    expect(states(t.sent).at(-1)).toMatchObject({ revision: 2, status: "checked" });
+  });
+
+  it("a failure of the old text does not stay on the emptied box", async () => {
+    const t = make();
+    t.runner.fail(new AppError("LLMCallFailed", "The request failed"));
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("failed");
+    edit(t, 1, "");
+    await settle();
+    expect(states(t.sent).at(-1)).toMatchObject({ status: "idle" });
+    expect(states(t.sent).at(-1)?.message).toBeUndefined();
+  });
+
+  it("no-llm does not stay on the emptied box either", async () => {
+    const t = make();
+    t.settings.model = undefined;
+    t.session.focus(0, TEXT);
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("no-llm");
+    edit(t, 1, "");
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("idle");
+  });
+
+  it("too-long goes when the text is no longer too long", async () => {
+    const text = Array.from({ length: 10_001 }, () => "word").join(" ");
+    const t = make(text);
+    t.session.focus(0, text);
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("too-long");
+    edit(t, 1, "");
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("idle");
+  });
+
+  it("too-long stays while the text is still too long", async () => {
+    const text = Array.from({ length: 10_002 }, () => "word").join(" ");
+    const t = make(text);
+    t.session.focus(0, text);
+    await settle();
+    t.session.edit({ revision: 1, start: 0, removed: 5, inserted: "" });
+    await settle();
+    expect(states(t.sent).at(-1)?.status).toBe("too-long");
+  });
+
+  it("a whole text loaded by a resync (the script changed it behind the frame's back) does the same", async () => {
+    const t = make();
+    const finish = t.runner.hold();
+    t.session.focus(0, TEXT);
+    await settle();
+    t.session.setText(3, "");
+    await settle();
+    expect(t.session.state.pending).toBeNull();
+    finish(resultOf(ISSUES));
+    await settle();
+    expect(t.session.state.issues).toEqual([]);
+    expect(states(t.sent).at(-1)).toMatchObject({ revision: 3, status: "idle", issues: [] });
+  });
+
+  it("the dialog's own Check of a few words goes on while the user types, but not once the box is blank", async () => {
+    const t = make("Hello there");
+    const finish = t.runner.hold();
+    const running = t.session.checkManually();
+    await settle();
+    t.session.edit({ revision: 1, start: 11, removed: 0, inserted: "!" });
+    expect(t.session.state.pending).not.toBeNull();
+    edit(t, 2, "");
+    expect(t.session.state.pending).toBeNull();
+    finish(resultOf([placed(0, 5)]));
+    await running;
+    expect(t.session.state.issues).toEqual([]);
+  });
+
+  it("an emptied box with automatic checks off keeps the tooltip of an unchecked box", async () => {
+    const t = make();
+    t.settings.autoCheck = false;
+    t.session.focus(0, TEXT);
+    await settle();
+    edit(t, 1, "");
+    await settle();
+    expect(states(t.sent).at(-1)).toMatchObject({ status: "idle", message: NOT_CHECKED_MESSAGE });
+  });
+});

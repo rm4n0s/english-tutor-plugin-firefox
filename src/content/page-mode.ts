@@ -25,8 +25,9 @@ import { OverlayHost } from "./overlay-host";
 import { PopoverController, type PopoverTarget } from "./popover";
 import { SiteOffer } from "./site-offer";
 import { siteHostOf } from "./site-host";
-import { findTextBox } from "./text-box";
+import { findTextBox, isExcluded, textBoxKind } from "./text-box";
 import { deepActiveElement, TextBoxFinder } from "./text-box-finder";
+import { EditableWatcher } from "./text-watch";
 import { BoxUnderlines } from "./underlines";
 
 export interface PageModeContentDeps {
@@ -329,6 +330,10 @@ class Active {
   private resizeObserver: ResizeObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
   private readonly layout: LayoutWatcher;
+  /** Watches the editing hosts for text a script changed without an `input` event. */
+  private readonly editables: EditableWatcher;
+  /** A look at the native boxes that is already waiting for the end of this turn. */
+  private cancelSoon: (() => void) | undefined;
 
   constructor(
     deps: PageModeContentDeps,
@@ -346,6 +351,14 @@ class Active {
       onMoved: () => {
         this.schedulePosition();
       },
+      // A script that sets `value` fires no event: the native boxes are read again at each look.
+      onTick: () => {
+        this.refreshAll();
+      },
+    });
+    this.editables = new EditableWatcher(win, (element) => {
+      const tracked = this.boxes.get(element);
+      if (tracked !== undefined) this.refresh(tracked);
     });
     this.host = new OverlayHost(doc, deps.overlayMode ?? "closed");
     this.card = new BlockedCard(doc, this.host.layer);
@@ -439,6 +452,21 @@ class Active {
         if (event.isTrusted) this.onCaretMoved();
       });
     }
+    // Text a script wrote without an `input` event (SPEC section 4.11): a native box is read again
+    // on these. The events need not be trusted: reading a box that is tracked already is harmless
+    // and the layout watcher would do it anyway.
+    for (const type of ["focusin", "focusout", "keyup", "selectionchange", "change"]) {
+      on(this.doc, type, () => {
+        this.refreshNative();
+      });
+    }
+    // The form is reset or sent: the reset itself happens after its event, and a page often clears
+    // its box when its own handler of the submit is done.
+    for (const type of ["reset", "submit"]) {
+      on(this.doc, type, () => {
+        this.refreshSoon();
+      });
+    }
     // Following a box: scrolling anywhere, resizing, and layout changes.
     on(this.win, "scroll", () => {
       this.schedulePosition();
@@ -525,6 +553,7 @@ class Active {
       this.boxes.set(found.element, tracked);
       this.byId.set(state.id, tracked);
       this.observe();
+      if (found.kind === "editable") this.editables.watch(found.element);
       this.resizeObserver?.observe(found.element);
       this.layout.start();
       this.link.start();
@@ -571,7 +600,60 @@ class Active {
     // Typing closes the popover, before the underlines are drawn for the new text.
     this.popover.forget(tracked);
     this.syncBox(tracked.state);
+    // The mutations that made this text are not news for the observer of an editing host.
+    this.editables.acknowledge(tracked.state.element);
     this.render(tracked);
+  }
+
+  /**
+   * A tracked box may have a different text without an `input` event (SPEC section 4.11): the
+   * page cleared it after a message was sent, replaced it, reset its form. The change is an edit
+   * like any other (section 5.5): the issues it touches go, the others move, the revision moves
+   * on (so a check for the old text is not applied), and the frame gets the edit. A box that left
+   * the page, or is no longer one page mode may read, is forgotten.
+   */
+  private refresh(tracked: Tracked): void {
+    const { state } = tracked;
+    if (this.boxes.get(state.element) !== tracked) return;
+    if (!state.element.isConnected || !this.stillReadable(state)) {
+      this.forget(tracked);
+      return;
+    }
+    // The nodes of an editor may be new even if the text is the same: the underlines are drawn
+    // again from them.
+    if (this.syncBox(state) || state.kind === "editable") this.render(tracked);
+  }
+
+  /** Whether the box is still one page mode may read (the attribute rules; visibility is judged on focus). */
+  private stillReadable(state: BoxState): boolean {
+    const { element } = state;
+    const kind =
+      textBoxKind(element) ?? (element.tagName.toLowerCase() === "body" ? "editable" : undefined);
+    return kind === state.kind && !isExcluded(element, kind);
+  }
+
+  /** Reads every tracked `<textarea>` and `<input>` again. */
+  private refreshNative(): void {
+    for (const tracked of [...this.boxes.values()]) {
+      if (tracked.state.kind !== "editable") this.refresh(tracked);
+    }
+  }
+
+  /** The layout watcher's look: native boxes are read, and a box that left the page is forgotten. */
+  private refreshAll(): void {
+    for (const tracked of [...this.boxes.values()]) {
+      if (tracked.state.kind !== "editable") this.refresh(tracked);
+      else if (!tracked.state.element.isConnected) this.forget(tracked);
+    }
+  }
+
+  /** Reads the native boxes at the end of this turn (after a form's reset or submit has happened). */
+  private refreshSoon(): void {
+    if (this.cancelSoon !== undefined || this.boxes.size === 0) return;
+    this.cancelSoon = this.deps.scheduler.after(0, () => {
+      this.cancelSoon = undefined;
+      this.refreshNative();
+    });
   }
 
   // The popover
@@ -682,10 +764,10 @@ class Active {
     this.popover.close();
   }
 
-  /** Reads the box; an edit goes to the frame. */
-  private syncBox(state: BoxState): void {
+  /** Reads the box; an edit goes to the frame. Returns whether the text was different. */
+  private syncBox(state: BoxState): boolean {
     const found = state.sync();
-    if (found === undefined) return;
+    if (found === undefined) return false;
     this.link.post({
       type: "edit",
       box: state.id,
@@ -694,6 +776,7 @@ class Active {
       removed: found.edit.removed,
       inserted: found.inserted,
     });
+    return true;
   }
 
   private deactivate(): void {
@@ -709,6 +792,7 @@ class Active {
     this.boxes.delete(tracked.state.element);
     this.byId.delete(tracked.state.id);
     this.resizeObserver?.unobserve(tracked.state.element);
+    this.editables.unwatch(tracked.state.element);
     if (this.focused === tracked) this.focused = undefined;
     this.popover.forget(tracked);
     this.dialog.forget(tracked);
@@ -835,6 +919,9 @@ class Active {
 
   destroy(): void {
     this.layout.stop();
+    this.editables.stop();
+    this.cancelSoon?.();
+    this.cancelSoon = undefined;
     for (const remove of this.listeners.splice(0)) remove();
     this.mutationObserver?.disconnect();
     this.resizeObserver?.disconnect();

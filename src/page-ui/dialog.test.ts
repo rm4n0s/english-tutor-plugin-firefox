@@ -249,6 +249,30 @@ describe("Dialog: opening", () => {
   });
 });
 
+describe("Dialog: the text changes while it is open", () => {
+  it("shows the empty state, with no row, when the page empties the box, and Check is disabled", async () => {
+    const t = await setup();
+    t.open(t.ids[0] ?? 0);
+    expect(rows()).toHaveLength(2);
+    t.session.edit({ revision: 1, start: 0, removed: TEXT.length, inserted: "" });
+    await settle();
+    expect(rows()).toHaveLength(0);
+    expect(text("#issues-header")).toBe("Issues (0)");
+    expect(text(".empty")).toContain("Press Check");
+    expect((el("#dialog-check") as HTMLButtonElement).disabled).toBe(true);
+    expect(t.session.state.selectedId).toBeNull();
+  });
+
+  it("drops the rows of a text the page replaced, whatever the new text says", async () => {
+    const t = await setup();
+    t.open();
+    t.session.edit({ revision: 1, start: 0, removed: TEXT.length, inserted: "Another text now" });
+    await settle();
+    expect(rows()).toHaveLength(0);
+    expect(text(".empty")).toContain("Press Check");
+  });
+});
+
 describe("Dialog: selecting a row", () => {
   it("selects the issue in the state, tells the content script, and explains it", async () => {
     const t = await setup();

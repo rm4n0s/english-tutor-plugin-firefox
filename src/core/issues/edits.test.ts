@@ -328,3 +328,45 @@ describe("EditLog", () => {
     expect(log.overflowed).toBe(true);
   });
 });
+
+describe("an edit that empties or replaces the whole text (SPEC section 4.11: a page clears its box)", () => {
+  const TEXT = "Yesterday I seen him. He go home.";
+  // "I seen" is 10..16, "He go" is 22..27, and one issue sits at the very end of the text.
+  const issues = [
+    { id: 1, start: 10, end: 16 },
+    { id: 2, start: 22, end: 27 },
+    { id: 3, start: 28, end: TEXT.length },
+  ];
+
+  it.each([
+    { name: "emptied", next: "" },
+    { name: "replaced by a text with nothing in common", next: "Xyz qw" },
+    { name: "replaced by a text with the same first letter", next: "Y! 1" },
+    { name: "replaced by a text that ends with the same period", next: "Z. ." },
+    { name: "emptied but for one character", next: "." },
+    { name: "emptied but for a space", next: " " },
+  ])("$name: no issue is left", ({ next }) => {
+    const edit = diffText(TEXT, next);
+    expect(edit).toBeDefined();
+    expect(rebaseIssues(issues, edit!)).toEqual([]);
+  });
+
+  it.each([
+    { name: "emptied", next: "", expected: { start: 0, removed: TEXT.length, added: 0 } },
+    {
+      name: "replaced, same length, nothing in common",
+      next: "x".repeat(TEXT.length),
+      expected: { start: 0, removed: TEXT.length, added: TEXT.length },
+    },
+  ])("$name: the edit covers the whole old text", ({ next, expected }) => {
+    expect(diffText(TEXT, next)).toEqual(expected);
+  });
+
+  it("an empty text emptied again is not an edit", () => {
+    expect(diffText("", "")).toBeUndefined();
+  });
+
+  it("a text that grows back from empty leaves no issue to move", () => {
+    expect(rebaseIssues([], diffText("", TEXT)!)).toEqual([]);
+  });
+});

@@ -14,6 +14,7 @@ import { FakeFrameClaim, FakePageModeRuntime } from "../platform/testing/fake-pa
 import { FakePortBus } from "../platform/testing/fake-page-port";
 import { OPEN_IN_TUTOR_LABEL } from "./blocked-card";
 import { FRAME_BLOCKED_MESSAGE, FRAME_TIMEOUT_MS } from "./frame-link";
+import { LAYOUT_POLL_MS } from "./layout-watch";
 import { PageModeContent } from "./page-mode";
 import { clearBody, setBody } from "./testing/html";
 import { skipIframeLoading } from "./testing/iframes";
@@ -2530,5 +2531,616 @@ describe("PageModeContent: the issues dialog", () => {
     t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
     expect(t.content.dialog).toBeUndefined();
     expect(t.sent()).toEqual([]);
+  });
+});
+
+describe("PageModeContent: the page changes the text of a box without an input event (SPEC section 4.11)", () => {
+  afterEach(() => {
+    for (const name of ["clientWidth", "clientHeight"] as const) {
+      Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  });
+
+  const NATIVE_HTML = `<textarea id="box">${TEXT}</textarea>`;
+  const FORM_HTML = `<form id="form"><textarea id="box">${TEXT}</textarea></form>`;
+  const EDITABLE_HTML =
+    '<div id="box" contenteditable="true"><p>Yesterday I seen him.</p><p>He go home.</p></div>';
+
+  /** A page with a checked box (two issues), a popover that can be opened, and helpers. */
+  async function checked(extra: Options = {}) {
+    const popover = new FakePopover();
+    const t = await setup({ popover, html: NATIVE_HTML, ...extra });
+    layOutUnderlines();
+    t.runner.answer(resultOf(ISSUES));
+    const box = document.getElementById("box") as HTMLTextAreaElement & HTMLElement;
+    await t.focusAndLoad(box);
+    t.clearSent();
+    const spans = () => [...(t.layer()?.querySelectorAll<HTMLElement>("span.issue") ?? [])];
+    /** Lets the layout watcher look (the page cleared a native box), then the frame answer. */
+    const looked = async () => {
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await t.getFrame()?.idle();
+      await settle();
+    };
+    /** Lets the observer of an editing host report, then the frame answer. */
+    const observed = async () => {
+      await settle();
+      await t.getFrame()?.idle();
+      await settle();
+    };
+    const frameSession = () => t.getFrame()?.session(1);
+    return { ...t, popover, box, spans, looked, observed, frameSession };
+  }
+
+  /** What every case must leave: no issue anywhere, the plain icon, the frame in step. */
+  function expectCleared(t: Awaited<ReturnType<typeof checked>>, text: string, revision = 1) {
+    expect(t.content.boxes[0]?.issues).toEqual([]);
+    expect(t.content.boxes[0]?.revision).toBe(revision);
+    expect(t.kind()).toBe("icon");
+    expect(t.spans()).toHaveLength(0);
+    expect(t.frameSession()?.text).toBe(text);
+    expect(t.frameSession()?.state.issues).toEqual([]);
+    expect(t.frameSession()?.wireRevision).toBe(revision);
+  }
+
+  describe("the user empties or replaces the whole text (an input event)", () => {
+    const inputOf = (box: HTMLElement, inputType: string) =>
+      box.dispatchEvent(trusted(new InputEvent("input", { bubbles: true, inputType })));
+
+    it.each([
+      { name: "select all, then Delete", inputType: "deleteContentBackward", steps: [""] },
+      { name: "select all, then Backspace", inputType: "deleteContentForward", steps: [""] },
+      { name: "select all, then cut", inputType: "deleteByCut", steps: [""] },
+      { name: "undo back to empty", inputType: "historyUndo", steps: ["Hi", ""] },
+      {
+        name: "select all, then paste over it",
+        inputType: "insertFromPaste",
+        steps: ["Something else, pasted over everything."],
+      },
+      {
+        name: "select all, then type one letter",
+        inputType: "insertText",
+        steps: ["x"],
+      },
+    ])("$name in a textarea leaves no issue, no underline, the plain icon", async (c) => {
+      const t = await checked();
+      let revision = 0;
+      for (const value of c.steps) {
+        t.box.value = value;
+        inputOf(t.box, c.inputType);
+        revision++;
+      }
+      // At once, before the frame answers.
+      const last = c.steps.at(-1) ?? "";
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.spans()).toHaveLength(0);
+      expect(t.kind()).toBe("icon");
+      await t.getFrame()?.idle();
+      await settle();
+      expectCleared(t, last, revision);
+    });
+
+    it.each([
+      { name: "select all, then Delete", inputType: "deleteContentBackward" },
+      { name: "select all, then cut", inputType: "deleteByCut" },
+      { name: "undo back to empty", inputType: "historyUndo" },
+    ])("$name in editable content leaves no issue and the plain icon", async ({ inputType }) => {
+      const t = await checked({ html: EDITABLE_HTML });
+      const p = document.createElement("p");
+      p.append(document.createElement("br"));
+      t.box.replaceChildren(p);
+      inputOf(t.box, inputType);
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.kind()).toBe("icon");
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.frameSession()?.state.issues).toEqual([]);
+      expect(t.frameSession()?.text.trim()).toBe("");
+      expect(t.content.boxes[0]?.revision).toBe(1);
+    });
+
+    it("closes the popover and keeps the dialog's list empty", async () => {
+      const dialog = new FakeDialog();
+      const t = await checked({ dialog });
+      mouse("mouseup", t.box, 60 * 2 + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.popover?.issue).toBe(2);
+      t.box.value = "";
+      inputOf(t.box, "deleteByCut");
+      expect(t.content.popover).toBeUndefined();
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.frameSession()?.state.issues).toEqual([]);
+    });
+
+    it("typing again after the box was emptied is checked after the pause, as a new text", async () => {
+      const t = await checked();
+      t.box.value = "";
+      inputOf(t.box, "deleteByCut");
+      await t.getFrame()?.idle();
+      t.runner.answer(resultOf([placed(0, 7, "verb_form")]));
+      t.box.value = "Me go home now";
+      inputOf(t.box, "insertText");
+      await t.getFrame()?.idle();
+      t.scheduler.advance(3000);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.runner.asked.at(-1)?.text).toBe("Me go home now");
+      expect(t.content.boxes[0]?.issues.map((i) => [i.start, i.end])).toEqual([[0, 7]]);
+    });
+  });
+
+  describe("a native box: the page sets the value from its script", () => {
+    it.each([
+      {
+        name: "value = '' (the page cleared it after sending)",
+        change: (box: HTMLTextAreaElement) => {
+          box.value = "";
+        },
+        text: "",
+      },
+      {
+        name: "the value replaced by another text",
+        change: (box: HTMLTextAreaElement) => {
+          box.value = "Quite another text, written by the page.";
+        },
+        text: "Quite another text, written by the page.",
+      },
+      {
+        name: "setRangeText over the whole text",
+        change: (box: HTMLTextAreaElement) => {
+          box.setRangeText("", 0, box.value.length);
+        },
+        text: "",
+      },
+      {
+        name: "the value replaced by a text that corrects one of the mistakes",
+        change: (box: HTMLTextAreaElement) => {
+          box.value = "Yesterday I saw him. He go home.";
+        },
+        text: "Yesterday I saw him. He go home.",
+        // "I seen" is touched and goes; "He go" moves one place to the left.
+        issuesLeft: 1,
+      },
+    ])("$name: the layout watcher notices it at its next look", async (c) => {
+      const t = await checked();
+      c.change(t.box);
+      // No event, no look yet: the content script cannot know.
+      expect(t.content.boxes[0]?.issues).toHaveLength(2);
+      expect(t.sent()).toEqual([]);
+      await t.looked();
+      expect(t.sent().map((m) => m.type)).toEqual(["edit"]);
+      if ("issuesLeft" in c) {
+        expect(t.content.boxes[0]?.issues).toHaveLength(c.issuesLeft);
+        expect(t.frameSession()?.text).toBe(c.text);
+      } else expectCleared(t, c.text);
+    });
+
+    it("notices it within one look: nothing before the interval, the edit at the interval", async () => {
+      const t = await checked();
+      t.box.value = "";
+      t.scheduler.advance(LAYOUT_POLL_MS - 1);
+      expect(t.sent()).toEqual([]);
+      t.scheduler.advance(1);
+      expect(t.sent()).toEqual([
+        { type: "edit", box: 1, revision: 1, start: 0, removed: TEXT.length, inserted: "" },
+      ]);
+    });
+
+    it.each([
+      { event: "keyup", target: () => document.getElementById("box")! },
+      { event: "change", target: () => document.getElementById("box")! },
+      { event: "selectionchange", target: () => document },
+      { event: "focusout", target: () => document.getElementById("box")! },
+      { event: "focusin", target: () => document.getElementById("box")! },
+    ])(
+      "notices it at once on a $event, without waiting for the look",
+      async ({ event, target }) => {
+        const t = await checked();
+        t.box.value = "";
+        target().dispatchEvent(new Event(event, { bubbles: true }));
+        expect(t.sent().filter((m) => m.type === "edit")).toHaveLength(1);
+        await t.getFrame()?.idle();
+        await settle();
+        expect(t.content.boxes[0]?.issues).toEqual([]);
+        expect(t.frameSession()?.text).toBe("");
+      },
+    );
+
+    it("notices a form.reset() (the reset happens after its event) and a submit", async () => {
+      for (const kind of ["reset", "submit"] as const) {
+        const t = await checked({ html: FORM_HTML });
+        const form = document.getElementById("form") as HTMLFormElement;
+        // The page's own handler clears the box, as a script does once the message is sent.
+        form.addEventListener(kind, () => {
+          t.box.value = "";
+        });
+        form.dispatchEvent(new Event(kind, { bubbles: true, cancelable: true }));
+        expect(t.sent()).toEqual([]);
+        t.scheduler.advance(0);
+        await t.getFrame()?.idle();
+        await settle();
+        expectCleared(t, "");
+        for (const content of made.splice(0)) content.destroy();
+      }
+    });
+
+    it("notices form.reset() itself, which sets the value back to its default", async () => {
+      const t = await checked({ html: '<form id="form"><textarea id="box"></textarea></form>' });
+      // The box was empty by default; the page filled it later and it was checked.
+      // Here the box is checked from the start: write the text, then reset.
+      t.box.value = TEXT;
+      t.box.dispatchEvent(trusted(new Event("input", { bubbles: true })));
+      await t.getFrame()?.idle();
+      t.clearSent();
+      (document.getElementById("form") as HTMLFormElement).reset();
+      await t.looked();
+      expect(t.box.value).toBe("");
+      expect(t.content.boxes[0]?.text).toBe("");
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.frameSession()?.text).toBe("");
+    });
+
+    it("moves the issues that the change leaves, with the rules of section 5.5", async () => {
+      const t = await checked();
+      t.box.value = `Oh! ${TEXT}`;
+      await t.looked();
+      expect(t.content.boxes[0]?.issues.map((i) => [i.start, i.end])).toEqual([
+        [14, 20],
+        [26, 31],
+      ]);
+      expect(t.spans().map((s) => s.textContent)).toEqual(["I seen", "He go"]);
+      expect(t.kind()).toBe("count");
+      expect(t.frameSession()?.state.issues.map((i) => [i.start, i.end])).toEqual([
+        [14, 20],
+        [26, 31],
+      ]);
+    });
+
+    it("an input event that follows a change the layout watcher found is not a second edit", async () => {
+      const t = await checked();
+      t.box.value = "";
+      await t.looked();
+      t.clearSent();
+      t.box.dispatchEvent(trusted(new Event("input", { bubbles: true })));
+      expect(t.sent()).toEqual([]);
+      expect(t.content.boxes[0]?.revision).toBe(1);
+    });
+
+    it("closes the popover when the page empties the box, and the frame is told", async () => {
+      const t = await checked();
+      mouse("mouseup", t.box, 60 * 1 + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.popover?.issue).toBe(1);
+      t.box.value = "";
+      await t.looked();
+      expect(t.content.popover).toBeUndefined();
+      expect(t.sent().map((m) => m.type)).toContain("popover-close");
+    });
+
+    it("keeps the popover when the page only moves the issue", async () => {
+      const t = await checked();
+      mouse("mouseup", t.box, 60 * 1 + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+      t.box.value = `Oh! ${TEXT}`;
+      await t.looked();
+      expect(t.content.popover?.issue).toBe(1);
+    });
+
+    it("keeps the issues dialog open on the box and tells the frame about the edit", async () => {
+      const dialog = new FakeDialog();
+      const t = await checked({ dialog });
+      t.badge()?.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.dialog).toBeDefined();
+      t.box.value = "";
+      await t.looked();
+      expect(t.content.dialog?.box).toBe(t.content.boxes[0]);
+      expect(t.frameSession()?.state.issues).toEqual([]);
+    });
+
+    it("stops following a box the page made read-only, without reading it any more", async () => {
+      const t = await checked();
+      t.box.readOnly = true;
+      t.box.value = "secret text typed by the page";
+      await t.looked();
+      expect(t.content.boxes).toEqual([]);
+      expect(t.sent().map((m) => m.type)).toEqual(["forget"]);
+      expect(t.badge()).toBeNull();
+    });
+  });
+
+  describe("editable content: the page replaces the children or the text nodes", () => {
+    it.each([
+      {
+        name: "the children replaced by one empty paragraph (React-style)",
+        change: (box: HTMLElement) => {
+          const p = document.createElement("p");
+          p.append(document.createElement("br"));
+          box.replaceChildren(p);
+        },
+      },
+      {
+        name: "textContent = ''",
+        change: (box: HTMLElement) => {
+          box.textContent = "";
+        },
+      },
+      {
+        name: "every child removed one by one",
+        change: (box: HTMLElement) => {
+          while (box.firstChild !== null) box.removeChild(box.firstChild);
+        },
+      },
+      {
+        name: "the text nodes replaced by empty ones (Draft.js-style)",
+        change: (box: HTMLElement) => {
+          for (const p of box.querySelectorAll("p")) p.replaceChildren(document.createTextNode(""));
+        },
+      },
+    ])("$name: the observer notices it, with no timer and no event", async ({ change }) => {
+      const t = await checked({ html: EDITABLE_HTML });
+      expect(t.content.boxes[0]?.issues).toHaveLength(2);
+      t.box.contentEditable = "true";
+      change(t.box);
+      await t.observed();
+      expect(t.sent().map((m) => m.type)).toEqual(["edit"]);
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.kind()).toBe("icon");
+      expect(t.frameSession()?.state.issues).toEqual([]);
+      expect(t.frameSession()?.text).toBe(t.content.boxes[0]?.text);
+      expect(t.content.boxes[0]?.text.trim()).toBe("");
+    });
+
+    it("a text node's data changed: the touched issue goes, the other stays", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      (t.box.querySelectorAll("p")[0]?.firstChild as Text).data = "Yesterday I saw him.";
+      await t.observed();
+      expect(t.content.boxes[0]?.issues.map((i) => i.start)).toEqual([21]);
+    });
+
+    it("children replaced by new nodes with the same text change nothing, but draw from the new nodes", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      const before = t.content.boxes[0]?.model?.segments[0]?.node;
+      const paragraphs = [...t.box.querySelectorAll("p")].map((p) => {
+        const copy = document.createElement("p");
+        copy.textContent = p.textContent;
+        return copy;
+      });
+      t.box.replaceChildren(...paragraphs);
+      await t.observed();
+      expect(t.sent()).toEqual([]);
+      expect(t.content.boxes[0]?.revision).toBe(0);
+      expect(t.content.boxes[0]?.issues).toHaveLength(2);
+      expect(t.content.boxes[0]?.model?.segments[0]?.node).not.toBe(before);
+    });
+
+    it("the input event of the user's own typing is one edit, not two", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      (t.box.querySelectorAll("p")[1]?.firstChild as Text).data = "He goes home.";
+      t.box.dispatchEvent(trusted(new Event("input", { bubbles: true })));
+      await t.observed();
+      expect(t.sent().filter((m) => m.type === "edit")).toHaveLength(1);
+      expect(t.content.boxes[0]?.revision).toBe(1);
+    });
+
+    it("stops watching a box that was forgotten", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      t.box.remove();
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await t.observed();
+      t.clearSent();
+      document.body.append(t.box);
+      t.box.textContent = "changed by the page";
+      await t.observed();
+      expect(t.sent()).toEqual([]);
+      expect(t.content.boxes).toEqual([]);
+    });
+  });
+
+  describe("a check for the old text", () => {
+    it("is not applied to the text the page wrote over it", async () => {
+      const t = await setup({ html: NATIVE_HTML });
+      layOutUnderlines();
+      const finish = t.runner.hold();
+      const box = document.getElementById("box") as HTMLTextAreaElement;
+      await t.focusAndLoad(box);
+      expect(t.kind()).toBe("spinner");
+      box.value = "";
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await t.getFrame()?.idle();
+      await settle();
+      finish(resultOf(ISSUES));
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.kind()).toBe("icon");
+      expect(t.getFrame()?.session(1)?.state.pending).toBeNull();
+      expect(t.getFrame()?.session(1)?.state.checked).toBe(false);
+      expect(t.layer()?.querySelectorAll("span.issue")).toHaveLength(0);
+    });
+
+    it("is not applied to a text the page replaced, but a check of the new text is", async () => {
+      const t = await setup({ html: NATIVE_HTML });
+      layOutUnderlines();
+      const finish = t.runner.hold();
+      const box = document.getElementById("box") as HTMLTextAreaElement;
+      await t.focusAndLoad(box);
+      box.value = "Quite another text, written by the page.";
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await t.getFrame()?.idle();
+      // The reply for the old text: its issues are in the old text only.
+      finish(resultOf(ISSUES));
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      t.runner.answer(resultOf([placed(6, 13, "verb_form")]));
+      t.scheduler.advance(3000);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.runner.asked.at(-1)?.text).toBe("Quite another text, written by the page.");
+      expect(t.content.boxes[0]?.issues.map((i) => [i.start, i.end])).toEqual([[6, 13]]);
+    });
+
+    it("a state of the frame for the text before the clear is dropped by the revision rule", async () => {
+      const t = await checked();
+      t.box.value = "";
+      await t.looked();
+      t.bus.connections[0]?.port.peer?.post({
+        type: "state",
+        box: 1,
+        revision: 0,
+        status: "checked",
+        issues: [{ id: 9, start: 10, end: 16, category: "grammar" }],
+      });
+      expect(t.content.boxes[0]?.issues).toEqual([]);
+      expect(t.kind()).toBe("icon");
+    });
+
+    it("a script change bumps the revision of the box, and the frame's, once per change", async () => {
+      const t = await checked();
+      for (const [i, value] of ["a b c", "a b c d", ""].entries()) {
+        t.box.value = value;
+        await t.looked();
+        expect(t.content.boxes[0]?.revision).toBe(i + 1);
+        expect(t.frameSession()?.wireRevision).toBe(i + 1);
+      }
+    });
+  });
+
+  describe("a box the page removes and creates again", () => {
+    function recreate(t: Awaited<ReturnType<typeof checked>>, text = TEXT) {
+      const old = document.getElementById("box")!;
+      old.remove();
+      const fresh = document.createElement("textarea");
+      fresh.id = "box";
+      fresh.value = text;
+      document.body.append(fresh);
+      return fresh;
+    }
+
+    it("forgets the old box: its state, badge, underlines and the frame's session", async () => {
+      const t = await checked();
+      expect(t.frameSession()).toBeDefined();
+      recreate(t);
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.boxes).toEqual([]);
+      expect(t.badge()).toBeNull();
+      expect(t.spans()).toHaveLength(0);
+      expect(t.getFrame()?.boxes).toBe(0);
+      expect(t.sent().map((m) => m.type)).toContain("forget");
+    });
+
+    it("the new box at the same place starts from nothing, with its own id, and does not inherit the issues", async () => {
+      const t = await checked();
+      const fresh = recreate(t);
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      t.runner.answer(resultOf([placed(22, 27, "subject_verb_agreement")]));
+      t.clearSent();
+      await t.focusAndLoad(fresh);
+      expect(t.content.boxes).toHaveLength(1);
+      expect(t.content.boxes[0]?.id).toBe(2);
+      expect(t.content.boxes[0]?.revision).toBe(0);
+      // Only the new box's own check shows: one issue, not the old two.
+      expect(t.content.boxes[0]?.issues).toHaveLength(1);
+      expect(t.spans()).toHaveLength(1);
+      expect(t.getFrame()?.boxes).toBe(1);
+      expect(t.getFrame()?.session(1)).toBeUndefined();
+    });
+
+    it("the new box is forgotten by the old one's removal even before the next look (the page's DOM change)", async () => {
+      const t = await checked();
+      const fresh = recreate(t);
+      focusIn(fresh);
+      await settle();
+      // The old box is gone from the tracked boxes as soon as the new one is looked at again.
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      expect(t.content.boxes.map((b) => b.element)).toEqual([fresh]);
+    });
+
+    it("closes a popover that was open on the old box", async () => {
+      const t = await checked();
+      mouse("mouseup", t.box, 60 * 1 + 120, 120);
+      await t.getFrame()?.idle();
+      await settle();
+      expect(t.content.popover).toBeDefined();
+      recreate(t);
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      expect(t.content.popover).toBeUndefined();
+    });
+
+    it("an editing host that is replaced is forgotten like a textarea", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      t.box.remove();
+      const fresh = document.createElement("div");
+      fresh.id = "box";
+      fresh.setAttribute("contenteditable", "true");
+      fresh.textContent = "Yesterday I seen him.";
+      document.body.append(fresh);
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await settle();
+      expect(t.content.boxes).toEqual([]);
+      expect(t.getFrame()?.boxes).toBe(0);
+    });
+  });
+
+  describe("only tracked boxes are watched, and only while they are tracked", () => {
+    it("a box nobody focused is never read: no observer, no timer, no message", async () => {
+      const t = await setup({ html: EDITABLE_HTML });
+      const observe = vi.spyOn(MutationObserver.prototype, "observe");
+      const box = document.getElementById("box")!;
+      box.textContent = "changed by the page";
+      t.scheduler.advance(LAYOUT_POLL_MS * 4);
+      await settle();
+      expect(t.bus.connections).toEqual([]);
+      expect(t.content.boxes).toEqual([]);
+      expect(observe).not.toHaveBeenCalled();
+    });
+
+    it("watches the one editing host that was focused, and not the page", async () => {
+      const t = await setup({
+        html: `${EDITABLE_HTML}<div id="other" contenteditable="true"><p>one two three</p></div>`,
+      });
+      const observe = vi.spyOn(MutationObserver.prototype, "observe");
+      t.runner.answer(resultOf([]));
+      await t.focusAndLoad();
+      const editable = observe.mock.calls.filter(
+        ([, options]) => options?.characterData === true && options.childList === true,
+      );
+      expect(editable).toHaveLength(1);
+      expect(editable[0]?.[0]).toBe(t.box);
+      expect(editable[0]?.[1]).toEqual({ characterData: true, childList: true, subtree: true });
+    });
+
+    it("the timer stops when the last box is forgotten, and starts again for a new one", async () => {
+      const t = await checked();
+      recreate(t);
+      t.scheduler.advance(LAYOUT_POLL_MS);
+      await settle();
+      expect(t.content.boxes).toEqual([]);
+      t.scheduler.advance(LAYOUT_POLL_MS * 2);
+      expect(t.scheduler.pending).toBe(0);
+
+      function recreate(t: Awaited<ReturnType<typeof checked>>) {
+        t.box.remove();
+      }
+    });
+
+    it("page mode turned off removes the observers and the timer: the page's changes are not read any more", async () => {
+      const t = await checked({ html: EDITABLE_HTML });
+      t.runtime.broadcast("page-mode-off");
+      t.clearSent();
+      t.box.textContent = "changed";
+      await settle();
+      t.scheduler.advance(LAYOUT_POLL_MS * 4);
+      expect(t.sent()).toEqual([]);
+      expect(t.scheduler.pending).toBe(0);
+    });
   });
 });

@@ -1,5 +1,6 @@
+import { countWords } from "../core/analysis/text";
 import { diffText, rebaseIssues, type Edit } from "../core/issues/edits";
-import type { BoxStatus, WireIssue } from "../core/page-mode/protocol";
+import { MAX_WORDS, MIN_WORDS, type BoxStatus, type WireIssue } from "../core/page-mode/protocol";
 import { readEditableText, type EditableText } from "./text-model";
 import type { TextBoxKind } from "./text-box";
 
@@ -100,6 +101,15 @@ export class BoxState implements BoxView {
     // The frame does the same: with no issue left the check says nothing about the text.
     if (this.currentIssues.length === 0 && this.currentStatus === "checked") {
       this.currentStatus = "idle";
+    }
+    // A text under the minimum (an emptied box) has nothing to say: no spinner for a check that
+    // is no longer wanted, no failure of an earlier text, no "too long" for a text that is not.
+    if (this.currentStatus !== "idle") {
+      const words = countWords(text);
+      if (words < MIN_WORDS || (this.currentStatus === "too-long" && words <= MAX_WORDS)) {
+        this.currentStatus = "idle";
+        this.currentMessage = undefined;
+      }
     }
     return { edit, inserted: text.slice(edit.start, edit.start + edit.added) };
   }

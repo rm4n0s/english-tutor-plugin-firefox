@@ -214,3 +214,83 @@ describe("BoxState: edits move and remove issues at once (SPEC section 5.5)", ()
     expect(state.status).toBe("failed");
   });
 });
+
+describe("BoxState: a box that is emptied or replaced (SPEC section 4.11)", () => {
+  const TEXT = "Yesterday I seen him. He go home.";
+
+  function checked(status: "checked" | "checking" | "failed" | "too-long" | "no-llm" = "checked") {
+    const made = textarea(TEXT);
+    made.state.apply({
+      revision: 0,
+      status,
+      ...(status === "failed" ? { message: "The request failed" } : {}),
+      issues: status === "checked" ? [issue(1, 10, 16), issue(2, 22, 27)] : [],
+    });
+    return made;
+  }
+
+  it.each([
+    { name: "emptied", next: "" },
+    { name: "only white space", next: "  \n " },
+    { name: "two words", next: "Hello there" },
+    { name: "replaced by other text", next: "Quite another text" },
+  ])("$name: every issue is gone and the box is idle", ({ next }) => {
+    const { element, state } = checked();
+    element.value = next;
+    expect(state.sync()).toBeDefined();
+    expect(state.issues).toEqual([]);
+    expect(state.status).toBe("idle");
+    expect(state.revision).toBe(1);
+  });
+
+  it.each(["checking", "failed", "no-llm"] as const)(
+    "a %s box that is emptied is idle again, with no message",
+    (status) => {
+      const { element, state } = checked(status);
+      element.value = "";
+      state.sync();
+      expect(state.status).toBe("idle");
+      expect(state.message).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { name: "to empty", next: "", status: "idle" },
+    { name: "to a text that is not too long", next: "one two three", status: "idle" },
+  ])("a too-long box edited $name is idle", ({ next, status }) => {
+    const { element, state } = checked("too-long");
+    element.value = next;
+    state.sync();
+    expect(state.status).toBe(status);
+  });
+
+  it("keeps the tooltip of an unchecked box (automatic checks off) when it is emptied", () => {
+    const { element, state } = textarea(TEXT);
+    state.apply({ revision: 0, status: "idle", message: "Not checked yet.", issues: [] });
+    element.value = "";
+    state.sync();
+    expect(state.message).toBe("Not checked yet.");
+  });
+
+  it("a state for the old revision that arrives after the box was emptied is dropped", () => {
+    const { element, state } = checked("checking");
+    element.value = "";
+    state.sync();
+    expect(state.apply({ revision: 0, status: "checked", issues: [issue(1, 10, 16)] })).toBe(false);
+    expect(state.issues).toEqual([]);
+    expect(state.status).toBe("idle");
+  });
+
+  it("editable content cleared the way React does it (children replaced) is an edit", () => {
+    const element = setBody(document, '<div contenteditable="true"><p>one two three</p></div>');
+    const state = new BoxState(1, element, "editable", "session:s", window);
+    state.apply({ revision: 0, status: "checked", issues: [issue(1, 0, 3)] });
+    const empty = document.createElement("p");
+    empty.append(document.createElement("br"));
+    element.replaceChildren(empty);
+    expect(state.sync()).toBeDefined();
+    expect(state.text).not.toContain("one");
+    expect(state.issues).toEqual([]);
+    expect(state.status).toBe("idle");
+  });
+});

@@ -9,6 +9,12 @@ export interface LayoutWatcherDeps {
   elements: () => Iterable<Element>;
   /** At least one of them is somewhere else, or another size, than at the last look. */
   onMoved: () => void;
+  /**
+   * Called at each look, before the rectangles are compared, while there are boxes: page mode
+   * re-reads the text of its `<textarea>` and `<input>` boxes here, because a script that sets
+   * `value` fires no event (SPEC section 4.11). Its worst-case delay is this interval.
+   */
+  onTick?: () => void;
 }
 
 /**
@@ -51,6 +57,7 @@ export class LayoutWatcher {
       const any = !this.deps.elements()[Symbol.iterator]().next().done;
       // Nothing to watch: the timer stops until `start` is called again.
       if (!any) return;
+      this.deps.onTick?.();
       this.look(true);
       this.arm();
     });

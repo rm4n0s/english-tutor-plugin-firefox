@@ -312,6 +312,17 @@ describe("Popover: switching and closing", () => {
     expect(t.sent.at(-1)).toEqual({ type: "popover-closed", box: 1 });
   });
 
+  it("closes itself when the page empties the box, and says so", async () => {
+    const t = await setup();
+    t.popover.open(t.session, t.ids[1]!, 340, t.send);
+    await settle();
+    // The page's own script cleared the text: the content script sends the edit like any other.
+    t.session.edit({ revision: 1, start: 0, removed: t.session.text.length, inserted: "" });
+    expect(t.popover.issue).toBeUndefined();
+    expect(t.session.state.issues).toEqual([]);
+    expect(t.sent.at(-1)).toEqual({ type: "popover-closed", box: 1 });
+  });
+
   it("closes on Escape pressed in the card, and ignores an Escape a page script dispatched", async () => {
     const t = await setup();
     t.popover.open(t.session, t.ids[0]!, 340, t.send);

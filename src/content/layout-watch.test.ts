@@ -99,3 +99,60 @@ describe("LayoutWatcher", () => {
     expect(watcher.running).toBe(false);
   });
 });
+
+describe("LayoutWatcher: the tick", () => {
+  it("calls onTick at each look while there are boxes, before comparing the rectangles", () => {
+    const { element, rect } = movable();
+    const scheduler = new FakeScheduler();
+    const calls: string[] = [];
+    const watcher = new LayoutWatcher({
+      scheduler,
+      elements: () => [element],
+      onMoved: () => calls.push("moved"),
+      onTick: () => calls.push("tick"),
+    });
+    watcher.start();
+    scheduler.advance(LAYOUT_POLL_MS);
+    rect.top = 99;
+    scheduler.advance(LAYOUT_POLL_MS);
+    expect(calls).toEqual(["tick", "tick", "moved"]);
+  });
+
+  it("calls onTick no more once there is no box, and the timer stops", () => {
+    const { element } = movable();
+    const list: Element[] = [element];
+    const scheduler = new FakeScheduler();
+    const onTick = vi.fn();
+    const watcher = new LayoutWatcher({
+      scheduler,
+      elements: () => list,
+      onMoved: vi.fn(),
+      onTick,
+    });
+    watcher.start();
+    scheduler.advance(LAYOUT_POLL_MS);
+    expect(onTick).toHaveBeenCalledTimes(1);
+    list.length = 0;
+    scheduler.advance(LAYOUT_POLL_MS * 5);
+    expect(onTick).toHaveBeenCalledTimes(1);
+    expect(scheduler.pending).toBe(0);
+  });
+
+  it("copes with a tick that removes the box it was called for", () => {
+    const { element } = movable();
+    const list: Element[] = [element];
+    const scheduler = new FakeScheduler();
+    const watcher = new LayoutWatcher({
+      scheduler,
+      elements: () => list,
+      onMoved: vi.fn(),
+      onTick: () => {
+        list.length = 0;
+      },
+    });
+    watcher.start();
+    scheduler.advance(LAYOUT_POLL_MS * 3);
+    expect(watcher.running).toBe(false);
+    expect(scheduler.pending).toBe(0);
+  });
+});

@@ -170,6 +170,7 @@ export class BoxSession {
     }
     this.revision = message.revision;
     this.tracked.changed(text);
+    this.afterTextChange();
     this.autoCheck.edited();
     // Even if no issue moved, the content script must hear that the frame has this revision.
     this.sendState();
@@ -181,7 +182,31 @@ export class BoxSession {
     this.revision = revision;
     this.problem = undefined;
     this.tracked.load(text);
+    this.afterTextChange();
     this.sendState();
+  }
+
+  /**
+   * The text changed, by typing or by the page's own script (SPEC section 4.11). A text under the
+   * minimum, an emptied box above all, has nothing to check: an automatic check that runs for the
+   * old text (and any check when the box is blank) is dropped, because its result would be applied
+   * to a box that says something else, and a failure of the old text does not stay on it. A text
+   * that is no longer too long loses that state too.
+   */
+  private afterTextChange(): void {
+    const words = countWords(this.tracked.text);
+    if (words < MIN_WORDS) {
+      // The dialog's own Check of a few words goes on while the user types, unless the box is blank.
+      const pending = this.state.pending;
+      if (pending !== null && (!pending.manual || this.tracked.text.trim() === "")) {
+        this.controller.cancel();
+        // The check ends as `stale` when its reply comes, without touching the state.
+        this.state.discardCheck();
+      }
+      this.problem = undefined;
+    } else if (this.problem?.status === "too-long" && words <= MAX_WORDS) {
+      this.problem = undefined;
+    }
   }
 
   dispose(): void {
