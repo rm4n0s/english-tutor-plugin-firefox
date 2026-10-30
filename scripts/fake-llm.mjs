@@ -49,10 +49,22 @@ export class FakeLLMServer {
     return [...this.#requests];
   }
 
-  async start() {
+  /**
+   * Starts listening on 127.0.0.1. A fixed port keeps the address that the screenshots show the
+   * same on every run; `port` 0 picks a free one. If the port is busy it fails at once, saying so.
+   */
+  async start(port = 0) {
     await new Promise((resolve, reject) => {
-      this.#server.once("error", reject);
-      this.#server.listen(0, "127.0.0.1", resolve);
+      this.#server.once("error", (err) => {
+        reject(
+          err.code === "EADDRINUSE"
+            ? new Error(
+                `port ${port} on 127.0.0.1 is busy. Stop what uses it, or choose another port with FAKE_LLM_PORT.`,
+              )
+            : err,
+        );
+      });
+      this.#server.listen(port, "127.0.0.1", resolve);
     });
     return this.baseUrl;
   }

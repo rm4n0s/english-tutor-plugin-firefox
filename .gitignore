@@ -4,3 +4,4 @@ web-ext-artifacts/
 .web-extension-id
 .env
 *.log
+screenshots-out/

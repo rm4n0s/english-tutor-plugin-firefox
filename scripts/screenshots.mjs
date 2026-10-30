@@ -1,13 +1,20 @@
 // Screenshot harness (docs/IMPLEMENTATION.md, "Screenshot harness").
 //
-//   npm run screenshots              all scenarios
-//   npm run screenshots -- <name>    one scenario
+//   npm run screenshots                       all scenarios
+//   npm run screenshots -- <name>             one scenario
+//   npm run screenshots -- --update <name>    also overwrite the committed PNG of <name> (repeatable)
+//   npm run screenshots -- --update-all       overwrite every committed PNG
+//
+// Write policy: a PNG goes to docs/screenshots/ only if it does not exist yet, or its scenario is
+// named by --update (or --update-all). Every other PNG goes to screenshots-out/ (gitignored, same
+// layout), so that a plain run never changes a committed screenshot.
 //
 // It builds dist/, zips it with web-ext, starts a fake LLM server on 127.0.0.1, starts headless
 // Firefox through selenium-webdriver (Selenium Manager fetches geckodriver), installs the zip as a
 // temporary add-on, and runs each scenario. A scenario drives the real pages and saves a 1280x800
 // PNG under docs/screenshots/. The run exits with 1, after printing the reason, if one fails.
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -25,6 +32,8 @@ const ZIP_NAME = "english-tutor-screenshots.zip";
 const WIDTH = 1280;
 const HEIGHT = 800;
 const PAGE_TIMEOUT_MS = 15_000;
+// The fake LLM server has a fixed port, because its address is visible in the screenshots.
+const FAKE_LLM_PORT = Number(process.env.FAKE_LLM_PORT ?? 47811);
 
 // `layout.css.prefers-color-scheme.content-override`: 0 = dark, 1 = light, 2 = follow the system.
 // Verified in Firefox 159 by the "dark" scenarios, which fail unless the page matches the dark scheme.
@@ -126,11 +135,12 @@ const SCENARIOS = {
     theme: "light",
     dir: "step-04-llm",
     async run(ctx) {
-      ctx.llm.setReplies(OK_REPLY);
+      ctx.llm.setReplies({ ...OK_REPLY, delayMs: 300 });
       await ctx.configureFakeLLM({ name: "Fake OpenAI server", apiKey: "sk-fake-key" });
       await ctx.click("llm-list", "li.llm-row");
       await ctx.click("llm-test-selected");
       await ctx.waitForText("llm-status", "connection works");
+      await ctx.roundDuration("llm-status");
       const sent = ctx.llm.requests.at(-1)?.body.messages?.at(-1)?.content;
       if (sent !== "Reply with the single word: ok") {
         throw new Error(`the fake server got ${JSON.stringify(sent)} instead of the test prompt`);
@@ -297,7 +307,7 @@ async function resetData(ctx) {
   if (result !== "deleted") throw new Error(`could not reset the database: ${result}`);
 }
 
-function makeContext(name, scenario, driver, llm) {
+function makeContext(name, scenario, driver, llm, policy) {
   const ctx = {
     driver,
     llm,
@@ -355,10 +365,13 @@ function makeContext(name, scenario, driver, llm) {
       if (width !== WIDTH || height !== HEIGHT) {
         throw new Error(`the screenshot is ${width}x${height}, not ${WIDTH}x${HEIGHT}`);
       }
-      const dir = `${root}docs/screenshots/${scenario.dir}`;
-      await mkdir(dir, { recursive: true });
-      await writeFile(`${dir}/${name}.png`, png);
-      console.log(`  wrote docs/screenshots/${scenario.dir}/${name}.png`);
+      const relative = `${scenario.dir}/${name}.png`;
+      const committed = `${root}docs/screenshots/${relative}`;
+      const toCommitted = policy.updateAll || policy.update.has(name) || !existsSync(committed);
+      const base = toCommitted ? "docs/screenshots" : "screenshots-out";
+      await mkdir(`${root}${base}/${scenario.dir}`, { recursive: true });
+      await writeFile(`${root}${base}/${relative}`, png);
+      console.log(`  wrote ${base}/${relative}`);
     },
 
     /**
@@ -428,6 +441,20 @@ function makeContext(name, scenario, driver, llm) {
       if (value !== expected)
         throw new Error(`#${id} is ${JSON.stringify(value)}, not ${JSON.stringify(expected)}`);
     },
+    /**
+     * Harness only: makes the duration in a result line ("connection works (14 ms)") stable by
+     * rounding it to a tenth of a second ("(0.3 s)"). Pair it with a fixed delay of the fake server.
+     */
+    async roundDuration(id) {
+      await driver.executeScript(
+        `const element = document.getElementById(arguments[0]);
+         element.textContent = element.textContent.replace(
+           /\\((\\d+(?:\\.\\d+)?) (ms|s)\\)/,
+           (_, n, unit) => "(" + (unit === "ms" ? Number(n) / 1000 : Number(n)).toFixed(1) + " s)",
+         );`,
+        id,
+      );
+    },
     async scrollTo(id) {
       await driver.executeScript("document.getElementById(arguments[0]).scrollIntoView()", id);
     },
@@ -435,10 +462,24 @@ function makeContext(name, scenario, driver, llm) {
   return ctx;
 }
 
+/** Scenario names to run (all when none), and the write policy of the PNGs. */
+function parseArgs(args) {
+  const wanted = [];
+  const policy = { updateAll: false, update: new Set() };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") continue;
+    if (arg === "--update-all") policy.updateAll = true;
+    else if (arg === "--update") policy.update.add(args[++i] ?? "");
+    else wanted.push(arg);
+  }
+  return { wanted, policy };
+}
+
 async function main() {
-  const wanted = process.argv.slice(2).filter((arg) => arg !== "--");
+  const { wanted, policy } = parseArgs(process.argv.slice(2));
   const names = wanted.length > 0 ? wanted : Object.keys(SCENARIOS);
-  const unknown = names.filter((name) => !(name in SCENARIOS));
+  const unknown = [...names, ...policy.update].filter((name) => !(name in SCENARIOS));
   if (unknown.length > 0) {
     console.error(
       `unknown scenario: ${unknown.join(", ")}. Known: ${Object.keys(SCENARIOS).join(", ")}`,
@@ -448,7 +489,12 @@ async function main() {
 
   const zipPath = await buildAndZip();
   const llm = new FakeLLMServer();
-  await llm.start();
+  try {
+    await llm.start(FAKE_LLM_PORT);
+  } catch (err) {
+    console.error(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
   const failures = [];
   try {
     // The colour scheme is a per-profile preference, so each theme gets its own browser.
@@ -467,7 +513,7 @@ async function main() {
           console.log(`scenario ${name}`);
           llm.reset();
           try {
-            const ctx = makeContext(name, SCENARIOS[name], driver, llm);
+            const ctx = makeContext(name, SCENARIOS[name], driver, llm, policy);
             await resetData(ctx);
             await SCENARIOS[name].run(ctx);
           } catch (err) {

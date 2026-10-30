@@ -19,7 +19,7 @@ English Tutor for Firefox is a browser extension that does in Firefox what the d
 - Lint: `npm run lint` (eslint) and `npm run lint:ext` (`web-ext lint -s dist`, after a build)
 - Format: `npm run format` (prettier --write); `npm run format:check` to verify
 - Package: `npm run package` (`web-ext build -s dist`, into `web-ext-artifacts/`)
-- Screenshots: `npm run screenshots` (all scenarios) or `npm run screenshots -- <name>` (one). It drives the built extension in headless Firefox against a fake LLM server and writes PNGs under `docs/screenshots/`
+- Screenshots: `npm run screenshots` (all scenarios) or `npm run screenshots -- <name>` (one). It drives the built extension in headless Firefox against a fake LLM server (fixed port 47811, or `FAKE_LLM_PORT`). It writes a PNG into `docs/screenshots/` only if it does not exist yet, or with `-- --update <name>` (repeatable) or `-- --update-all`; every other PNG goes to the gitignored `screenshots-out/`, so a plain run never changes a committed screenshot
 
 ## Definition of done
 Before reporting a task as finished, run `npm run format:check`, `npm run typecheck`, `npm run lint`, `npm test`, then `npm run build` followed by `npm run lint:ext`, then `npm run screenshots`. Fix anything they report. If any step was skipped or failed, say so explicitly.
