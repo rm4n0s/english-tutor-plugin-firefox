@@ -2520,7 +2520,446 @@ const SCENARIOS = {
         throw new Error("a frame was made without Turn on");
     },
   },
+  // Step 16: the issues dialog of page mode (SPEC section 4.11). It lives in the extension's frame
+  // inside the page, so the harness finds it, its rows and its buttons from the pixels of the
+  // picture, and reads the box itself with scripts.
+  "dialog-issues": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // The badge opens the dialog: the issues of the automatic check on top, the idle explanation
+      // panel below, and the buttons. Nothing is selected, and nothing was recorded.
+      const { bounds, options, tab } = await openedDialog(ctx);
+      const rows = await ctx.dialogRows(bounds);
+      if (rows.length !== 3) throw new Error(`the dialog lists ${rows.length} issues, not 3`);
+      await ctx.dialogButtons(bounds);
+      await ctx.expectNoSelectedBackground("He go", "grammar");
+      await ctx.expectBoxFocused();
+      if ((await recordedIn(ctx, options, tab)).length !== 0) {
+        throw new Error("opening the dialog recorded mistakes");
+      }
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+    },
+  },
+  "dialog-explanation": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // A click on a row selects the issue: it is highlighted in the box (the selected background)
+      // and its explanation streams into the panel. The caret of the box does not move.
+      const { bounds } = await openedDialog(ctx, { explain: explanationFor });
+      const caret = await boxSelection(ctx);
+      await ctx.clickDialogRow(bounds, 1);
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectSelectedBackground("He go", "grammar", { tolerance: 40 });
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const after = await boxSelection(ctx);
+      if (after.start !== caret.start || after.end !== caret.end) {
+        throw new Error(
+          `the caret moved from ${JSON.stringify(caret)} to ${JSON.stringify(after)}`,
+        );
+      }
+      await ctx.waitForPageDialog();
+      await ctx.screenshot();
+    },
+  },
+  "dialog-dark": {
+    theme: "dark",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // The dialog in the dark theme, over a dark page.
+      const { bounds } = await openedDialog(ctx, {
+        page: "textarea-dark.html",
+        explain: explanationFor,
+        dark: true,
+      });
+      await ctx.expectTheme();
+      await ctx.clickDialogRow(bounds, 1, { dark: true });
+      await ctx.waitForLLMRequests(2);
+      await ctx.expectSelectedBackground("He go", "grammar", { dark: true, tolerance: 40 });
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await ctx.waitForPageDialog({ dark: true });
+      await ctx.screenshot();
+    },
+  },
+  "dialog-checking": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // Check in the dialog: the answer is held, so the footer says Checking... and the button is
+      // Cancel. The old rows stay until the result arrives. Cancel then ends it.
+      const { bounds } = await openedDialog(ctx);
+      ctx.llm.setReplies({ ...CHECK_REPLY, delayMs: 120_000 });
+      const requests = ctx.llmRequests();
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(requests + 1);
+      // The picture shows the busy state: Cancel is the button now (still the accent colour).
+      await ctx.waitForBadge("spinner");
+      if ((await ctx.dialogRows(bounds)).length !== 3) throw new Error("the old rows went");
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+      // Cancel: the old issues stay, nothing is recorded, and the badge has its count again.
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForBadge("grammar");
+      if ((await ctx.dialogRows(bounds)).length !== 3) throw new Error("Cancel removed the rows");
+    },
+  },
+  "dialog-no-llm": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No LLM is configured: the badge shows `!`, and the dialog says so, with a link that opens
+      // the options page (the frame cannot do that itself: the background script does).
+      await ctx.open("options.html");
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea-still.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("warning");
+      const { x, y } = await ctx.badgeCenter();
+      await ctx.clickAt(x, y);
+      const bounds = await ctx.waitForPageDialog();
+      if (ctx.llmRequests() !== 0) throw new Error("a request was sent without an LLM");
+      await ctx.stabilise({ keepFocus: true });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await ctx.screenshot();
+      // The link in the panel opens the options page (the background script does it).
+      const link = await ctx.colorCenterIn(
+        {
+          left: bounds.left + 1,
+          top: bounds.top + 200,
+          right: bounds.left + bounds.width - 1,
+          bottom: bounds.top + 260,
+        },
+        LINK_COLOR.light,
+      );
+      const tabs = (await ctx.driver.getAllWindowHandles()).length;
+      await ctx.clickAt(link.x, link.y);
+      // The options page is already open in a tab: Firefox brings that tab to the front.
+      await ctx.expectSelectedUrl("options.html");
+      await ctx.expectTabCount(tabs);
+    },
+  },
+  "dialog-open-in-tutor": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // Open in English Tutor: a new tutor tab, right after the page's tab, holds the text of the
+      // box and checks it (the hand-off of SPEC section 4.1). Nothing is written back to the page.
+      const { bounds, tab } = await openedDialog(ctx);
+      const before = await ctx.driver.getAllWindowHandles();
+      await ctx.clickDialogButton(bounds, 1);
+      await ctx.switchToNewTab(before);
+      await waitForPage(ctx.driver, "tutor.html");
+      await ctx.waitForEditorValue(PAGE_MODE_TEXT);
+      await ctx.waitForText("llm-select", "Fake LLM");
+      await ctx.waitForText("status-state", "3 issues · 2 issues could not be placed");
+      await ctx.expectHandoffEntries(0);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+      // The page's text box has the text it had, and the dialog is still there.
+      await ctx.driver.switchTo().window(tab);
+      const value = await ctx.driver.executeScript("return document.getElementById('box').value");
+      if (value !== PAGE_MODE_TEXT) throw new Error("the text of the page's box changed");
+      await ctx.waitForPageDialog();
+    },
+  },
+  "dialog-check-recorded": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No PNG. The dialog's Check is a manual check: its issues are recorded under the box's
+      // `session:` source, with the LLM's name. The automatic checks before it recorded nothing,
+      // and neither does the next one, and checking the same text again counts nothing twice.
+      const { bounds, options, tab } = await openedDialog(ctx);
+      if ((await recordedIn(ctx, options, tab)).length !== 0) {
+        throw new Error("an automatic check recorded mistakes");
+      }
+      const requests = ctx.llmRequests();
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(requests + 1);
+      await ctx.waitForBadge("grammar");
+      const first = await waitForRecorded(ctx, options, tab, 3);
+      const sources = new Set(first.map((m) => m.source));
+      if (sources.size !== 1 || ![...sources][0].startsWith("session:")) {
+        throw new Error(`the mistakes are recorded under ${[...sources]}`);
+      }
+      if (first.some((m) => m.llm !== "Fake LLM")) throw new Error("the LLM's name is missing");
+      if (
+        first
+          .map((m) => m.type)
+          .sort()
+          .join() !== "collocation,subject_verb_agreement,verb_form"
+      ) {
+        throw new Error(`the types are ${first.map((m) => m.type)}`);
+      }
+      // The rows now have their counts ("x1"): the badge of a manual check's issue.
+      await ctx.stabilise({ keepFocus: true });
+      // The same text again: nothing is counted twice.
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(requests + 2);
+      await ctx.waitForBadge("grammar");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if ((await recordedIn(ctx, options, tab)).length !== 3) throw new Error("counted twice");
+      // An automatic check (the pause in typing) records nothing either.
+      await ctx.typeInBox(" And more words here.");
+      await ctx.waitForLLMRequests(requests + 3);
+      await ctx.waitForBadge("grammar");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if ((await recordedIn(ctx, options, tab)).length !== 3) {
+        throw new Error("an automatic check recorded mistakes");
+      }
+    },
+  },
+  "dialog-not-an-error": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No PNG. Not an error in the dialog (SPEC section 5.7): after the dialog's Check recorded the
+      // three mistakes, marking "make a photo" deletes its event and puts the pair in the ignore set
+      // under the box's source; its row and its underline go at once, and checking the same text
+      // again does not record it a second time.
+      const { bounds, options, tab } = await openedDialog(ctx, { explain: explanationFor });
+      const requests = ctx.llmRequests();
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(requests + 1);
+      await waitForRecorded(ctx, options, tab, 3);
+      await ctx.waitForBadge("grammar");
+      await ctx.clickDialogRow(bounds, 2);
+      await ctx.waitForLLMRequests(requests + 2);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Tab from the list: the explanation's text, then Not an error.
+      await ctx.pressKeys(Key.TAB, Key.TAB, Key.ENTER);
+      await ctx.driver.wait(
+        async () => (await ctx.dialogRows(bounds)).length === 2,
+        PAGE_TIMEOUT_MS,
+        "the row of the issue never went",
+      );
+      await ctx.expectNoUnderlineUnder("make a photo", "vocabulary");
+      await waitForRecorded(ctx, options, tab, 2);
+      await ctx.driver.switchTo().window(options);
+      const ignored = await ctx.sessionKeys("ignore:session:");
+      await ctx.driver.switchTo().window(tab);
+      if (ignored.length !== 1) throw new Error(`the ignore set holds ${JSON.stringify(ignored)}`);
+      // The same text again: the ignored mistake is not recorded, the other two are not counted twice.
+      await ctx.clickDialogButton(bounds, 0);
+      await ctx.waitForLLMRequests(requests + 3);
+      await ctx.waitForBadge("grammar");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const recorded = await recordedIn(ctx, options, tab);
+      if (recorded.length !== 2 || recorded.some((m) => m.type === "collocation")) {
+        throw new Error(`the recorded mistakes are ${JSON.stringify(recorded)}`);
+      }
+    },
+  },
+  "dialog-close": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No PNG. Close, Escape (with the focus in the box and in the dialog), and the badge close
+      // it, and the box keeps or gets back its focus.
+      const { bounds } = await openedDialog(ctx);
+      // The Close button.
+      await ctx.clickDialogButton(bounds, 2);
+      await ctx.waitForNoPageDialog();
+      await ctx.expectBoxFocused();
+      // The badge opens it again, and closes it again.
+      const badge = await ctx.badgeCenter();
+      await ctx.clickAt(badge.x, badge.y);
+      await ctx.waitForPageDialog();
+      await ctx.clickAt(badge.x, badge.y);
+      await ctx.waitForNoPageDialog();
+      // Escape while the focus is in the box.
+      await ctx.clickAt(badge.x, badge.y);
+      await ctx.waitForPageDialog();
+      await ctx.expectBoxFocused();
+      await ctx.pressKeys(Key.ESCAPE);
+      await ctx.waitForNoPageDialog();
+      await ctx.expectBoxFocused();
+      // Escape while the focus is in the dialog (a row was clicked): the box gets the focus back.
+      await ctx.clickAt(badge.x, badge.y);
+      await ctx.waitForPageDialog();
+      await ctx.clickDialogRow(bounds, 0);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await ctx.pressKeys(Key.ESCAPE);
+      await ctx.waitForNoPageDialog();
+      await ctx.expectBoxFocused();
+      await ctx.expectNoSelectedBackground("I seen", "grammar");
+    },
+  },
+  "dialog-row-scrolls": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No PNG. A box of five lines with twelve lines of text: selecting the row of an issue that
+      // is below the box's edge scrolls the box to it, selecting one above scrolls back, and the
+      // caret and the selection of the box stay where they were.
+      const { bounds } = await openedDialog(ctx, {
+        page: "textarea-long.html",
+        reply: LONG_REPLY,
+        explain: explanationFor,
+      });
+      await ctx.driver.executeScript(
+        `const box = document.getElementById("box");
+         box.setSelectionRange(5, 9);
+         box.scrollTop = 0;`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const caret = await boxSelection(ctx);
+      if ((await boxScrollTop(ctx)) !== 0) throw new Error("the box did not start at its top");
+      // "make a photo" is the third row, below the box's edge.
+      await ctx.expectNoUnderlineUnder("make a photo", "vocabulary");
+      await ctx.clickDialogRow(bounds, 2);
+      await ctx.driver.wait(
+        async () => (await boxScrollTop(ctx)) > 20,
+        PAGE_TIMEOUT_MS,
+        "the box never scrolled",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      // The dashed underline can end a few pixels short of the word (the last dash), so what is
+      // checked is the selected background, which is drawn behind the whole word.
+      await ctx.expectSelectedBackground("make a photo", "vocabulary", { tolerance: 40 });
+      await expectWordInBox(ctx, "make a photo");
+      // The first row: back to the top.
+      const scrolled = await boxScrollTop(ctx);
+      await ctx.clickDialogRow(bounds, 0);
+      await ctx.driver.wait(
+        async () => (await boxScrollTop(ctx)) < scrolled,
+        PAGE_TIMEOUT_MS,
+        "the box never scrolled back",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await expectWordInBox(ctx, "sister seen");
+      const after = await boxSelection(ctx);
+      if (after.start !== caret.start || after.end !== caret.end) {
+        throw new Error(
+          `the selection moved from ${JSON.stringify(caret)} to ${JSON.stringify(after)}`,
+        );
+      }
+    },
+  },
+  "dialog-all-issues": {
+    theme: "light",
+    dir: "step-16-page-dialog",
+    async run(ctx) {
+      // No PNG. All issues in the popover closes the card and opens the dialog with the same issue
+      // selected; and a click in an underline closes the dialog and opens the card (only one of the
+      // two is open at a time).
+      ctx.llm.setReplies((request) =>
+        isExplainRequest(request) ? explanationFor(request) : CHECK_REPLY,
+      );
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.turnOnPageMode();
+      await ctx.openPageModePage("textarea-still.html");
+      await ctx.focusBox();
+      await ctx.waitForBadge("grammar");
+      const [heGo] = await ctx.wordRects("He go");
+      const [iSeen] = await ctx.wordRects("I seen");
+      await ctx.clickWord("He go");
+      const card = await ctx.waitForPopover(heGo);
+      await ctx.waitForLLMRequests(2);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The card's keyboard order: the text, its link, Not an error, Regenerate, All issues.
+      await ctx.clickCardHeader(card, heGo);
+      await ctx.pressKeys(Key.TAB, Key.TAB, Key.TAB, Key.TAB, Key.TAB, Key.ENTER);
+      const bounds = await ctx.waitForPageDialog();
+      await ctx.waitForNoPopover(heGo);
+      // The issue of the card is selected in the dialog and in the box.
+      await ctx.expectSelectedBackground("He go", "grammar", { tolerance: 40 });
+      const rows = await ctx.dialogRows(bounds);
+      if (rows.length !== 3) throw new Error(`the dialog lists ${rows.length} issues`);
+      // A click in another underline: the card opens, the dialog closes.
+      await ctx.clickWord("I seen");
+      await ctx.waitForPopover(iSeen);
+      await ctx.waitForNoPageDialog();
+    },
+  },
 };
+
+/** The colour of the link in the explanation panel and the no-LLM hint (`--accent`, light). */
+const LINK_COLOR = { light: [0x0b, 0x5c, 0xad] };
+
+/**
+ * A page-mode text box that has been checked, with the issues dialog opened from its badge.
+ * `reply` is the answer to the check, `explain` the answer to an explanation request. Returns where
+ * the dialog is, and the handles of the options tab (which has the database) and the page's tab.
+ */
+async function openedDialog(
+  ctx,
+  { page = "textarea-still.html", reply = CHECK_REPLY, explain = EXPLAIN_REPLY, dark = false } = {},
+) {
+  ctx.llm.setReplies((request) =>
+    isExplainRequest(request)
+      ? typeof explain === "function"
+        ? explain(request)
+        : explain
+      : reply,
+  );
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.turnOnPageMode();
+  const options = await ctx.driver.getWindowHandle();
+  await ctx.openPageModePage(page);
+  const tab = await ctx.driver.getWindowHandle();
+  await ctx.focusBox();
+  await ctx.waitForBadge("grammar");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const { x, y } = await ctx.badgeCenter();
+  await ctx.clickAt(x, y);
+  const bounds = await ctx.waitForPageDialog({ dark });
+  return { bounds, options, tab };
+}
+
+/** The recorded mistakes, read from the options tab; the page's tab is selected again after. */
+async function recordedIn(ctx, options, tab) {
+  await ctx.driver.switchTo().window(options);
+  try {
+    return await ctx.recordedMistakes();
+  } finally {
+    await ctx.driver.switchTo().window(tab);
+  }
+}
+
+/** Waits until `count` mistakes are recorded, and returns them. */
+async function waitForRecorded(ctx, options, tab, count) {
+  let found = [];
+  await ctx.driver.wait(
+    async () => {
+      found = await recordedIn(ctx, options, tab);
+      return found.length === count;
+    },
+    PAGE_TIMEOUT_MS,
+    "the mistakes were never recorded",
+  );
+  return found;
+}
+
+/** The selection of the text box of the page (`{ start, end }`). */
+async function boxSelection(ctx, id = "box") {
+  return ctx.driver.executeScript(
+    "const b = document.getElementById(arguments[0]); return { start: b.selectionStart, end: b.selectionEnd };",
+    id,
+  );
+}
+
+async function boxScrollTop(ctx, id = "box") {
+  return ctx.driver.executeScript("return document.getElementById(arguments[0]).scrollTop", id);
+}
+
+/** Fails unless the first line of `snippet` is inside the text box's visible area. */
+async function expectWordInBox(ctx, snippet, id = "box") {
+  const [rect] = await ctx.wordRects(snippet, id);
+  const box = await ctx.driver.executeScript(
+    `const r = document.getElementById(arguments[0]).getBoundingClientRect();
+     return { top: r.top, bottom: r.bottom };`,
+    id,
+  );
+  if (rect === undefined || rect.top < box.top || rect.bottom > box.bottom) {
+    throw new Error(`"${snippet}" is not inside the box: ${JSON.stringify({ rect, box })}`);
+  }
+}
 
 /** The fake LLM's answer when the text has no mistake. */
 const NO_ISSUES_REPLY = {
@@ -4889,6 +5328,164 @@ function makeContext(name, scenario, driver, llm, policy, folders) {
       const gap = found.side === "below" ? found.top - anchor.bottom : anchor.top - found.bottom;
       if (gap < 3 || gap > 10) throw new Error(`the card is ${gap}px from the underline`);
       return found;
+    },
+    /**
+     * Where the issues dialog should be for the text box with this id (SPEC section 4.11): 440 by
+     * 520 px, to the right of the box with 8 px between them (these test pages have room there),
+     * its top lined up with the box's and kept 8 px inside the window.
+     */
+    async expectedDialog(id = "box") {
+      const rect = await driver.executeScript(
+        `const r = document.getElementById(arguments[0]).getBoundingClientRect();
+         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`,
+        id,
+      );
+      const left = Math.round(rect.right + 8);
+      const top = Math.round(Math.min(Math.max(rect.top, 8), HEIGHT - 520 - 8));
+      return { left, top, width: 440, height: 520, box: rect };
+    },
+    /**
+     * The dialog's border, read from the picture: the frame's border colour along its top and its
+     * bottom row, clear of the rounded corners, 519 rows apart. Returns where it is, or undefined.
+     */
+    async dialogBounds({ id = "box", dark = false } = {}) {
+      const expected = await ctx.expectedDialog(id);
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const border = dark ? [0x3d, 0x42, 0x4a] : [0xc9, 0xce, 0xd6];
+      const rowIsBorder = (y) => {
+        for (let x = expected.left + 40; x < expected.left + 120; x++) {
+          if (!closeTo(png.pixel(x, y), border, 6)) return false;
+        }
+        return true;
+      };
+      return rowIsBorder(expected.top) && rowIsBorder(expected.top + expected.height - 1)
+        ? expected
+        : undefined;
+    },
+    /** Waits until the dialog is drawn where it belongs, and returns where that is. */
+    async waitForPageDialog(options = {}) {
+      let found;
+      await driver.wait(
+        async () => {
+          found = await ctx.dialogBounds(options);
+          return found !== undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        "the issues dialog never showed",
+      );
+      return found;
+    },
+    /** Waits until nothing is drawn where the dialog was. */
+    async waitForNoPageDialog(options = {}) {
+      await driver.wait(
+        async () => (await ctx.dialogBounds(options)) === undefined,
+        PAGE_TIMEOUT_MS,
+        "the issues dialog never closed",
+      );
+    },
+    /**
+     * The centres of the rows of the dialog's list, found from the round category markers (22 px,
+     * in the colour of the category) in the column where the markers are. Top to bottom.
+     */
+    async dialogRows(bounds, { dark = false } = {}) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const colors = Object.values(UNDERLINE_PALETTE[dark ? "dark" : "light"]);
+      // A column near the edge of the circles, clear of the white letter in their middle.
+      const x = bounds.left + 17;
+      const rows = [];
+      let start;
+      for (let y = bounds.top; y < bounds.top + 280; y++) {
+        const marker = colors.some((c) => closeTo(png.pixel(x, y), c, 6));
+        if (marker && start === undefined) start = y;
+        if (!marker && start !== undefined) {
+          if (y - start >= 10) rows.push({ x: bounds.left + 24, y: Math.round((start + y) / 2) });
+          start = undefined;
+        }
+      }
+      return rows;
+    },
+    /** Clicks row `n` (from 0) of the dialog's list, as the user does. */
+    async clickDialogRow(bounds, n, options = {}) {
+      const rows = await ctx.dialogRows(bounds, options);
+      const row = rows[n];
+      if (row === undefined) throw new Error(`the dialog has ${rows.length} rows, not ${n + 1}`);
+      await ctx.clickAt(row.x + 60, row.y);
+    },
+    /**
+     * The centres of the three buttons of the dialog's footer (Check, Open in English Tutor, Close):
+     * along the row of the buttons, a button is a stretch of pixels that are not the footer's own
+     * colour, and the gap between two buttons is the footer's colour.
+     */
+    async dialogButtons(bounds, { dark = false } = {}) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      const footer = dark ? [0x23, 0x26, 0x2b] : [0xf3, 0xf4, 0xf6];
+      const y = bounds.top + bounds.height - 22;
+      const segments = [];
+      let start;
+      for (let x = bounds.left + 4; x < bounds.left + bounds.width - 4; x++) {
+        const inButton = !closeTo(png.pixel(x, y), footer, 3);
+        if (inButton && start === undefined) start = x;
+        if (!inButton && start !== undefined) {
+          segments.push([start, x - 1]);
+          start = undefined;
+        }
+      }
+      // A pixel of a letter's edge can look like the footer: gaps narrower than the 6 px between
+      // two buttons belong to the button.
+      for (let i = segments.length - 1; i > 0; i--) {
+        if (segments[i][0] - segments[i - 1][1] < 5) {
+          segments[i - 1][1] = segments[i][1];
+          segments.splice(i, 1);
+        }
+      }
+      segments.splice(0, segments.length, ...segments.filter(([from, to]) => to - from >= 30));
+      if (segments.length !== 3) {
+        throw new Error(
+          `the dialog's footer has ${segments.length} buttons, not 3: ${JSON.stringify(segments)}`,
+        );
+      }
+      return segments.map(([from, to]) => ({ x: Math.round((from + to) / 2), y }));
+    },
+    /**
+     * The middle of the pixels of this colour inside `region` (`{ left, top, right, bottom }`), for
+     * a small control such as a link, whose text has fewer pixels than `waitForColor` wants.
+     */
+    async colorCenterIn(region, rgb, { tolerance = 30, minimum = 20 } = {}) {
+      const png = decodePng(Buffer.from(await driver.takeScreenshot(), "base64"));
+      let sumX = 0;
+      let sumY = 0;
+      let n = 0;
+      for (let y = region.top; y < region.bottom; y++) {
+        for (let x = region.left; x < region.right; x++) {
+          if (closeTo(png.pixel(x, y), rgb, tolerance)) {
+            sumX += x;
+            sumY += y;
+            n++;
+          }
+        }
+      }
+      if (n < minimum)
+        throw new Error(`only ${n} pixels of ${String(rgb)} in ${JSON.stringify(region)}`);
+      return { x: Math.round(sumX / n), y: Math.round(sumY / n) };
+    },
+    /** Clicks a footer button of the dialog: 0 is Check or Cancel, 1 Open in English Tutor, 2 Close. */
+    async clickDialogButton(bounds, n, options = {}) {
+      const button = (await ctx.dialogButtons(bounds, options))[n];
+      await ctx.clickAt(button.x, button.y);
+    },
+    /** The recorded mistakes (the rows of `error_events`), read from the options page's database. */
+    async recordedMistakes() {
+      return driver.executeAsyncScript(
+        `const done = arguments[arguments.length - 1];
+         const open = indexedDB.open("english-tutor");
+         open.onsuccess = () => {
+           const all = open.result.transaction("error_events").objectStore("error_events").getAll();
+           all.onsuccess = () => {
+             open.result.close();
+             done(all.result.map((e) => ({ source: e.source_key, type: e.error_type, llm: e.llm_name })));
+           };
+         };`,
+      );
     },
     /** Fails unless the text box still has the keyboard focus (the popover never takes it). */
     async expectBoxFocused(id = "box") {

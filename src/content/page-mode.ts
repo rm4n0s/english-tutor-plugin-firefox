@@ -76,6 +76,7 @@ export class PageModeContent {
   private promptShown = false;
   private stopListening: (() => void) | undefined;
   private asks = 0;
+
   constructor(deps: PageModeContentDeps) {
     this.deps = deps;
     this.win = deps.win;

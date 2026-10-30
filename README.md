@@ -13,6 +13,7 @@ It is the Firefox version of the desktop app [English Tutor](https://github.com/
 - **Suggests alternatives.** Select a word, a sentence or a paragraph, right-click and choose **Alternative**.
 - **Counts your mistakes.** Every manual check is counted by error type, so the **Stats** dialog shows what to work on. A text checked twice is counted once.
 - **Checks text from any page.** Select text on a web page, right-click, and choose **English Tutor**, then **Check with English Tutor** or **Alternatives with English Tutor**.
+- **Checks text boxes on web pages, in place.** Turn on [page mode](#page-mode) for a site and it underlines the errors in the text boxes you write in, with a badge, an explanation on a click, and a dialog with all the issues.
 - **Keeps your texts.** Open and save text files, or keep texts in a library inside the extension. A tab keeps its text when you reload it.
 
 ![Alternatives for a selected phrase](docs/screenshots/step-10-alternatives/alternatives-ready.png)
@@ -82,7 +83,31 @@ Small local models sometimes answer in a form the extension cannot read. It retr
 
 ### Page mode
 
-Page mode (checking the text boxes of web pages in place) comes in a later version.
+Page mode does in a web page's text boxes what the editor does: it underlines the errors in the box, shows a badge with their number, explains one when you click it, and has a dialog with the list of issues and their explanations. It is off everywhere until you turn it on, because it sends what you type to your LLM.
+
+![Page mode: the issues dialog next to a text box on a web page](docs/screenshots/step-16-page-dialog/dialog-explanation.png)
+
+**Turning it on.**
+
+1. Allow it once. On the welcome page that opens when you install the extension, press **Allow** under "Offer to check what you write on websites". Later you can tick **Offer to check text boxes on websites** in **Prefs**, under **General**. Firefox asks for access to all websites; this only lets English Tutor see which site a tab shows. It reads nothing yet.
+2. The first time you click into a text box on a site, a small card asks about that site: **Turn on**, **Not now** or **Never on this site**. **Turn on** starts checking at once. **Not now** asks again after Firefox restarts. **Never on this site** stops asking. Each host name is its own site (`mail.example.com` and `docs.example.com` are asked separately).
+
+**Using it.**
+
+- Click into a text box with at least three words. It is checked, and a round badge appears at its bottom right corner: a spinner while checking, the number of errors, a check mark for none, or `!` when something is wrong (no LLM, a failed check, a text over 10,000 words).
+- Errors are underlined in the box as in the editor. Click an underlined error to see its explanation next to it, with **Not an error**, **Regenerate** and **All issues**. `Escape`, a click elsewhere or typing closes it.
+- Click the badge (or **All issues**) to open the dialog: the issues on top, the explanation of the selected one below. Selecting a row highlights the error in the text box and scrolls to it, without moving your cursor. **Check** runs a check that counts, **Open in English Tutor** sends the box's text to the editor in a new tab, and **Close** (or `Escape`) closes it. English Tutor never writes a correction into the page: you fix the text yourself.
+- With no LLM set up, the badge shows `!`, and the dialog says so with a link to **Prefs**.
+
+**What is sent, and what is never read.**
+
+- Only text boxes on sites you turned on are read, only after you click into them, and the text goes only to the LLM you configured. A site that is not turned on gets nothing read and nothing sent.
+- These are never read: password, email, URL, search, number and other non-text fields, fields that browsers fill with passwords, one-time codes or card details, read-only and disabled fields, fields with `spellcheck="false"` (code editors and terminals), anything inside an element marked `data-english-tutor="off"`, and boxes too small to write in.
+- Checks that start by themselves (when you click into a box, and when you stop typing) are **not counted** in your statistics. Only the dialog's **Check** is counted, like **Check** in the editor.
+
+**Changing your mind.** The toolbar button's menu (right-click it) has an entry for the page you are on: **Turn off on example.com** or **Turn on on example.com**. **Prefs** lists every site you made a choice for, with **Remove** to be asked again, and unticking **Offer to check text boxes on websites** turns page mode off everywhere and gives the access back.
+
+Some sites keep the extension's panel from showing (for example a page with `Content-Security-Policy: sandbox`). The badge then shows `!`, and its card has **Open in English Tutor**, which opens the box's text in the editor.
 
 ## Keyboard shortcuts
 
@@ -102,7 +127,7 @@ On a Mac, `Cmd` replaces `Ctrl`.
 - The text you check is sent to **the LLM you configured**, and only when you check it, ask for an explanation, or ask for alternatives (or when auto-check runs). The options page tells you when that server is not on your own computer. Nothing is sent anywhere else: no analytics, no accounts, no update pings of ours.
 - Everything else stays in your Firefox profile and is deleted when you uninstall the extension: your LLM settings, your library, and your mistake statistics.
 - **API keys are stored unencrypted** in your Firefox profile. Anyone who can read the profile can read them. Use a key with a spending limit.
-- The extension asks Firefox for access to one address at a time: the server of each LLM you add. It does not read the web pages you visit. The text of a web page selection goes through the extension's own storage to the editor tab, never through the address bar or the history.
+- The extension asks Firefox for access to one address at a time: the server of each LLM you add. It does not read the web pages you visit. The one exception is page mode, which you turn on yourself: it needs access to all websites once, reads nothing on a site until you say yes to it, and then reads only the text boxes you click into (see [Page mode](#page-mode)). The text of a web page selection goes through the extension's own storage to the editor tab, never through the address bar or the history.
 - Logs never contain your text, the model's replies or your keys.
 
 ## Development
@@ -139,5 +164,5 @@ Before a release, load the extension with `npm run start`, configure a real LLM,
 9. **Web page menu.** Select text on a web page: **English Tutor**, **Check with English Tutor** opens a new tab and checks it, and **Alternatives with English Tutor** opens the panel. Reload the new tab: the text is still there and the address has no fragment.
 10. **Permission.** Add an LLM: Firefox asks for the server's address. Refuse it once and check: the banner offers **Grant access**.
 11. **Notification.** Start a check, switch to another tab: a notification says the check is finished, and clicking it brings the tab back.
-12. **Page mode.** (Later versions) In a plain `<textarea>`, a `contenteditable` editor and a site with a strict Content Security Policy.
+12. **Page mode.** Allow it on the welcome page, then on a plain `<textarea>`, a `contenteditable` editor and a site with a strict Content Security Policy: the prompt (Turn on, Not now, Never), the badge, the underlines, the explanation on a click, and the dialog from the badge. Select rows (the box scrolls, the cursor does not move), press **Check** (the Stats dialog counts it, an automatic check is not counted), **Open in English Tutor**, and `Escape`. Password and email fields never get a badge.
 13. **Look.** Light and dark themes, custom fonts in **Prefs**, and a narrow window (under 800 px the results move under the editor).
