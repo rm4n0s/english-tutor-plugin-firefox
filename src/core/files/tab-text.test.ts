@@ -36,21 +36,36 @@ describe("TabText", () => {
   it.each<{ name: string; steps: Step[]; unsaved: boolean; dirty: boolean; title: string }>([
     {
       name: "an edit",
-      steps: [(t) => t.edited("Hello")],
+      steps: [
+        (t) => {
+          t.edited("Hello");
+        },
+      ],
       unsaved: true,
       dirty: true,
       title: "Untitled* – English Tutor",
     },
     {
       name: "an edit to white space only",
-      steps: [(t) => t.edited("  \n ")],
+      steps: [
+        (t) => {
+          t.edited("  \n ");
+        },
+      ],
       unsaved: false,
       dirty: true,
       title: "Untitled – English Tutor",
     },
     {
       name: "an edit, then a save",
-      steps: [(t) => t.edited("Hello"), (t) => t.saved()],
+      steps: [
+        (t) => {
+          t.edited("Hello");
+        },
+        (t) => {
+          t.saved();
+        },
+      ],
       unsaved: false,
       dirty: false,
       title: "Untitled – English Tutor",
@@ -58,7 +73,9 @@ describe("TabText", () => {
     {
       name: "a loaded text",
       steps: [
-        (t) => t.loaded({ name: "essay", documentId: undefined, lineEnding: "crlf" }, "Hello"),
+        (t) => {
+          t.loaded({ name: "essay", documentId: undefined, lineEnding: "crlf" }, "Hello");
+        },
       ],
       unsaved: false,
       dirty: false,
@@ -67,8 +84,12 @@ describe("TabText", () => {
     {
       name: "a loaded text, then an edit",
       steps: [
-        (t) => t.loaded({ name: "essay", documentId: 3, lineEnding: "lf" }, "Hello"),
-        (t) => t.edited("Hello!"),
+        (t) => {
+          t.loaded({ name: "essay", documentId: 3, lineEnding: "lf" }, "Hello");
+        },
+        (t) => {
+          t.edited("Hello!");
+        },
       ],
       unsaved: true,
       dirty: true,
@@ -76,14 +97,28 @@ describe("TabText", () => {
     },
     {
       name: "an edit, then a new text",
-      steps: [(t) => t.edited("Hello"), (t) => t.loaded(NEW_TEXT, "")],
+      steps: [
+        (t) => {
+          t.edited("Hello");
+        },
+        (t) => {
+          t.loaded(NEW_TEXT, "");
+        },
+      ],
       unsaved: false,
       dirty: false,
       title: "Untitled – English Tutor",
     },
     {
       name: "an edit that empties the text",
-      steps: [(t) => t.edited("Hello"), (t) => t.edited("")],
+      steps: [
+        (t) => {
+          t.edited("Hello");
+        },
+        (t) => {
+          t.edited("");
+        },
+      ],
       unsaved: false,
       dirty: true,
       title: "Untitled – English Tutor",
@@ -91,7 +126,9 @@ describe("TabText", () => {
     {
       name: "a restored dirty text",
       steps: [
-        (t) => t.loaded({ name: undefined, documentId: undefined, lineEnding: "lf" }, "x", true),
+        (t) => {
+          t.loaded({ name: undefined, documentId: undefined, lineEnding: "lf" }, "x", true);
+        },
       ],
       unsaved: true,
       dirty: true,
@@ -99,7 +136,14 @@ describe("TabText", () => {
     },
     {
       name: "a rename of a dirty text",
-      steps: [(t) => t.edited("Hello"), (t) => t.rename("renamed")],
+      steps: [
+        (t) => {
+          t.edited("Hello");
+        },
+        (t) => {
+          t.rename("renamed");
+        },
+      ],
       unsaved: true,
       dirty: true,
       title: "renamed* – English Tutor",

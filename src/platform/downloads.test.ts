@@ -8,7 +8,12 @@ interface Delta {
   error?: { current: string };
 }
 
-type Item = { id: number; state: string; filename: string; error?: string };
+interface Item {
+  id: number;
+  state: string;
+  filename: string;
+  error?: string;
+}
 
 interface Script {
   /** What `downloads.download` does. */

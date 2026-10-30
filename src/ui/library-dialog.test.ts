@@ -75,7 +75,7 @@ const q = (selector: string): HTMLElement => {
 };
 const all = (selector: string) => [...host.querySelectorAll<HTMLElement>(selector)];
 const click = (el: HTMLElement) => el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-const row = (n: number) => all(".library-row")[n - 1] as HTMLElement;
+const row = (n: number) => all(".library-row")[n - 1]!;
 const inRow = (n: number, selector: string) => {
   const found = row(n).querySelector<HTMLElement>(selector);
   if (found === null) throw new Error(`row ${String(n)} has no ${selector}`);
