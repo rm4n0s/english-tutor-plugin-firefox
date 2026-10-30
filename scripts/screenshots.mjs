@@ -15,7 +15,9 @@
 // PNG under docs/screenshots/. The run exits with 1, after printing the reason, if one fails.
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Browser, Builder, By, Key, until } from "selenium-webdriver";
@@ -957,6 +959,301 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "open-file": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      // A file as Windows writes it: a BOM and CRLF line breaks. The test file is written into a
+      // temporary folder and its path is sent to the page's file input.
+      await openTutorEmpty(ctx);
+      const path = await ctx.writeTestFile("Weekend letter.txt", LETTER_FILE);
+      await ctx.chooseFile(path);
+      await ctx.waitForEditorValue(LETTER);
+      await ctx.expectTitle("Weekend letter – English Tutor");
+      await ctx.waitForText("status-words", `${LETTER.split(/\s+/).length} words`);
+      // Nothing is unsaved after an Open, and the buttons that need a text are enabled.
+      await ctx.expectEnabled("save");
+      await ctx.expectEnabled("save-as");
+      await ctx.expectEnabled("save-to-library");
+      await ctx.expectEnabled("copy");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "open-failed": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openTutorEmpty(ctx);
+      await ctx.fill("editor", "My own text stays.");
+      // A file in Latin-1 (the e-acute is the single byte E9): not valid UTF-8.
+      const path = await ctx.writeTestFile(
+        "Old letter.txt",
+        Buffer.from("Caf\xe9 notes", "latin1"),
+      );
+      await ctx.chooseFile(path);
+      await ctx.waitForVisible("banner");
+      await ctx.expectText("banner", "not valid UTF-8");
+      // Nothing was replaced and nothing was asked: the text, the tab title and the unsaved flag.
+      await ctx.waitForEditorValue("My own text stays.");
+      await ctx.waitForNoDialog("unsaved-dialog");
+      await ctx.expectTitle("Untitled* – English Tutor");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "save-download": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openTutorEmpty(ctx);
+      await ctx.chooseFile(await ctx.writeTestFile("Weekend letter.txt", LETTER_FILE));
+      await ctx.waitForEditorValue(LETTER);
+      await ctx.fill("editor", `${LETTER}\nP.S. See you soon.`);
+      await ctx.expectTitle("Weekend letter* – English Tutor");
+      // Save: a real download into the (temporary) downloads folder, without a dialog.
+      await ctx.click("save");
+      await ctx.expectTitle("Weekend letter – English Tutor");
+      const saved = await ctx.takeDownload("Weekend letter.txt");
+      const expected = Buffer.from(`${LETTER}\nP.S. See you soon.`.replace(/\n/g, "\r\n"));
+      if (!saved.equals(expected)) {
+        throw new Error(`the saved file is ${JSON.stringify(saved.toString())}, not the CRLF text`);
+      }
+      await ctx.expectNoBanner();
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "save-as-failed": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      // Save As asks the browser for its native "save file" dialog. A screenshot cannot capture
+      // that dialog, and headless Firefox has no file picker: `downloads.download({ saveAs: true })`
+      // fails there with "An unexpected error occurred". So this scenario shows the real failure
+      // (FileWriteFailed) in the page: the banner, with the text still unsaved. The cancelled-dialog
+      // path is covered by unit tests, because the browser cannot be made to cancel a dialog here.
+      await openTutorEmpty(ctx);
+      await ctx.fill("editor", LETTER);
+      await ctx.click("save-as");
+      await ctx.waitForVisible("banner");
+      await ctx.expectText("banner", "The browser could not save the file.");
+      await ctx.expectTitle("Untitled* – English Tutor");
+      if ((await readdir(ctx.folders.downloads)).length !== 0) {
+        throw new Error("Save As wrote a file although the picker failed");
+      }
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  copied: {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openTutorWithText(ctx, LETTER);
+      await ctx.click("copy");
+      await ctx.waitForText("status-state", "Copied");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+      // The whole text, with its line breaks, is on the clipboard.
+      await ctx.expectClipboardPasted(LETTER);
+    },
+  },
+  "save-to-library": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await checkedLetter(ctx);
+      await ctx.click("save-to-library");
+      await ctx.waitForDialog("title-dialog");
+      // The default title is the first line.
+      await ctx.expectValue("title-input", "Dear Anna,");
+      await ctx.expectText("title-heading", "Save to library");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // Confirming stores the document, names the tab, and moves the mistakes of the session to it,
+      // so checking the saved text again counts nothing twice.
+      await ctx.keys("title-input", Key.ENTER);
+      await ctx.waitForNoDialog("title-dialog");
+      await ctx.expectTitle("Dear Anna, – English Tutor");
+      await ctx.click("check");
+      await ctx.driver.wait(() => ctx.llm.requests.length >= 2, PAGE_TIMEOUT_MS);
+      await ctx.waitForText("check", "Check");
+      await ctx.waitForText("status-state", "3 issues");
+      await ctx.waitForBadges(["x1", "x1", "x1"]);
+      await ctx.click("stats");
+      await ctx.waitForVisible("stats-dialog");
+      await ctx.waitForCount("#stats-rows .stats-row", 3);
+      await ctx.expectStatsRows([
+        ["Subject-verb agreement", "Grammar", "1"],
+        ["Verb form", "Grammar", "1"],
+        ["Word order", "Syntax", "1"],
+      ]);
+    },
+  },
+  library: {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openLibraryWithThreeDocuments(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // Open: the text, its title and its line ending come back; the dialog closes.
+      await ctx.click("library-list", '.library-row[data-title="Weekend letter"] .library-open');
+      await ctx.waitForNoDialog("library-dialog");
+      await ctx.waitForEditorValue(LETTER);
+      await ctx.expectTitle("Weekend letter – English Tutor");
+
+      // Rename the open document: the tab title follows.
+      await ctx.click("library");
+      await ctx.waitForCount("#library-list .library-row", 3);
+      await ctx.click("library-list", '.library-row[data-title="Weekend letter"] .library-rename');
+      await ctx.waitForDialog("title-dialog");
+      await ctx.expectText("title-heading", "Rename");
+      await ctx.fill("title-input", "Letter to Anna", Key.ENTER);
+      await ctx.waitForNoDialog("title-dialog");
+      await ctx.expectTitle("Letter to Anna – English Tutor");
+      await ctx.waitForCount('#library-list .library-row[data-title="Letter to Anna"]', 1);
+    },
+  },
+  "library-dark": {
+    theme: "dark",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openLibraryWithThreeDocuments(ctx);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "library-delete-confirm": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openLibraryWithThreeDocuments(ctx);
+      await ctx.click(
+        "library-list",
+        '.library-row[data-title="Notes about school"] .library-delete',
+      );
+      await ctx.waitForVisible("library-confirm");
+      await ctx.expectText("library-confirm", "Delete “Notes about school” from the library?");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // Cancel keeps it; Delete removes it.
+      await ctx.click("library-delete-cancel");
+      await ctx.waitForCount("#library-list .library-row", 3);
+      await ctx.click(
+        "library-list",
+        '.library-row[data-title="Notes about school"] .library-delete',
+      );
+      await ctx.click("library-delete-ok");
+      await ctx.waitForCount("#library-list .library-row", 2);
+      await ctx.expectNoText("library-list", "Notes about school");
+
+      // Deleting the open document detaches it: the next Save to library creates a new one, and
+      // proposes the same title.
+      await ctx.click("library-list", '.library-row[data-title="Weekend letter"] .library-open');
+      await ctx.waitForNoDialog("library-dialog");
+      await ctx.expectTitle("Weekend letter – English Tutor");
+      await ctx.click("library");
+      await ctx.waitForCount("#library-list .library-row", 2);
+      await ctx.click("library-list", '.library-row[data-title="Weekend letter"] .library-delete');
+      await ctx.click("library-delete-ok");
+      await ctx.waitForCount("#library-list .library-row", 1);
+      await ctx.click("library-close");
+      await ctx.waitForNoDialog("library-dialog");
+      await ctx.click("save-to-library");
+      await ctx.waitForDialog("title-dialog");
+      await ctx.expectValue("title-input", "Weekend letter");
+    },
+  },
+  "unsaved-changes": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await openTutorWithText(ctx, LETTER);
+      await ctx.click("new");
+      await ctx.waitForDialog("unsaved-dialog");
+      await ctx.expectText("unsaved-message", "This text has changes that are not saved.");
+      await ctx.expectText("unsaved-hint", "Save downloads the text as a file.");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // Cancel keeps the text.
+      await ctx.click("unsaved-cancel");
+      await ctx.waitForNoDialog("unsaved-dialog");
+      await ctx.waitForEditorValue(LETTER);
+      // Save of a text without a name needs Save As, which cannot work in headless Firefox (see
+      // save-as-failed): a failed save cancels the action, so the text stays.
+      await ctx.click("clear");
+      await ctx.waitForDialog("unsaved-dialog");
+      await ctx.click("unsaved-save");
+      await ctx.waitForVisible("banner");
+      await ctx.waitForNoDialog("unsaved-dialog");
+      await ctx.waitForEditorValue(LETTER);
+      // Discard clears it, with a new, empty, saved text.
+      await ctx.click("new");
+      await ctx.waitForDialog("unsaved-dialog");
+      await ctx.click("unsaved-discard");
+      await ctx.waitForEditorValue("");
+      await ctx.expectTitle("Untitled – English Tutor");
+      await ctx.expectNoBanner();
+
+      // Save of a named text is a real download, and then the action goes on.
+      await ctx.chooseFile(await ctx.writeTestFile("Weekend letter.txt", LETTER_FILE));
+      await ctx.waitForEditorValue(LETTER);
+      await ctx.fill("editor", `${LETTER} Edited.`);
+      await ctx.click("open");
+      await ctx.chooseFile(await ctx.writeTestFile("Second.txt", "Second file."));
+      await ctx.waitForDialog("unsaved-dialog");
+      await ctx.expectText("unsaved-message", "“Weekend letter” has changes");
+      await ctx.click("unsaved-save");
+      await ctx.waitForEditorValue("Second file.");
+      const saved = await ctx.takeDownload("Weekend letter.txt");
+      if (!saved.equals(Buffer.from(`${LETTER} Edited.`.replace(/\n/g, "\r\n")))) {
+        throw new Error("Save in the dialog did not write the edited text with CRLF line breaks");
+      }
+      await ctx.expectTitle("Second – English Tutor");
+    },
+  },
+  "restored-after-reload": {
+    theme: "light",
+    dir: "step-11-saving",
+    async run(ctx) {
+      await checkedLetter(ctx);
+      await ctx.waitForBadges(["x1", "x1", "x1"]);
+      // Reload the tab. The page asks the browser's own "leave this page?" question because the
+      // text has unsaved changes (beforeunload); the harness leaves.
+      await ctx.reload();
+      await ctx.waitForEditorValue(LETTER);
+      // The text is back, unsaved, with no underlines: issues are not kept.
+      await ctx.expectTitle("Untitled* – English Tutor");
+      await ctx.waitForCount("#mirror span.issue", 0);
+      await ctx.waitForCount("#issues .issue-row", 0);
+      await ctx.waitForText("status-state", "Ready");
+      await ctx.expectEnabled("save");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+
+      // It can be checked again, and counts nothing twice: the source key was restored.
+      await ctx.click("check");
+      await ctx.waitForText("status-state", "3 issues");
+      await ctx.waitForBadges(["x1", "x1", "x1"]);
+    },
+  },
 };
 
 /** In the browser's own code: the visible entries of the open page context menu. */
@@ -1248,6 +1545,99 @@ async function openStatsAfterThreeChecks(ctx) {
   await ctx.waitForCount("#stats-rows .stats-row", 8);
 }
 
+/** A letter, as the editor holds it (line breaks are LF). */
+const LETTER =
+  "Dear Anna,\nYesterday I seen my friend at the market. He go to school every day.\n" +
+  "I very like his camera.\nBest wishes,\nPeter";
+
+/** The same letter as a Windows editor writes it: a BOM, then CRLF line breaks. */
+const LETTER_FILE = Buffer.concat([
+  Buffer.from([0xef, 0xbb, 0xbf]),
+  Buffer.from(LETTER.replace(/\n/g, "\r\n")),
+]);
+
+/** Adds the fake LLM and opens an empty tutor page. */
+async function openTutorEmpty(ctx) {
+  await ctx.configureFakeLLM({ name: "Fake LLM" });
+  await ctx.open("tutor.html");
+  await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+  await ctx.waitForText("llm-select", "Fake LLM");
+}
+
+/** The fake LLM's answer for `LETTER`: three issues of three types. */
+const LETTER_REPLY = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "I seen",
+        error_type: "verb_form",
+        message: "Use the past tense: I saw.",
+        context_before: "Yesterday ",
+        context_after: " my friend",
+      },
+      {
+        text: "He go",
+        error_type: "subject_verb_agreement",
+        message: "Use goes with he.",
+        context_before: "market. ",
+        context_after: " to school",
+      },
+      {
+        text: "I very like",
+        error_type: "word_order",
+        message: "Put very before the verb: I like it very much.",
+        context_before: "day.\n",
+        context_after: " his camera",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 320, completion_tokens: 90 },
+};
+
+/** The letter, typed and checked (three issues), by the fake LLM. */
+async function checkedLetter(ctx) {
+  ctx.llm.setReplies(LETTER_REPLY);
+  await openTutorWithText(ctx, LETTER);
+  await ctx.click("check");
+  await ctx.waitForText("status-state", "3 issues");
+  await ctx.waitForCount("#mirror span.issue", 3);
+}
+
+/** Three texts saved to the library through the UI, and the Library dialog open on them. */
+async function openLibraryWithThreeDocuments(ctx) {
+  await openTutorEmpty(ctx);
+  const texts = [
+    ["Notes about school", "My school is big. We have many teachers and a library."],
+    ["Job application", "I am writing to apply for the position of assistant."],
+    ["Weekend letter", LETTER],
+  ];
+  for (const [title, text] of texts) {
+    await ctx.fill("editor", text);
+    await ctx.click("save-to-library");
+    await ctx.waitForDialog("title-dialog");
+    await ctx.fill("title-input", title, Key.ENTER);
+    await ctx.waitForNoDialog("title-dialog");
+    await ctx.expectTitle(`${title} – English Tutor`);
+    // The tab now shows a library document; the next text starts a new one.
+    await ctx.click("new");
+    await ctx.waitForEditorValue("");
+  }
+  await ctx.click("library");
+  await ctx.waitForDialog("library-dialog");
+  await ctx.waitForCount("#library-list .library-row", 3);
+  // Newest update first: the order the texts were saved in, reversed.
+  const titles = await ctx.driver.executeScript(
+    'return [...document.querySelectorAll("#library-list .library-title")].map((e) => e.textContent)',
+  );
+  if (
+    JSON.stringify(titles) !==
+    JSON.stringify(["Weekend letter", "Job application", "Notes about school"])
+  ) {
+    throw new Error(`the library lists ${JSON.stringify(titles)}`);
+  }
+  await ctx.fixDates("library-dialog");
+}
+
 /** Adds the fake LLM, opens the tutor page and types the sample text. */
 async function openTutorWithText(ctx, text = SAMPLE_TEXT) {
   await ctx.configureFakeLLM({ name: "Fake LLM" });
@@ -1371,9 +1761,18 @@ async function buildAndZip() {
   return `${root}web-ext-artifacts/${ZIP_NAME}`;
 }
 
-async function startBrowser(theme, zipPath) {
+async function startBrowser(theme, zipPath, downloadDir) {
   const options = new firefox.Options();
   options.addArguments("-headless");
+  // Downloads (Save, Save As) go to a temporary folder without asking and without a panel, so that
+  // the scenarios can check the files (SPEC section 8).
+  options.setPreference("browser.download.folderList", 2);
+  options.setPreference("browser.download.dir", downloadDir);
+  options.setPreference("browser.download.useDownloadDir", true);
+  options.setPreference("browser.download.always_ask_before_handling_new_types", false);
+  options.setPreference("browser.download.alwaysOpenPanel", false);
+  options.setPreference("browser.download.manager.showWhenStarting", false);
+  options.setPreference("browser.helperApps.neverAsk.saveToDisk", "text/plain");
   options.setPreference(
     "extensions.webextensions.uuids",
     JSON.stringify({ [GECKO_ID]: EXTENSION_UUID }),
@@ -1465,10 +1864,12 @@ async function resetData(ctx) {
   if (result !== "deleted") throw new Error(`could not reset the database: ${result}`);
 }
 
-function makeContext(name, scenario, driver, llm, policy) {
+function makeContext(name, scenario, driver, llm, policy, folders) {
   const ctx = {
     driver,
     llm,
+    /** Temporary folders outside the repository: `downloads` (where the browser saves) and `files`. */
+    folders,
     /**
      * Opens an extension page in a new tab. Selenium cannot navigate to a moz-extension:// address
      * itself (the page is not web accessible, and that is how it should stay), so the browser's own
@@ -2116,6 +2517,88 @@ function makeContext(name, scenario, driver, llm, policy) {
     async scrollTo(id) {
       await driver.executeScript("document.getElementById(arguments[0]).scrollIntoView()", id);
     },
+    /** Writes a test file into the temporary `files` folder and returns its path. */
+    async writeTestFile(fileName, content) {
+      const path = join(folders.files, fileName);
+      await writeFile(path, content);
+      return path;
+    },
+    /**
+     * Chooses a file in the page's hidden file input, as the browser's chooser does: the path is
+     * sent to the input element, so no native dialog opens.
+     */
+    async chooseFile(path) {
+      await driver.findElement(By.id("file-input")).sendKeys(path);
+    },
+    /** The page's tab title (the window title of the tab). */
+    async expectTitle(expected) {
+      await driver.wait(
+        async () => (await driver.getTitle()) === expected,
+        PAGE_TIMEOUT_MS,
+        `the tab title never became ${JSON.stringify(expected)}`,
+      );
+    },
+    /**
+     * Waits for a finished download in the temporary downloads folder (no `.part` file left) and
+     * returns its bytes. The file is removed, so the next download of the same name is not renamed.
+     */
+    async takeDownload(fileName) {
+      let found;
+      await driver.wait(
+        async () => {
+          const names = await readdir(folders.downloads);
+          if (names.some((n) => n.endsWith(".part"))) return false;
+          found = names.includes(fileName);
+          return found;
+        },
+        PAGE_TIMEOUT_MS,
+        `${fileName} was never downloaded (the folder holds: ${(await readdir(folders.downloads)).join(", ") || "nothing"})`,
+      );
+      const path = join(folders.downloads, fileName);
+      const bytes = await readFile(path);
+      await rm(path);
+      return bytes;
+    },
+    /**
+     * Reloads the tab. A page with unsaved changes asks the browser's "leave this page?" question
+     * (beforeunload), which the harness accepts, as a user pressing "Leave Page" does.
+     */
+    async reload() {
+      try {
+        await driver.navigate().refresh();
+      } catch (err) {
+        if (err?.name !== "UnexpectedAlertOpenError") throw err;
+        await driver.switchTo().alert().accept();
+      }
+      await waitForPage(driver, "tutor.html");
+    },
+    async expectNoBanner() {
+      if (await driver.findElement(By.id("banner")).isDisplayed()) {
+        throw new Error(`the banner shows: ${await textOf(driver, "banner")}`);
+      }
+    },
+    async waitForDialog(id) {
+      await driver.wait(
+        () =>
+          driver.executeScript(
+            "const d = document.getElementById(arguments[0]); return d !== null && d.open;",
+            id,
+          ),
+        PAGE_TIMEOUT_MS,
+        `the dialog #${id} never opened`,
+      );
+    },
+    async waitForNoDialog(id) {
+      await driver.wait(
+        () =>
+          driver.executeScript(
+            "const d = document.getElementById(arguments[0]); return d === null || !d.open;",
+            id,
+          ),
+        PAGE_TIMEOUT_MS,
+        `the dialog #${id} never closed`,
+      );
+    },
   };
   return ctx;
 }
@@ -2153,6 +2636,12 @@ async function main() {
     console.error(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+  // Temporary folders, outside the repository: where the browser saves downloads, and the test
+  // files that the scenarios open. They are removed at the end of the run.
+  const scratch = await mkdtemp(join(tmpdir(), "english-tutor-screenshots-"));
+  const folders = { downloads: join(scratch, "downloads"), files: join(scratch, "files") };
+  await mkdir(folders.downloads);
+  await mkdir(folders.files);
   const failures = [];
   try {
     // The colour scheme is a per-profile preference, so each theme gets its own browser.
@@ -2161,7 +2650,7 @@ async function main() {
       if (group.length === 0) continue;
       let driver;
       try {
-        driver = await startBrowser(theme, zipPath);
+        driver = await startBrowser(theme, zipPath, folders.downloads);
       } catch (err) {
         for (const name of group) failures.push({ name, err });
         continue;
@@ -2171,7 +2660,7 @@ async function main() {
           console.log(`scenario ${name}`);
           llm.reset();
           try {
-            const ctx = makeContext(name, SCENARIOS[name], driver, llm, policy);
+            const ctx = makeContext(name, SCENARIOS[name], driver, llm, policy, folders);
             await resetData(ctx);
             await SCENARIOS[name].run(ctx);
           } catch (err) {
@@ -2184,6 +2673,7 @@ async function main() {
     }
   } finally {
     await llm.stop();
+    await rm(scratch, { recursive: true, force: true });
   }
 
   for (const { name, err } of failures) {

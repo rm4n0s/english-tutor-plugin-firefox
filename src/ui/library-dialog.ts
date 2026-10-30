@@ -169,15 +169,20 @@ export class LibraryDialog {
       this.askToDelete(document);
     });
     const words = countWords(document.content);
-    return el(this.doc, "li", { class: "library-row", "data-id": String(document.id) }, [
-      el(this.doc, "div", { class: "library-info" }, [
-        el(this.doc, "span", { class: "library-title" }, [document.title]),
-        el(this.doc, "span", { class: "library-meta" }, [
-          `${formatDate(document.updated_at)} · ${String(words)} ${words === 1 ? "word" : "words"}`,
+    return el(
+      this.doc,
+      "li",
+      { class: "library-row", "data-id": String(document.id), "data-title": document.title },
+      [
+        el(this.doc, "div", { class: "library-info" }, [
+          el(this.doc, "span", { class: "library-title" }, [document.title]),
+          el(this.doc, "span", { class: "library-meta" }, [
+            `${formatDate(document.updated_at)} · ${String(words)} ${words === 1 ? "word" : "words"}`,
+          ]),
         ]),
-      ]),
-      el(this.doc, "div", { class: "library-actions" }, [open, rename, remove]),
-    ]);
+        el(this.doc, "div", { class: "library-actions" }, [open, rename, remove]),
+      ],
+    );
   }
 
   private askToDelete(document: LibraryDocument | undefined): void {

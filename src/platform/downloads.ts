@@ -31,6 +31,14 @@ export interface BlobUrls {
   revokeObjectURL(url: string): void;
 }
 
+/** The browser's own message ("An unexpected error occurred") says nothing, so ours does. */
+function writeFailed(cause: unknown): AppError {
+  const message = "The browser could not save the file.";
+  return cause instanceof AppError
+    ? cause
+    : new AppError("FileWriteFailed", message, {}, { cause }).via("BrowserDownloads.download");
+}
+
 /** `downloads.download` rejects with this message when the user cancels the save dialog. */
 const CANCELLED = /cancel/i;
 
@@ -90,14 +98,14 @@ export class BrowserDownloads implements Downloads {
         if (request.saveAs && err instanceof Error && CANCELLED.test(err.message)) {
           return { kind: "cancelled" };
         }
-        throw AppError.wrap("FileWriteFailed", err).via("BrowserDownloads.download");
+        throw writeFailed(err);
       }
       const result = await this.waitForEnd(id, ended, signal, (resolve) => {
         wake = resolve;
       });
       if (result.state === "interrupted") {
         if (result.error === "USER_CANCELED") return { kind: "cancelled" };
-        throw new AppError("FileWriteFailed", "The browser could not write the file.", {
+        throw new AppError("FileWriteFailed", "The browser could not save the file.", {
           reason: result.error ?? "unknown",
         }).via("BrowserDownloads.download");
       }
@@ -151,7 +159,7 @@ export class BrowserDownloads implements Downloads {
     try {
       return await this.api.downloads.search({ id });
     } catch (err) {
-      throw AppError.wrap("FileWriteFailed", err).via("BrowserDownloads.download");
+      throw writeFailed(err);
     }
   }
 

@@ -227,7 +227,7 @@ describe("New and Clear", () => {
       expect(byId("banner").hidden).toBe(false);
     });
     expect(editor().value).toBe("Some text");
-    expect(text("banner")).toContain("could not write the file");
+    expect(text("banner")).toContain("could not save the file");
   });
 
   it("clears the issues, the underlines and the status, and starts no auto-check", async () => {
@@ -581,6 +581,25 @@ describe("Save to library and the Library dialog", () => {
     const after = await allEvents(h);
     expect(after).toHaveLength(3);
     expect(new Set(after.map((e) => e.source_key))).toEqual(new Set([h.page.source.key]));
+  });
+
+  it("a check that ends after Save to library is recorded under the document's source", async () => {
+    const h = await mount({ script: slowReply(THREE_ISSUES, 40) });
+    type(TEXT);
+    click("check");
+    expect(h.page.state.pending).not.toBeNull();
+    click("save-to-library");
+    await settle(() => {
+      expect(dialogOpen("title-dialog")).toBe(true);
+    });
+    byId("title-form").dispatchEvent(new Event("submit", { cancelable: true }));
+    await settle(() => {
+      expect(h.page.tabText.documentId).toBe(1);
+    });
+    await settle(async () => {
+      expect(await allEvents(h)).toHaveLength(3);
+    });
+    expect((await allEvents(h)).every((e) => e.source_key === "doc:1")).toBe(true);
   });
 
   it("the Library dialog lists the documents, newest update first", async () => {

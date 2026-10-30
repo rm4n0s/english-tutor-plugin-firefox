@@ -10,7 +10,7 @@ import type { Scheduler } from "../core/clock";
 import { setText } from "../ui/dom";
 
 /** How long a short message such as "Copied" stays in the status bar. */
-export const FLASH_MS = 2000;
+export const FLASH_MS = 3000;
 
 /**
  * The status bar of the tutor page (SPEC sections 4.2 and 5.8): the check state, the word count,
@@ -53,7 +53,7 @@ export class StatusBar {
     this.render();
   }
 
-  /** Shows a short message in place of the check state, for two seconds ("Copied"). */
+  /** Shows a short message in place of the check state, for three seconds ("Copied"). */
   flash(message: string): void {
     this.stopFlash?.();
     setText(this.stateText, message);

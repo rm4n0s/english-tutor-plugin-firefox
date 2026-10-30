@@ -349,13 +349,14 @@ export function mountTutor(doc: Document, deps: TutorDeps): TutorPage {
 
   function runCheck(manual: boolean, selection?: { start: number; end: number }): void {
     const config = selector.selected;
-    const sourceKey = source.key;
     controller
       .check(selection === undefined ? { manual } : { manual, selection })
       .then((outcome) => {
         handleOutcome(outcome, config);
         if (outcome.kind !== "finished") return undefined;
-        return afterCheck(outcome, config?.name ?? "", sourceKey);
+        // The source as it is when the check ends: Save to library may have moved it meanwhile,
+        // and a loaded text would have cancelled this check.
+        return afterCheck(outcome, config?.name ?? "", source.key);
       })
       .catch(report);
   }

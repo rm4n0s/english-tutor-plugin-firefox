@@ -25,7 +25,7 @@ export class FakeDownloads implements Downloads {
       : this.outcomes[0]) ?? { kind: "saved" };
     if (outcome.kind === "cancelled") return { kind: "cancelled" };
     if (outcome.kind === "failed") {
-      throw new AppError("FileWriteFailed", "The browser could not write the file.").via(
+      throw new AppError("FileWriteFailed", "The browser could not save the file.").via(
         "FakeDownloads.download",
       );
     }
