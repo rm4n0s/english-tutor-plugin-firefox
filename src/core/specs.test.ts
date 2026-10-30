@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CATEGORIES, errorTypes } from "./analysis/taxonomy";
 import { parseErrorTags, parseTaxonomy, routeTestedTags } from "./testing/spec-tables";
 
 const root = join(import.meta.dirname, "..", "..");
@@ -18,9 +19,6 @@ const TAGS_WITHOUT_ROUTE_TEST: readonly string[] = [
   "StatsResetFailed",
   "UsageSaveFailed",
   "UsageQueryFailed",
-  "LLMResponseInvalid",
-  "SelectionEmpty",
-  "SelectionTooLong",
   "FileReadFailed",
   "FileNotUTF8",
   "FileWriteFailed",
@@ -78,7 +76,6 @@ describe("SPEC section 10 (error tags)", () => {
 });
 
 describe("SPEC section 5.6 (taxonomy)", () => {
-  // The match with the code is checked in step 5, when the taxonomy exists.
   const taxonomy = parseTaxonomy(spec);
 
   it.each([
@@ -90,6 +87,18 @@ describe("SPEC section 5.6 (taxonomy)", () => {
     expect(ids).toHaveLength(count);
     expect(ids[0]).toBe(first);
     expect(ids.at(-1)).toBe(last);
+  });
+
+  it("matches the code: the same categories and the same ids in the same order", () => {
+    expect([...taxonomy.keys()]).toEqual([...CATEGORIES]);
+    for (const category of CATEGORIES) {
+      expect(
+        errorTypes()
+          .filter((t) => t.category === category)
+          .map((t) => t.id),
+      ).toEqual(taxonomy.get(category));
+    }
+    expect(errorTypes().map((t) => t.id)).toEqual([...taxonomy.values()].flat());
   });
 
   it("has unique ids across the categories", () => {
