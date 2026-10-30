@@ -207,12 +207,13 @@ Opened from the Preferences button (`runtime.openOptionsPage()`), from the toolb
 | Model | Free text, for example `llama3.1`, `gpt-4o`, `claude-sonnet-5-5` |
 | Base URL | Required for `ollama` (filled with `http://localhost:11434` when chosen and empty, and cleared again when switching away) and `openai-compatible` (including `/v1`); optional for `anthropic` (default `https://api.anthropic.com`). Must be `http://` or `https://` with a host |
 | API key | Required for `anthropic` and usually for `openai-compatible`; disabled and not stored for `ollama`. A password field with Show / Hide, masked when the form opens |
-| Temperature | Optional, 0 to 2, default 0.2 |
-| Timeout | Optional, seconds, 10 to 3600. Empty or 0 uses the defaults (15 minutes for a check chunk, 120 s for an explanation or alternatives) |
+| Temperature | Optional, 0 to 2. Empty (`null`) means the default 0.2, which is always sent |
+| Timeout | Optional, seconds, 10 to 3600. Empty or 0 uses the defaults (15 minutes for a check chunk, 120 s for an explanation or alternatives). Test connection ignores it and uses 60 s |
 | No thinking | Ticked by default for a new LLM. For `ollama` and `openai-compatible` only (section 6.4); disabled and never stored for `anthropic` |
-| Parallel requests | 1 to 16, default 1 (section 5.2) |
+| Parallel requests | A whole number from 1 to 16, default 1 (section 5.2) |
 
-- **Host permission.** Saving an LLM, or pressing Test connection, first calls `permissions.request({ origins: ["<scheme>://<host>[:<port>]/*"] })` for its base URL (the default Anthropic URL for `anthropic` without one). The call is made synchronously in the click handler, before any `await`, because Firefox accepts it only during a user gesture. If the user refuses, the LLM is still saved, and a warning in the form says that requests to it will fail with `HostPermissionDenied`. Deleting the last LLM that uses an origin removes that origin's permission (`permissions.remove`).
+- **Layout.** The list has the buttons Add, Edit, Delete and Test connection above it; Edit, Delete and Test connection apply to the highlighted row (click, arrow keys; double-click or Enter edits). The LLM used by the editor (`selected_llm_id`) is marked "in use". The form opens below the list, one at a time. Delete asks in an in-page confirmation, not a browser dialog. Validation messages are shown under the field they are about (the first problem takes the focus), and `LLMConfigNameTaken` under Name. Values that fail the form's checks are not sent to the store, and no permission is requested for them.
+- **Host permission.** Saving an LLM, or pressing Test connection (in the form or for a row), first calls `permissions.request({ origins: ["<scheme>://<host>[:<port>]/*"] })` for its base URL (the default Anthropic URL for `anthropic` without one). The call is made synchronously in the click handler, before any `await`, because Firefox accepts it only during a user gesture. If the user refuses, the LLM is still saved, and the form stays open (now editing the saved LLM) with a warning that requests to it will fail with `HostPermissionDenied`; pressing Save or Test connection again asks again. The request is made only when the values pass the form's checks. Deleting the last LLM that uses an origin removes that origin's permission (`permissions.remove`).
 - **Test connection** sends the desktop app's test prompt ("Reply with the single word: ok") with the typed values (no name needed). It reports success with the time taken, or the failure. The tokens are not counted. A result that arrives after the form was closed is dropped.
 - **Privacy note** in the form, as in the desktop app: "the text you write is sent to <server> when you check it, ask for an explanation or ask for alternatives", unless the host is `localhost`, `127.x.x.x` or `[::1]`. For `anthropic` without a base URL it names Anthropic's server. Next to the API key: "API keys are stored unencrypted in your Firefox profile."
 - **Ollama note**: Ollama refuses requests from origins it does not allow. A 403 from an `ollama` server gets the message "Ollama refused the request from the extension. Allow it by starting Ollama with OLLAMA_ORIGINS=moz-extension://*." (section 6.5).
@@ -358,7 +359,7 @@ As desktop SPEC §5.10: the system prompt of `internal/analysis/alternatives.go`
 - `ollama`: newline-delimited JSON objects; the text is `message.content`, and the last object has `done: true`.
 - `openai-compatible`: Server-Sent Events, `data: {json}` lines ending with `data: [DONE]`; the text is `choices[0].delta.content`.
 - `anthropic`: Server-Sent Events. The text comes from `content_block_delta` events with a `text_delta`, and the stream ends with `message_stop`. An `error` event fails the request.
-- The parsers read `response.body` with a `TextDecoderStream` and handle lines split across chunks. Thinking output is never shown: Ollama's `message.thinking`, an OpenAI-compatible `reasoning_content`, and text before a closing `</think>`.
+- The parsers read `response.body` with a `TextDecoderStream` and handle lines split across chunks. Thinking output is never shown: Ollama's `message.thinking`, an OpenAI-compatible `reasoning_content`, and text before a closing `</think>`. While streaming, a reply that starts with `<think>` is held back up to `</think>`; a reply with only a closing tag cannot be known to be thinking until the tag arrives, so it is shown as it comes and is removed from the final text the call returns (the text of an explanation is re-rendered from that final text).
 
 ### 6.3 Usage and stop reason
 
@@ -374,9 +375,9 @@ As desktop SPEC §4.5: fields are added at the top level of the body, keeping an
 
 ### 6.5 Failures and timeouts
 
-- Before a request, the page checks `permissions.contains` for the base URL's origin. Without the permission the request is not sent, and the result is `HostPermissionDenied`.
-- Each request gets `AbortSignal.any([cancelSignal, AbortSignal.timeout(ms)])`. An abort caused by the cancel signal is a cancel (no error). An abort caused by the timeout is `LLMCallTimeout`.
-- A network failure (`TypeError` from `fetch`), an HTTP status other than 2xx, or a broken stream is `LLMCallFailed`. Its metadata has the HTTP status and the provider's error message if the body has one (`error.message` or `error`), cut to 300 characters. It never has the request body. A 403 from `ollama` gets the message of section 4.7.
+- Before a request, the page checks `permissions.contains` for the base URL's origin. Without the permission the request is not sent (the timeout has not started), and the result is `HostPermissionDenied`.
+- Each request gets `AbortSignal.any([cancelSignal, AbortSignal.timeout(ms)])`. An abort caused by the cancel signal is a cancel (no error): the call rejects with the cancel signal's reason (a `DOMException` named `AbortError` unless the caller gave another), which is never an `AppError`, as in the store; callers check `signal.aborted` (`isCancelled(err, signal)`) before treating a rejection as a failure. An abort caused by the timeout is `LLMCallTimeout`. A signal that is already aborted sends nothing.
+- A network failure (`TypeError` from `fetch`), an HTTP status other than 2xx, a reply that is not JSON, an error message inside a stream, or a stream that ends before the provider says the reply is complete (`done: true`, a `finish_reason` or `[DONE]`, `message_stop`) is `LLMCallFailed`. Its metadata has the HTTP status and the provider's error message if the body has one (`error.message` or `error`), cut to 300 characters. It never has the request body. A 403 from `ollama` gets the message of section 4.7.
 - Servers see the request's `Origin: moz-extension://<uuid>`. Anthropic accepts it because of the `anthropic-dangerous-direct-browser-access` header. Ollama accepts it only if `moz-extension://*` is in its allowed origins (newer versions allow it by default; otherwise `OLLAMA_ORIGINS`). An OpenAI-compatible server that checks origins needs the same.
 
 ## 7. Concurrency and lifetimes
@@ -446,7 +447,7 @@ All errors are `AppError` (CLAUDE.md). Each failure below has its own tag and a 
 | `MigrationFailed` | `store` | a numbered migration fails, or the upgrade is blocked |
 | `DatabaseQueryFailed` | `store` | any other request on configs, documents or settings fails |
 | `LLMConfigNameTaken` | `store` | duplicate LLM name |
-| `LLMConfigInvalid` | `llm` / `store` | missing name or model; missing or malformed base URL; missing key for the provider; temperature outside 0 to 2; timeout outside 10 to 3600 s; parallel requests outside 1 to 16 |
+| `LLMConfigInvalid` | `llm` / `store` | missing name or model; missing or malformed base URL; missing key for `anthropic`; temperature outside 0 to 2; timeout outside 10 to 3600 s (empty or 0 is allowed); parallel requests not a whole number from 1 to 16 |
 | `LLMConfigNotFound` | `store` | the selected LLM id does not exist |
 | `SettingInvalid` | `store` | a setting is set to a value its key does not allow (for example a size outside 6 to 48) |
 | `DocumentNotFound` | `store` | the library document does not exist |
