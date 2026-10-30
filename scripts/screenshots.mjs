@@ -782,6 +782,181 @@ const SCENARIOS = {
       await ctx.screenshot();
     },
   },
+  "alternatives-loading": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      // The fake server holds the answer, so the panel stays in its loading state.
+      await askAlternatives(ctx, { ...ALTERNATIVES_REPLY, delayMs: 30_000 });
+      await ctx.expectDataState("alternatives", "loading");
+      await ctx.expectText("alt-selected", "make a photo");
+      await ctx.expectText("alt-state", "Looking for alternatives...");
+      await ctx.waitForVisible("alt-close");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "alternatives-ready": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      await askAlternatives(ctx, ALTERNATIVES_REPLY);
+      await ctx.expectDataState("alternatives", "ready");
+      await ctx.expectText("alt-state", "4 alternatives");
+      await ctx.expectAlternativeRows(ALTERNATIVES);
+      await ctx.waitForVisible("alt-copy");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "alternatives-failed": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      await askAlternatives(ctx, { status: 500, content: "The model crashed while thinking." });
+      await ctx.expectDataState("alternatives", "failed");
+      await ctx.expectText("alt-state", "Could not get alternatives.");
+      await ctx.expectText("alt-error", "HTTP 500");
+      await ctx.waitForVisible("alt-retry");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "alternatives-replaced": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      await askAlternatives(ctx, ALTERNATIVES_REPLY);
+      await ctx.expectDataState("alternatives", "ready");
+      const before = await ctx.editorValue();
+      // Copy first: the panel stays open and the clipboard holds the second row.
+      await ctx.click("alternatives", ".alt-row:nth-child(2)");
+      await ctx.click("alt-copy");
+      await ctx.expectClipboardPasted(ALTERNATIVES[1]);
+      // Double-click the first row with the mouse.
+      const row = await ctx.driver.findElement(By.css("#alt-list .alt-row:nth-child(1)"));
+      await ctx.driver.actions({ async: true }).doubleClick(row).perform();
+      const after = before.replace("make a photo", ALTERNATIVES[0]);
+      await ctx.waitForEditorValue(after);
+      // The panel closed, the caret is after the new text, and the editor has the focus.
+      await ctx.expectHidden("alternatives");
+      const caret = after.indexOf(ALTERNATIVES[0]) + ALTERNATIVES[0].length;
+      const selection = await ctx.editorSelection();
+      if (selection.start !== caret || selection.end !== caret || !selection.focused) {
+        throw new Error(
+          `the caret is ${JSON.stringify(selection)}, expected ${caret} with the focus`,
+        );
+      }
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+      // One undo step: Ctrl+Z brings the old text back.
+      await ctx.driver.executeScript('document.getElementById("editor").focus()');
+      await ctx.keys("editor", Key.chord(Key.CONTROL, "z"));
+      await ctx.waitForEditorValue(before);
+    },
+  },
+  "selection-check": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      ctx.llm.setReplies(SELECTION_REPLIES);
+      await checkedSample(ctx, SELECTION_REPLIES);
+      await ctx.waitForBadges(["x1", "x1", "x1", "x1", "x1"]);
+      const idsBefore = await ctx.rowIds();
+      const requestsBefore = ctx.llm.requests.length;
+      const part = SELECTION_PART;
+      const point = await ctx.selectInEditor(part);
+      const menu = await ctx.rightClickAt(point);
+      await ctx.expectEditorMenu(menu);
+      await ctx.chooseRowMenuItem("Check");
+      await ctx.waitForText("status-state", "5 issues");
+      await ctx.waitForText("status-tokens", "last: 96 in / 22 out");
+      await ctx.expectHidden("loading");
+      // Only the selection was sent.
+      const sent = ctx.llm.requests
+        .slice(requestsBefore)
+        .filter((r) => !isExplainRequest(r) && !isAlternativesRequest(r))
+        .map(userMessageOf);
+      if (sent.length !== 1 || !sent[0].includes(part) || sent[0].includes("Yesterday")) {
+        throw new Error(`the selection check sent ${JSON.stringify(sent)}`);
+      }
+      // Every issue in the selection is a new one (new ids, even "He go", which was found again),
+      // and the issues outside it are the very ones as before.
+      await ctx.expectUnderlined(["I seen", "He go", "he make", "I very like", "boring"]);
+      const idsAfter = await ctx.rowIds();
+      const same = idsAfter.map((id, i) => (idsBefore.includes(id) ? "same" : "new"));
+      if (JSON.stringify(same) !== JSON.stringify(["same", "new", "new", "same", "same"])) {
+        throw new Error(
+          `the rows after the selection check are ${same.join(",")}, ids ${idsBefore} -> ${idsAfter}`,
+        );
+      }
+      // "He go" was found again with the fingerprint of the full check, so it is not counted twice;
+      // "he make" is a second subject-verb mistake, so both rows say x2.
+      await ctx.waitForBadges(["x1", "x2", "x2", "x1", "x1"]);
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
+  "context-menu": {
+    theme: "light",
+    dir: "step-10-alternatives",
+    async run(ctx) {
+      // The native menu cannot be captured in a screenshot (Selenium captures the page, and the
+      // menu is a separate popup of the browser), so the scenario drives the real menu instead:
+      // it reads the open menu, asserts its entries, and chooses each of ours. The picture shows
+      // the page after both were chosen.
+      ctx.llm.setReplies(SELECTION_REPLIES);
+      // No LLM yet: Alternative shows, Check is disabled.
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "No LLM configured");
+      await ctx.fill("editor", SAMPLE_TEXT);
+      let menu = await ctx.rightClickAt(await ctx.selectInEditor(SELECTION_PART));
+      await ctx.expectEditorMenu(menu, { checkDisabled: true });
+      await ctx.closeMenu();
+
+      // With an LLM.
+      await ctx.configureFakeLLM({ name: "Fake LLM" });
+      await ctx.open("tutor.html");
+      await ctx.driver.wait(until.elementLocated(By.id("editor")), PAGE_TIMEOUT_MS);
+      await ctx.waitForText("llm-select", "Fake LLM");
+      await ctx.fill("editor", SAMPLE_TEXT);
+
+      // Nothing selected, or only white space selected: no entries of ours.
+      await ctx.fill("editor", "Hello      world");
+      menu = await ctx.rightClickAt(await ctx.selectInEditor("      "));
+      await ctx.expectEditorMenu(menu, { absent: true });
+      await ctx.closeMenu();
+      menu = await ctx.rightClickAt(await ctx.selectInEditor("Hello", { collapse: true }));
+      await ctx.expectEditorMenu(menu, { absent: true });
+      await ctx.closeMenu();
+      await ctx.fill("editor", SAMPLE_TEXT);
+
+      // A backwards selection works, and each entry does its job.
+      menu = await ctx.rightClickAt(
+        await ctx.selectInEditor(ALTERNATIVES_PART, { backwards: true }),
+      );
+      await ctx.expectEditorMenu(menu);
+      ctx.llm.setReplies(SELECTION_REPLIES);
+      await ctx.chooseRowMenuItem("Alternative");
+      await ctx.expectDataState("alternatives", "ready");
+      await ctx.expectAlternativeRows(ALTERNATIVES);
+      menu = await ctx.rightClickAt(await ctx.selectInEditor(SELECTION_PART));
+      await ctx.expectEditorMenu(menu);
+      await ctx.chooseRowMenuItem("Check");
+      await ctx.waitForText("status-state", "2 issues");
+      await ctx.expectUnderlined(["He go", "he make"]);
+      await ctx.expectDataState("alternatives", "ready");
+      await ctx.expectTheme();
+      await ctx.stabilise();
+      await ctx.screenshot();
+    },
+  },
 };
 
 /** In the browser's own code: the visible entries of the open page context menu. */
@@ -791,8 +966,104 @@ const ROW_MENU_LABELS = `
   return [...popup.children].filter((m) => m.localName === "menuitem" && !m.hidden).map((m) => m.label);
 `;
 
+/**
+ * In the browser's own code: the visible entries of the open page context menu, in order. A
+ * submenu (a `menu` element) is listed with its label and then its entries, which carry
+ * `submenu`.
+ */
+const MENU_ENTRIES = `
+  const popup = document.getElementById("contentAreaContextMenu");
+  if (popup === null || popup.state !== "open") return [];
+  const entries = [];
+  const visit = (parent, submenu) => {
+    for (const m of parent.children) {
+      if (m.hidden) continue;
+      if (m.localName === "menuseparator") {
+        entries.push({ label: "-", disabled: true, separator: true });
+      } else if (m.localName === "menuitem") {
+        entries.push({ label: m.label, disabled: m.disabled, ...(submenu ? { submenu } : {}) });
+      } else if (m.localName === "menu") {
+        entries.push({ label: m.label, disabled: m.disabled, isMenu: true, ...(submenu ? { submenu } : {}) });
+        const inner = m.menupopup ?? m.querySelector("menupopup");
+        if (inner) visit(inner, m.label);
+      }
+    }
+  };
+  visit(popup, null);
+  return entries;
+`;
+
 /** Keys that put the caret at the start of a short text (the sample wraps to two lines). */
 const TO_START = Key.ARROW_UP.repeat(6) + Key.HOME;
+
+/** Where the Step 10 scenarios select: a clause with two of the sample's issues in it. */
+const SELECTION_PART = "He go to school every day, and he make a photo of everything.";
+/** The words the Alternatives scenarios ask about. */
+const ALTERNATIVES_PART = "make a photo";
+const ALTERNATIVES = ["takes a photo", "snaps a picture", "shoots a photo", "captures a picture"];
+const ALTERNATIVES_REPLY = {
+  content: JSON.stringify({ alternatives: ALTERNATIVES }),
+  usage: { prompt_tokens: 210, completion_tokens: 34 },
+};
+
+/** Whether a request asks for alternatives (the system prompt of SPEC section 5.10). */
+function isAlternativesRequest(request) {
+  return (request.body.messages ?? []).some(
+    (m) => m.role === "system" && String(m.content).includes("writing coach"),
+  );
+}
+
+function userMessageOf(request) {
+  return request.body.messages.find((m) => m.role === "user")?.content ?? "";
+}
+
+/**
+ * What the fake model finds in the selection of `SELECTION_PART`: "He go" again (the same words,
+ * so the same fingerprint as in the full check) and "he make", which replaces "make a photo".
+ */
+const SELECTION_CHECK_REPLY = {
+  content: JSON.stringify({
+    issues: [
+      {
+        text: "He go",
+        error_type: "subject_verb_agreement",
+        message: "Use goes with he.",
+        context_before: "",
+        context_after: " to school",
+      },
+      {
+        text: "he make",
+        error_type: "subject_verb_agreement",
+        message: "Use makes with he.",
+        context_before: "every day, and ",
+        context_after: " a photo",
+      },
+    ],
+  }),
+  usage: { prompt_tokens: 96, completion_tokens: 22 },
+};
+
+/** Answers the full check, the selection check, explanations and alternatives. */
+const SELECTION_REPLIES = (request) => {
+  if (isAlternativesRequest(request)) return ALTERNATIVES_REPLY;
+  if (isExplainRequest(request)) return explanationFor(request);
+  return userMessageOf(request).includes("Yesterday") ? CHECK_REPLY : SELECTION_CHECK_REPLY;
+};
+
+/**
+ * Types the sample text, selects "make a photo" and chooses **Alternative** in the browser's
+ * context menu. The fake server answers the request with `reply`.
+ */
+async function askAlternatives(ctx, reply) {
+  ctx.llm.setReplies((request) =>
+    isAlternativesRequest(request) ? reply : SAMPLE_REPLIES(request),
+  );
+  await openTutorWithText(ctx);
+  const menu = await ctx.rightClickAt(await ctx.selectInEditor(ALTERNATIVES_PART));
+  await ctx.expectEditorMenu(menu);
+  await ctx.chooseRowMenuItem("Alternative");
+  await ctx.waitForVisible("alternatives");
+}
 
 /** The text of the Step 6 scenarios, and the issues the fake LLM finds in it (all three categories). */
 const SAMPLE_TEXT =
@@ -1640,6 +1911,184 @@ function makeContext(name, scenario, driver, llm, policy) {
         if (!chosen) throw new Error(`the menu has no enabled entry "${label}"`);
       } finally {
         await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    /**
+     * Selects `part` in the editor (the first occurrence in its text) the way a user would leave
+     * it, with a real mouse-free selection through the page's own text selection, and returns a
+     * point in the middle of the text on screen (from the mirror, which holds the same text), so
+     * that a right-click lands on the selection and keeps it.
+     */
+    async selectInEditor(part, { backwards = false, collapse = false } = {}) {
+      return driver.executeScript(
+        `const editor = document.getElementById("editor");
+         const [part, backwards, collapse] = arguments;
+         const start = editor.value.indexOf(part);
+         if (start < 0) throw new Error("the editor has no " + part);
+         editor.focus();
+         if (collapse) editor.setSelectionRange(start + 2, start + 2);
+         else editor.setSelectionRange(start, start + part.length, backwards ? "backward" : "forward");
+         // Where the text is on screen: a range over the mirror's text, which has the same text.
+         const mirror = document.getElementById("mirror");
+         const walker = document.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+         let offset = 0;
+         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+           const end = offset + node.length;
+           if (start >= offset && start < end) {
+             const range = document.createRange();
+             const from = start - offset;
+             range.setStart(node, from);
+             range.setEnd(node, Math.min(node.length, from + Math.max(1, Math.min(part.length, 4))));
+             const rect = range.getClientRects()[0];
+             return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+           }
+           offset = end;
+         }
+         throw new Error("the mirror has no text at " + start);`,
+        part,
+        backwards,
+        collapse,
+      );
+    },
+    /** Right-clicks a point of the page and returns the open context menu (see `readOpenMenu`). */
+    async rightClickAt(point) {
+      await driver
+        .actions({ async: true })
+        .move({ x: point.x, y: point.y })
+        .contextClick()
+        .perform();
+      return ctx.readOpenMenu();
+    },
+    /**
+     * The entries of the open context menu, in order, read from the browser itself:
+     * `{ label, disabled }` for each visible entry (an entry inside a submenu has `submenu` set
+     * to the submenu's label). Waits for the menu to open, and for the extension's entries to be
+     * made visible, which the page does after the menu is shown.
+     */
+    async readOpenMenu({ settleMs = 600 } = {}) {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        let entries = [];
+        await driver.wait(
+          async () => {
+            entries = await driver.executeScript(MENU_ENTRIES);
+            return entries.length > 0;
+          },
+          PAGE_TIMEOUT_MS,
+          "the context menu never opened",
+        );
+        // The page makes its entries visible in `menus.onShown`, after the popup opens.
+        await new Promise((resolve) => setTimeout(resolve, settleMs));
+        return await driver.executeScript(MENU_ENTRIES);
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    /** Closes the open context menu without choosing anything. */
+    async closeMenu() {
+      await driver.setContext(firefox.Context.CHROME);
+      try {
+        await driver.executeScript('document.getElementById("contentAreaContextMenu").hidePopup()');
+      } finally {
+        await driver.setContext(firefox.Context.CONTENT);
+      }
+    },
+    /** Replaces the editor's text through the keyboard-free route of the page: types it. */
+    async editorValue() {
+      return driver.executeScript('return document.getElementById("editor").value');
+    },
+    async editorSelection() {
+      return driver.executeScript(
+        `const e = document.getElementById("editor");
+         return { start: e.selectionStart, end: e.selectionEnd, focused: document.activeElement === e };`,
+      );
+    },
+    /** Fails unless the alternatives panel lists exactly these rows. */
+    async expectAlternativeRows(expected) {
+      await driver.wait(
+        async () => {
+          const rows = await driver.executeScript(
+            'return [...document.querySelectorAll("#alt-list .alt-row")].map((r) => r.textContent)',
+          );
+          return JSON.stringify(rows) === JSON.stringify(expected);
+        },
+        PAGE_TIMEOUT_MS,
+        `the alternatives never were ${JSON.stringify(expected)}`,
+      );
+    },
+    async waitForEditorValue(expected) {
+      let last;
+      await driver
+        .wait(async () => {
+          last = await ctx.editorValue();
+          return last === expected;
+        }, PAGE_TIMEOUT_MS)
+        .catch(() => {
+          throw new Error(
+            `the editor holds ${JSON.stringify(last)}, not ${JSON.stringify(expected)}`,
+          );
+        });
+    },
+    /** The ids of the rows of the issues list, in order. */
+    async rowIds() {
+      return driver.executeScript(
+        'return [...document.querySelectorAll("#issues .issue-row")].map((r) => r.dataset.id)',
+      );
+    },
+    /**
+     * Fails unless the clipboard holds `text`: it is pasted into a scratch text box that the
+     * harness adds and removes (the page's own editor is not touched).
+     */
+    async expectClipboardPasted(text) {
+      await driver.executeScript(
+        `const box = document.createElement("textarea");
+         box.id = "scratch-paste";
+         document.body.append(box);
+         box.focus();`,
+      );
+      await driver.findElement(By.id("scratch-paste")).sendKeys(Key.chord(Key.CONTROL, "v"));
+      const pasted = await driver.findElement(By.id("scratch-paste")).getAttribute("value");
+      await driver.executeScript('document.getElementById("scratch-paste").remove()');
+      if (pasted !== text) {
+        throw new Error(
+          `the clipboard holds ${JSON.stringify(pasted)}, not ${JSON.stringify(text)}`,
+        );
+      }
+    },
+    /**
+     * Fails unless the open menu is the editor's: the browser's own entries (Undo, Cut, Copy,
+     * Paste, Select All) and **Alternative** followed by **Check**. Where they stand among the
+     * browser's entries is the browser's choice (Firefox lists an extension's entries first).
+     * `checkDisabled`: Check is greyed out. `absent`: neither of our entries shows.
+     */
+    expectEditorMenu(menu, { checkDisabled = false, absent = false } = {}) {
+      const labels = menu.map((e) => e.label);
+      const describe = () => JSON.stringify(menu);
+      if (absent) {
+        if (labels.includes("Alternative") || labels.includes("Check")) {
+          throw new Error(`the menu shows our entries: ${describe()}`);
+        }
+        return;
+      }
+      const at = (label) => labels.indexOf(label);
+      // The browser's own entries are all there (spell check and Search come and go).
+      const missing = ["Undo", "Cut", "Copy", "Paste", "Select All"].filter((l) => at(l) < 0);
+      if (missing.length > 0) {
+        throw new Error(
+          `the menu lacks the browser's entries ${missing.join(", ")}: ${describe()}`,
+        );
+      }
+      const alt = at("Alternative");
+      const check = at("Check");
+      if (alt < 0 || check !== alt + 1) {
+        throw new Error(`Alternative and Check are not together, in that order: ${describe()}`);
+      }
+      if (menu[alt].disabled) throw new Error(`Alternative is disabled: ${describe()}`);
+      if (menu[check].disabled !== checkDisabled) {
+        throw new Error(`Check is ${menu[check].disabled ? "disabled" : "enabled"}: ${describe()}`);
+      }
+      if (menu[alt].submenu || menu[check].submenu) {
+        throw new Error(`our entries are in a submenu: ${describe()}`);
       }
     },
     async scrollTo(id) {
